@@ -102,21 +102,34 @@ def _browser_available() -> bool:
         return False
     if os.environ.get("ARTEMIS_CHROME"):
         return True
+    # Playwright reads PLAYWRIGHT_BROWSERS_PATH itself in _launch, so look in the same places.
     cache = Path.home() / ".cache" / "ms-playwright"
     local = Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"
-    return cache.exists() or local.exists() or bool(shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("msedge"))
+    custom = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"]) if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else None
+    return (
+        (custom is not None and custom.exists())
+        or cache.exists()
+        or local.exists()
+        or bool(shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("msedge"))
+    )
 
 
 @pytest.mark.skipif(not _browser_available(), reason="needs the echo group and a Chromium/Chrome/Edge")
 async def test_fixture_before_and_after_in_a_real_browser():
     from artemis.echo import echo_check
 
+    # The site says "7 problems before, none after": guard those numbers.
     before = await echo_check(str(FIXTURE / "before.html"))
-    rules = {f.rule for f in before.findings}
-    assert {"button-name", "image-alt", "html-has-lang", "color-contrast"} <= rules
+    assert len(before.findings) == 7, before.findings
+    assert sorted(f.rule for f in before.findings) == [
+        "button-name", "color-contrast", "html-has-lang", "image-alt",
+        "landmark-one-main", "page-has-heading-one", "region",
+    ]
+    assert len(before.needs_review) == 1, before.needs_review
     assert "button (no name)" in before.outline
     after = await echo_check(str(FIXTURE / "after.html"))
-    assert after.findings == []
+    assert len(after.findings) == 0, after.findings
+    assert len(after.needs_review) == 0, after.needs_review
     assert '    button "Sign up"' in after.outline
 
 
