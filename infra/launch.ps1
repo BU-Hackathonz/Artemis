@@ -22,6 +22,7 @@ param(
     [ValidateSet("ask", "stub", "claude")][string]$Agent = "ask",
     [switch]$Conversation,
     [ValidateSet("whisper", "stub")][string]$Voice = "whisper",  # "stub" skips the mic and Whisper
+    [switch]$ForgetKey,  # delete the key and workspace ID saved in Windows Credential Manager, then exit
     [switch]$NoPause  # for scripts and tests: never wait for Enter
 )
 
@@ -39,6 +40,15 @@ function Finish([int]$Code, [string]$Message = "") {
         Read-Host "Press Enter to close this window" | Out-Null
     }
     exit $Code
+}
+
+. (Join-Path $Here "credstore.ps1")
+
+if ($ForgetKey) {
+    [void](Remove-StoredSecret $ApiKeyTarget)
+    [void](Remove-StoredSecret $WorkspaceTarget)
+    Write-Host "Removed the Anthropic key and workspace ID saved by Artemis from Windows Credential Manager (if there were any)."
+    exit 0
 }
 
 # ----- find the app -----
@@ -71,10 +81,17 @@ $keyFromPrompt = $false
 $workspaceFromPrompt = $false
 try {
     $chosen = $Agent
+    $savedKey = $null
+    if ($chosen -ne "stub" -and -not $env:ANTHROPIC_API_KEY) { $savedKey = Get-StoredSecret $ApiKeyTarget }
     if ($chosen -eq "ask") {
         if ($env:ANTHROPIC_API_KEY) {
             $chosen = "claude"
             Write-Host "Using the Anthropic API key found in the environment (set in this window, or saved in Windows settings)."
+        } elseif ($savedKey) {
+            $env:ANTHROPIC_API_KEY = $savedKey
+            $keyFromPrompt = $true
+            $chosen = "claude"
+            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. Run launch.ps1 -ForgetKey to remove it."
         } else {
             Write-Host "Artemis demo launcher"
             Write-Host "Type your Anthropic API key (it is hidden and kept only in this window), or press Enter for the scripted stub agent."
@@ -84,21 +101,44 @@ try {
                 $env:ANTHROPIC_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
                 $keyFromPrompt = $true
                 $chosen = "claude"
+                $offerSave = $true
             } else {
                 $chosen = "stub"
             }
         }
     } elseif ($chosen -eq "claude" -and -not $env:ANTHROPIC_API_KEY) {
-        if ($NoPause) { Finish 1 "Artemis could not start: -Agent claude needs ANTHROPIC_API_KEY in this window." }
-        $secure = Read-Host -AsSecureString "Anthropic API key"
-        if ($secure.Length -eq 0) { Finish 1 "Artemis could not start: -Agent claude needs an API key." }
-        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-        $env:ANTHROPIC_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-        $keyFromPrompt = $true
+        if ($savedKey) {
+            $env:ANTHROPIC_API_KEY = $savedKey
+            $keyFromPrompt = $true
+            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. Run launch.ps1 -ForgetKey to remove it."
+        } else {
+            if ($NoPause) { Finish 1 "Artemis could not start: -Agent claude needs ANTHROPIC_API_KEY in this window." }
+            $secure = Read-Host -AsSecureString "Anthropic API key"
+            if ($secure.Length -eq 0) { Finish 1 "Artemis could not start: -Agent claude needs an API key." }
+            $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+            $env:ANTHROPIC_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+            $keyFromPrompt = $true
+            $offerSave = $true
+        }
     }
-    if ($chosen -eq "claude" -and -not $env:ANTHROPIC_WORKSPACE_ID -and -not $NoPause) {
-        $ws = Read-Host "Workspace ID (only if your key needs one; Enter to skip)"
-        if ($ws) { $env:ANTHROPIC_WORKSPACE_ID = $ws; $workspaceFromPrompt = $true }
+    $savedKey = $null
+    if ($chosen -eq "claude" -and -not $env:ANTHROPIC_WORKSPACE_ID) {
+        $savedWs = Get-StoredSecret $WorkspaceTarget
+        if ($savedWs) {
+            $env:ANTHROPIC_WORKSPACE_ID = $savedWs
+            $workspaceFromPrompt = $true
+        } elseif (-not $NoPause) {
+            $ws = Read-Host "Workspace ID (only if your key needs one; Enter to skip)"
+            if ($ws) { $env:ANTHROPIC_WORKSPACE_ID = $ws; $workspaceFromPrompt = $true; $offerSave = $true }
+        }
+    }
+    if ($offerSave -and -not $NoPause) {
+        $answer = Read-Host "Save this in Windows Credential Manager (encrypted for your Windows account) so you don't retype it? (y/N)"
+        if ($answer -match "^(y|yes)$") {
+            if ($keyFromPrompt) { [void](Set-StoredSecret $ApiKeyTarget $env:ANTHROPIC_API_KEY) }
+            if ($env:ANTHROPIC_WORKSPACE_ID) { [void](Set-StoredSecret $WorkspaceTarget $env:ANTHROPIC_WORKSPACE_ID) }
+            Write-Host "Saved. Run launch.ps1 -ForgetKey to remove it."
+        }
     }
 
     # ----- run -----
