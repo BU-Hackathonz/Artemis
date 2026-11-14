@@ -236,12 +236,15 @@ class Session:
             await self._state(tid, "canceled", "Canceled.", "high")
         else:
             outcome_text = f"failed: {outcome.code}"
+            # The agent's messages are whole sentences ("No internet connection to Claude."):
+            # drop their full stop, so the line never reads "Claude.. You can try again."
+            reason = (outcome.message or outcome.code).rstrip(".")
             await self.emit(
                 EventDraft(
                     task_id=tid,
                     type="error",
                     announce=Announce(
-                        text=f"The task failed. {outcome.message or outcome.code}. You can try again.",
+                        text=f"The task failed. {reason}. You can try again.",
                         priority="high",
                     ),
                     data=ErrorData(
