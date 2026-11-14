@@ -1,0 +1,12 @@
+{
+  "identifier": "companion",
+  "description": "Local compact status can read fixed status and open the standard controls only",
+  "local": true,
+  "windows": [
+    "companion"
+  ],
+  "permissions": [
+    "allow-get-companion-status",
+    "allow-show-main"
+  ]
+}

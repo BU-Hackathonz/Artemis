@@ -25,6 +25,7 @@ param(
     [switch]$Conversation,    # kept for old command lines: conversation mode is now ON by default in this launcher
     [switch]$NoConversation,  # turn the built-in spoken phrases and follow-ups off (start.ps1 itself defaults to off)
     [ValidateSet("whisper", "stub")][string]$Voice = "whisper",  # "stub" skips the mic and Whisper
+    [switch]$Compact,  # opt-in compact status window (start.ps1 -Compact); off by default
     [switch]$ForgetKey,  # delete the key and workspace ID saved in Windows Credential Manager, then exit
     [switch]$NoPause  # for scripts and tests: never wait for Enter
 )
@@ -172,6 +173,7 @@ try {
     $startArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Here "start.ps1"),
         "-Agent", $chosen, "-Voice", $Voice, "-AppPath", $exe)
     if (-not $NoConversation) { $startArgs += "-Conversation" }  # on by default here (contracts.md 5.4)
+    if ($Compact) { $startArgs += "-Compact" }
     # start.ps1 exit codes: 0 normal close, 1 could not start, 2 the core stopped while the app ran,
     # 3 the app exited with an error code.
     # Anything but 0 keeps the window open: a double-click user must be able to read why it stopped.

@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createHttpCore, HttpError } from './api';
 import { createDemoCore } from './demo';
-import { ApprovalDialog } from './ApprovalDialog';
+import { ApprovalDialog, ENTER_GUARD_MS } from './ApprovalDialog';
 import { initialState, reduceEvent, taskLabel } from './state';
 import { terminal, isTaskState } from './contracts';
 import type { Core, CoreEvent, Health } from './contracts';
@@ -29,6 +29,11 @@ function eventText(event: CoreEvent) {
 export function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [status, setStatus] = useState('Not connected');
+  // Compact desktop status is opt-in (start.ps1 -Compact). Off: no status window, approvals focus as in the browser.
+  const [compact, setCompact] = useState(false);
+  const [revealGuard, setRevealGuard] = useState<{approvalId: string; until: number} | null>(null);
+  const lastCompanionApproval = useRef<string | null>(null);
+  const [companionError, setCompanionError] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [address, setAddress] = useState('http://127.0.0.1:8000');
@@ -59,12 +64,39 @@ export function App() {
   }, [state.taskId, state.taskState]);
   const ringInputs = {connected: ready, taskState: pendingTaskId ? 'queued' as const : state.taskId ? state.taskState : 'idle' as const, microphone: voiceInput.status.state, approval: state.approvals.length > 0};
   useEffect(() => {
+    if (!platform.native || !compact) return;
+    const approvalId = state.approvals[0]?.approval.approval_id;
+    const approvalChanged = approvalId !== undefined && lastCompanionApproval.current !== approvalId;
+    lastCompanionApproval.current = approvalId ?? null;
+    void platform.updateCompanionStatus({
+      connection: ready ? 'ready' : ((!connection && status !== 'Launch failed') || status.startsWith('Connecting')) ? 'starting' : 'disconnected',
+      task: pendingTaskId ? 'queued' : state.taskId ? state.taskState : 'idle',
+      microphone: voiceInput.status.state,
+      approval: state.approvals.length > 0,
+      speech_ready: voiceReady,
+    }, approvalChanged).then(focusReject => {
+      const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+      if (focusReject && approvalId && lastCompanionApproval.current === approvalId) {
+        if (dialog?.dataset.approvalId === approvalId) {
+          // Blocking approvals keep Reject focused; normal approvals focus Approve, as in a foreground approval.
+          const target = dialog.querySelector<HTMLButtonElement>(state.approvals[0]?.approval.blocking ? '[data-approval-reject]' : '[data-approval-approve]');
+          target?.focus();
+          if (target && document.activeElement === target) {
+            setRevealGuard({approvalId, until: Date.now() + ENTER_GUARD_MS});
+            void platform.revealApproval().catch(() => setCompanionError('Switch to Artemis controls to review the pending proposal.'));
+          }
+        }
+      }
+    }).catch(() => setCompanionError('Desktop status is unavailable. Full controls remain available here.'));
+  }, [compact, ready, status, connection, state.taskId, state.taskState, pendingTaskId, state.approvals, voiceInput.status.state, voiceReady]);
+  useEffect(() => {
     if (!platform.native) return;
     let active = true;
     setBusy(true); setStatus('Connecting from launcher…');
     void (async () => {
       try {
         const config = await platform.getCoreConfig();
+        if (active) setCompact(config.compact);
         const next = await openConnection(createHttpCore(config.core_url, config.token), false);
         if (active) {setConnection(next); setStatus('Connecting event stream…');}
       } catch (e) {
@@ -162,6 +194,10 @@ export function App() {
           {!ready && <button onClick={() => {reconnectFocus.current = true; setConnection({...connection});}}>Reconnect event stream</button>}
         </>}
       </section>
+      {platform.native && compact && <button disabled={state.approvals.length > 0} onClick={() => {
+        void platform.enterCompact().catch(() => setCompanionError('Could not open compact status. Full controls remain available here.'));
+      }}>Use compact status</button>}
+      {companionError && <p role="alert">{companionError}</p>}
       {error && <p role="alert">{error}</p>}
       <div className="workspace">
         <section aria-labelledby="request-heading"><h2 id="request-heading">Your request</h2>
@@ -191,6 +227,6 @@ export function App() {
       </div>
       {/* After the request form in tab order: focus starts in the request field after connect. */}
       {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
-      {state.approvals[0] && connection && ready && <ApprovalDialog key={state.approvals[0].approval.approval_id} approval={state.approvals[0].approval} decide={decision => connection.core.decide(state.approvals[0].approval, decision)}/>}
+      {state.approvals[0] && connection && ready && <ApprovalDialog enterGuardUntil={revealGuard?.approvalId === state.approvals[0].approval.approval_id ? revealGuard.until : undefined} key={state.approvals[0].approval.approval_id} approval={state.approvals[0].approval} decide={decision => connection.core.decide(state.approvals[0].approval, decision)}/>}
     </main><footer>Writes and runs require approval. Review every proposal before approving.</footer></>;
 }

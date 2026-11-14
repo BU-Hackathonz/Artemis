@@ -21,6 +21,7 @@ powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly       # just 
 | `-Agent stub\|claude` | `stub` | Sets `ARTEMIS_AGENT`; `claude` also syncs the `agent`, `security` and `echo` groups |
 | `-Voice whisper\|stub` | `whisper` | Sets `ARTEMIS_VOICE`; `whisper` syncs the `voice` group |
 | `-Conversation` | off | Sets `ARTEMIS_CONVERSATION=on`: built-in spoken phrases ("what are you doing", "keep it brief") and one waiting follow-up request (contracts.md §5.4). Rehearse with it before using it in the demo |
+| `-Compact` | off | Sets `ARTEMIS_COMPACT=1` for the app: it starts behind a small status window (client/README.md). An approval that arrives there focuses Reject. Not for the demo |
 | `-HealthTimeoutS` | `120` | How long to wait for the core's `/health` |
 
 ## Speech voice and rate (Windows voice only)
@@ -95,9 +96,9 @@ log or in the exe. It is removed from the environment when the launcher exits, a
 copies end with the process.
 
 Options: `-Agent stub|claude`, `-Voice whisper|stub`, `-AppPath <exe>`, `-NoConversation`,
-`-ForgetKey`, and `-NoPause` (for scripts: never wait for a key press). The launcher turns
-conversation mode on by default (built-in spoken phrases and one waiting follow-up, contracts.md
-§5.4); `start.ps1` itself still defaults to off.
+`-Compact` (passed to `start.ps1`, off by default), `-ForgetKey`, and `-NoPause` (for scripts: never
+wait for a key press). The launcher turns conversation mode on by default (built-in spoken phrases
+and one waiting follow-up, contracts.md §5.4); `start.ps1` itself still defaults to off.
 
 ### The window never closes unread
 

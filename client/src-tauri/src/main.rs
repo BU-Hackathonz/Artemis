@@ -1,11 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use tauri::Manager;
+mod companion;
 
 #[derive(Clone, Serialize)]
 struct CoreConfig {
     core_url: String,
     token: String,
+    // Opt-in compact desktop status (infra/start.ps1 -Compact). Off: full controls only, as before.
+    compact: bool,
 }
 
 const LAUNCH_ERROR: &str = "Native core configuration is missing or invalid. Close Artemis and start it with infra/start.ps1.";
@@ -31,7 +35,12 @@ impl CoreConfig {
         Ok(Self {
             core_url: url.origin().ascii_serialization(),
             token,
+            compact: false,
         })
+    }
+
+    fn with_compact(self, compact: bool) -> Self {
+        Self { compact, ..self }
     }
 
     fn from_env() -> Result<Self, String> {
@@ -43,19 +52,68 @@ impl CoreConfig {
     }
 }
 
+// ARTEMIS_COMPACT=1 (start.ps1 -Compact) turns on the compact status window. It is not a secret.
+fn compact_requested(value: Option<String>) -> bool {
+    value.as_deref() == Some("1")
+}
+
 struct LaunchState(Result<CoreConfig, String>);
 
+fn config_for_window(label: &str, state: &LaunchState) -> Result<CoreConfig, String> {
+    companion::require_label(label, "main")?;
+    state.0.clone()
+}
+
 #[tauri::command]
-fn get_core_config(state: tauri::State<'_, LaunchState>) -> Result<CoreConfig, String> {
-    state.inner().0.clone()
+fn get_core_config(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, LaunchState>,
+) -> Result<CoreConfig, String> {
+    config_for_window(window.label(), state.inner())
 }
 
 fn main() {
-    let state = LaunchState(CoreConfig::from_env());
+    let compact = compact_requested(std::env::var("ARTEMIS_COMPACT").ok());
+    let state = LaunchState(CoreConfig::from_env().map(|config| config.with_compact(compact)));
+    // A failed launch shows full controls with the recovery text, never the compact status.
+    let compact = state.0.as_ref().is_ok_and(|config| config.compact);
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![get_core_config])
+        .manage(companion::CompanionState::default())
+        .setup(move |app| {
+            // Default: no compact status window; full controls open and take focus as before.
+            let status = if compact {
+                companion::create(app.handle())
+            } else {
+                None
+            };
+            if let Some(main) = app.get_webview_window("main") {
+                // Keep full controls in the taskbar/Alt+Tab even before they are first opened.
+                if status.is_some() {
+                    let _ = main.minimize();
+                }
+                let _ = main.show();
+                if status.is_none() {
+                    let _ = main.set_focus();
+                }
+            }
+            if let Some(status) = status {
+                if status.show().is_ok() {
+                    let _ = status.set_focus();
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(companion::window_event)
+        .invoke_handler(tauri::generate_handler![
+            get_core_config,
+            companion::get_companion_status,
+            companion::update_companion_status,
+            companion::show_main,
+            companion::enter_compact,
+            companion::reveal_approval
+        ])
         .run(tauri::generate_context!())
         .expect("Could not start Artemis desktop client");
 }
@@ -63,6 +121,32 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_status_is_off_unless_the_launcher_asks_for_it() {
+        assert!(compact_requested(Some("1".into())));
+        for value in [None, Some(""), Some("0"), Some("true"), Some(" 1")] {
+            assert!(!compact_requested(value.map(String::from)));
+        }
+        let config = CoreConfig::from_values(
+            Some("http://127.0.0.1:8123".into()),
+            Some("test-only".into()),
+        )
+        .unwrap_or_else(|_| panic!("valid fixture rejected"));
+        assert!(!config.compact);
+        assert!(config.with_compact(true).compact);
+    }
+
+    #[test]
+    fn only_the_main_window_can_receive_the_launch_token() {
+        let state = LaunchState(CoreConfig::from_values(
+            Some("http://127.0.0.1:8123".into()),
+            Some("test-only".into()),
+        ));
+        assert!(config_for_window("main", &state).is_ok());
+        assert!(config_for_window("companion", &state).is_err());
+        assert!(config_for_window("untrusted", &state).is_err());
+    }
 
     #[test]
     fn accepts_only_loopback_root_and_a_nonempty_header_safe_token() {
