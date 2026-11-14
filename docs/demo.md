@@ -1,5 +1,7 @@
 # Demo runbook
 
+**On stage, use the one-page [stage runbook](stage-runbook.md).** This file has the details behind it.
+
 How to set up the demo laptop, run the five-part demo for judges, and rehearse it with your eyes
 closed. Spoken lines in quotes are the exact text the core produces (from
 `server/artemis/policy/gateway.py`, `server/artemis/core/session.py`, `server/artemis/core/app.py`,
