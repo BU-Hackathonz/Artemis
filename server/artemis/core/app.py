@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from artemis.contracts import ApprovalResponse, TaskRequest
+from artemis.contracts import ApprovalResponse, ClientDiagnostic, TaskRequest
 from artemis.runner.local import NoInterpreter
 
 from .approvals import ApprovalNotFound, ApprovalStale
@@ -298,6 +298,17 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             raise HTTPException(422, {"error": "bad_action"})
         return Response(status_code=204)
 
+    @app.post("/sessions/{sid}/diagnostics", status_code=204)
+    async def diagnostics(sid: str, body: ClientDiagnostic):
+        """A problem only the client can see (e.g. its global shortcut couldn't be registered),
+        spoken by the core like any other error. Fixed sentences per code; once per session."""
+        session = core.session(sid)
+        if body.code not in session.reported:
+            session.reported.add(body.code)
+            message, recovery = diagnostic_text(body)
+            await session.error(body.code, message, recovery)
+        return Response(status_code=204)
+
     @app.post("/speech", status_code=204)
     async def speech(body: SpeechBody):
         if body.action == "stop":
@@ -321,6 +332,16 @@ async def _probe_python(runner) -> str | None:
     except Exception:  # an odd failure here must not block sessions; a run will report it
         log.exception("interpreter pre-check failed")
     return None
+
+
+def diagnostic_text(d: ClientDiagnostic) -> tuple[str, str]:
+    if d.code == "shortcut_registration_failed":
+        chord = d.shortcut.replace("+", " ") if d.shortcut else "for push-to-talk"
+        return (
+            f"The push-to-talk shortcut {chord} couldn't be registered. Another app may be using it.",
+            "Use the Start listening button in Artemis, or choose a different shortcut.",
+        )
+    raise AssertionError(d.code)  # unreachable: the model only accepts known codes
 
 
 def mic_message(exc: Exception) -> str:

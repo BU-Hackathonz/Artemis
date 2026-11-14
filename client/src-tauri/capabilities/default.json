@@ -1,1 +1,15 @@
-{"$schema":"../gen/schemas/desktop-schema.json", "identifier":"main", "description":"Only the local main window can read the launch configuration", "local":true, "windows":["main"], "permissions":["allow-get-core-config"]}
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Local main window launch configuration and push-to-talk shortcut only",
+  "local": true,
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-get-core-config",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered"
+  ]
+}

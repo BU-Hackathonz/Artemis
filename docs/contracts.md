@@ -24,6 +24,7 @@ and passes it to both processes (§6).
 | POST | `/tasks/{tid}/cancel` | `{}` → `204` | Stops active work; the event reports what was already applied |
 | POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events |
 | POST | `/speech` | `{action: "stop"\|"repeat"}` → `204` | Stop speaking / repeat the last announcement |
+| POST | `/sessions/{sid}/diagnostics` | `{code: "shortcut_registration_failed", shortcut?: "Control+Alt+Space"}` → `204` | A problem only the client can see. The core speaks a **fixed** sentence per code (`error` event, priority high), once per code per session; `shortcut` allows letters, digits and `+` only. No free text is ever spoken. While `voice_ready` is true the client doesn't also announce it (§5.3) |
 
 ## 2. Core → client: the event stream
 
@@ -242,8 +243,10 @@ Environment variables, not command-line arguments: on Windows any process can li
 processes' command lines. Malware running as the same user is out of scope for the weekend.
 
 **Client (Jun)**
-- Reads `ARTEMIS_CORE_URL` and `ARTEMIS_TOKEN` once into native state, and exposes only one Tauri
-  command, `get_core_config`, to the main window. The capability file allows nothing else.
+- Reads `ARTEMIS_CORE_URL` and `ARTEMIS_TOKEN` once into native state, and exposes one application
+  command, `get_core_config`, to the main window. For push-to-talk, the local main window may also
+  use only the global-shortcut plugin's register, unregister and is-registered permissions; no shell,
+  filesystem, generic environment or other plugin permissions are granted (approved by Avery as acting lead).
 - Checks that the address is loopback, then connects automatically: no address or token form.
 - If either value is missing or partial, it shows an actionable launch error. It never falls back
   to a remote or unauthenticated connection.
