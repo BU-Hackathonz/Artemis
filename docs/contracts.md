@@ -237,6 +237,9 @@ What the developer can change by voice depends on who is speaking. With SAPI, "s
 only Artemis. With NVDA, Artemis speaks through NVDA's controller, so stopping also cuts whatever
 NVDA itself was saying, and Artemis can't change NVDA's speaking rate: "slower" is answered with a
 pointer to NVDA's own rate setting. The controller knows which applies from `voice.status`.
+On SAPI the rate is the user's Windows setting unless `ARTEMIS_SAPI_RATE` replaces it, clamped to
+-3..6. Conversation's "faster" and "slower" change only the SAPI rate, one step at a time, and say
+so when a limit is reached.
 
 ### 5.4 Conversation (behind `ARTEMIS_CONVERSATION=on`, default off)
 With the flag off, §5.1 and §5.2 apply exactly as written above. With it on, every final

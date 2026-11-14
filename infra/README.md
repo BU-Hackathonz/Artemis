@@ -23,6 +23,25 @@ powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly       # just 
 | `-Conversation` | off | Sets `ARTEMIS_CONVERSATION=on`: built-in spoken phrases ("what are you doing", "keep it brief") and one waiting follow-up request (contracts.md §5.4). Rehearse with it before using it in the demo |
 | `-HealthTimeoutS` | `120` | How long to wait for the core's `/health` |
 
+## Speech voice and rate (Windows voice only)
+
+These apply when Artemis speaks through Windows SAPI. Set them in the PowerShell window you launch
+from, before `start.ps1`; the core inherits them.
+
+- `ARTEMIS_SAPI_VOICE`: part of an installed voice's name, such as `Zira`. An unknown name keeps
+  the Windows default voice.
+- `ARTEMIS_SAPI_RATE`: a whole number from `-3` to `6`; other numbers are clamped to that range.
+  Unset or invalid keeps your own Windows speech rate.
+- Both are ignored while NVDA is speaking. NVDA's own voice and rate are never changed.
+- With conversation mode (`-Conversation`), saying "faster" or "slower" steps the Windows voice
+  rate within `-3` to `6`.
+
+```powershell
+$env:ARTEMIS_SAPI_VOICE = "Zira"
+$env:ARTEMIS_SAPI_RATE = "2"
+powershell -ExecutionPolicy Bypass -File infra\start.ps1
+```
+
 What it does:
 1. Makes a 32-byte random launch token (base64url) and picks a free port on `127.0.0.1`.
 2. Starts `uv run uvicorn artemis.core.main:app --host 127.0.0.1 --port <port>` with
