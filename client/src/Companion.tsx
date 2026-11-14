@@ -25,10 +25,23 @@ export function Companion() {
     try {await platform.showMain(); setError('');}
     catch {setError('Could not open controls. Use Artemis in the taskbar or restart the launcher.');}
   }
-  return <main className="companion" aria-label="Artemis desktop status" onKeyDown={event => {
+  const text = error || companionText(status);
+  const listening = status.microphone === 'listening';
+  // The dot is decorative: the status text (read by screen readers) carries the same meaning.
+  const tone = error ? 'error' : status.approval ? 'attention' : listening ? 'listening' : status.connection === 'ready' ? 'ready' : 'pending';
+  return <main className="companion" data-tone={tone} aria-label="Artemis desktop status" onKeyDown={event => {
     if (event.key === 'Escape') {event.preventDefault(); void showControls();}
   }}>
-    <div className="companion-copy"><h1>Artemis<span aria-hidden="true"> ·</span></h1><p role={error ? 'alert' : undefined} aria-live={error ? 'assertive' : 'off'}>{error || companionText(status)}</p></div>
-    <button ref={open} onClick={() => void showControls()}>Open controls</button>
+    <span className="companion-dot" aria-hidden="true" />
+    <h1>artemis.</h1>
+    <span className="companion-rule" aria-hidden="true" />
+    <svg className="companion-wave" data-listening={listening ? 'true' : undefined} viewBox="0 0 40 16" aria-hidden="true" focusable="false">
+      <path d="M1 8 C 5 2, 9 14, 13 8 S 21 2, 25 8 S 33 14, 37 8 S 39 6, 39 8" />
+    </svg>
+    <span className="companion-rule" aria-hidden="true" />
+    <p id="companion-status" className="companion-status" title={text} role={error ? 'alert' : undefined} aria-live={error ? 'assertive' : 'off'}>{text}</p>
+    <button ref={open} className="companion-open" aria-label="Open controls" aria-describedby="companion-status" onClick={() => void showControls()}>
+      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 6.5 8 10.5 12 6.5" /></svg>
+    </button>
   </main>;
 }

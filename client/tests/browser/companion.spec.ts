@@ -14,7 +14,7 @@ test('compact status has keyboard access to controls and never opens a core sess
   });
   const coreRequests:string[] = [];
   page.on('request', request => {if (/\/(?:health|sessions)(?:\/|$)/.test(new URL(request.url()).pathname)) coreRequests.push(request.url());});
-  await page.setViewportSize({width:420, height:104});
+  await page.setViewportSize({width:420, height:64});
   await page.goto('/#companion');
   await expect(page.getByText('Task working', {exact:true})).toBeVisible();
   const open = page.getByRole('button', {name:'Open controls', exact:true});

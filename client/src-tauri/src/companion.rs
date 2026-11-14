@@ -155,11 +155,9 @@ pub fn place(app: &AppHandle) -> Result<(), String> {
     let area = monitor.work_area();
     let scale = monitor.scale_factor();
     let width = 420.0_f64.min((area.size.width as f64 / scale - 24.0).max(240.0));
+    // The slim pill fits one row at every width place() allows, so the window height is fixed.
     window
-        .set_size(tauri::LogicalSize::new(
-            width,
-            if width < 360.0 { 144.0 } else { 104.0 },
-        ))
+        .set_size(tauri::LogicalSize::new(width, 64.0))
         .map_err(|_| "Could not size desktop status.")?;
     let physical_width = (width * scale) as i32;
     let x = area.position.x + (area.size.width as i32 - physical_width) / 2;
