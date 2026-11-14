@@ -202,3 +202,30 @@ def test_the_approval_the_core_holds_is_redacted_and_keeps_its_hash(tmp_path):
     assert key not in held.diff and "[redacted]" in held.diff
     assert key not in held.model_dump_json()
     assert held.approval_hash.startswith("sha256:") and len(held.approval_hash) == 71
+
+
+def test_approved_edit_writes_the_real_key_line_to_disk(tmp_path):
+    """Redaction is display-only: the diff and the held approval show [redacted], but the file
+    gets the real content the user approved."""
+    key = "sk-ant-api03-FAKEdiskwrite0123456789"
+    w = World(tmp_path)
+    line = f'API_KEY = "{key}"\n'
+    result = asyncio.run(w.edit(("    return user\n", f"    return user\n{line}")))
+    assert result.ok
+    assert line in w.text()
+    assert w.text() == LOGIN.replace("    return user\n", f"    return user\n{line}")
+    held = w.approvals.requests[0]
+    assert key not in held.diff and "[redacted]" in held.diff
+
+
+def test_edit_whose_old_text_spans_a_redacted_secret_fails_cleanly(tmp_path):
+    """The model only ever saw [redacted] in place of the key, so its old text contains that
+    placeholder. The edit must fail without writing the placeholder into the file."""
+    key = "sk-ant-api03-FAKEspanning0123456789"
+    content = f'API_KEY = "{key}"\nDEBUG = False\n'
+    w = World(tmp_path, content=content)
+    result = asyncio.run(w.edit(('API_KEY = "[redacted]"\nDEBUG = False\n', 'DEBUG = True\n')))
+    assert result.error == "invalid_args"
+    assert "not found" in result.message
+    assert w.approvals.requests == []
+    assert w.text() == content and "[redacted]" not in w.text()
