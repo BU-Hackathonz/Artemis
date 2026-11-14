@@ -49,11 +49,11 @@ export function App() {
     hadApproval.current = open;
   }, [state.approvals.length, ready]);
   useEffect(() => () => { generation.current++; }, []);
-  async function connect(demo: boolean) {
+  async function connect(demo: boolean, blockedRun = false) {
     setBusy(true); setError('');
     const attempt = ++generation.current;
     try {
-      const core = demo ? createDemoCore() : createHttpCore(address, token);
+      const core = demo ? createDemoCore({blockedRun}) : createHttpCore(address, token);
       const health = await core.health();
       if (!health.ok) throw new Error('Core is not healthy. Restart it and reconnect.');
       const sid = await core.session();
@@ -92,8 +92,8 @@ export function App() {
           <label htmlFor="address">Core address</label><input id="address" type="url" value={address} onChange={e => setAddress(e.target.value)} required disabled={busy}/>
           <label htmlFor="token">Launch token</label><input id="token" type="password" value={token} onChange={e => setToken(e.target.value)} required autoComplete="off" disabled={busy}/>
           <button disabled={busy}>Connect to core</button>
-        </form><p>Launch the core first. Your token stays in memory for this connection.</p><button disabled={busy} onClick={() => void connect(true)}>Try in-memory demo</button></> : <>
-          <p>{connection.demo ? 'Demo only: fixed Hello World proposals. No files, code execution or microphone access.' : `Core ${connection.health.version}. ${voiceReady ? 'Core handles spoken announcements.' : 'Screen reader live announcements enabled.'}`}</p>
+        </form><p>Launch the core first. Your token stays in memory for this connection.</p><button disabled={busy} onClick={() => void connect(true)}>Try in-memory demo</button> <button disabled={busy} onClick={() => void connect(true, true)}>Try blocked-action demo</button><p>The blocked-action demo adds a synthetic security finding for testing the approval shortcut. Both demos stay in memory.</p></> : <>
+          <p>{connection.demo ? 'Demo only: synthetic Hello World proposals. No files, code execution or microphone access.' : `Core ${connection.health.version}. ${voiceReady ? 'Core handles spoken announcements.' : 'Screen reader live announcements enabled.'}`}</p>
           <button onClick={() => window.location.reload()}>Disconnect and reset</button>
           {!ready && <button onClick={() => setConnection({...connection})}>Reconnect event stream</button>}
         </>}

@@ -1,7 +1,7 @@
 import type { Approval, Core, CoreEvent, Decision, Health } from './contracts';
 
 // Entirely in-memory: this demo never writes files, records audio or executes code.
-export function createDemoCore(): Core {
+export function createDemoCore({blockedRun = false}: {blockedRun?: boolean} = {}): Core {
   const sid = 'ses_demo';
   let seq = 0;
   let taskId = '';
@@ -16,11 +16,12 @@ export function createDemoCore(): Core {
   function propose(kind: Approval['kind']) {
     active = {
       approval_id: `apr_${seq + 1}`, approval_hash: `demo:${seq + 1}`, kind,
-      summary: kind === 'write_files' ? 'Demo: create main.py with one line that prints Hello, World!' : 'Demo: run main.py with Python. No security findings.',
+      summary: kind === 'write_files' ? 'Demo: create main.py with one line that prints Hello, World!' : blockedRun ? 'Demo: blocked run with a synthetic high-severity finding. No code will execute.' : 'Demo: run main.py with Python. No security findings.',
+      blocking: kind === 'run_program' && blockedRun,
       files: kind === 'write_files' ? [{path:'main.py', action:'created', lines_added:1, lines_removed:0}] : [],
       diff: kind === 'write_files' ? '--- /dev/null\n+++ main.py\n@@ -0,0 +1 @@\n+print("Hello, World!")\n' : null,
       run: kind === 'run_program' ? {preset:'python', entry:'main.py', timeout_s:10} : null,
-      findings:[],
+      findings: kind === 'run_program' && blockedRun ? [{rule:'DEMO_HIGH',severity:'high',path:'main.py',line:1,message:'Synthetic finding for keyboard testing only; no scanner was run.'}] : [],
     };
     emit('task.state', {state:'awaiting_approval'}, 'Waiting for your approval.');
     emit('approval.requested', active as unknown as Record<string, unknown>, active.summary);
