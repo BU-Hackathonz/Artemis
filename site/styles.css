@@ -37,7 +37,6 @@ kbd { border: 1px solid var(--muted); border-radius: 6px; padding: .05em .5em; w
 .center { text-align: center; } .center .lede { margin-left: auto; margin-right: auto; }
 section { padding: clamp(5rem, 11vw, 8.5rem) 0; position: relative; }
 section.tight { padding-top: 2rem; overflow-x: clip; }
-@media (max-height: 34rem) { .step { position: static; } }
 .mt { margin-top: 2rem; }
 
 /* Buttons */
@@ -162,6 +161,8 @@ section.tight { padding-top: 2rem; overflow-x: clip; }
 .step { counter-increment: s; border: 1px solid var(--line); border-radius: 24px; background: #0b0b0e; background-image: var(--card); padding: 2rem; display: grid; grid-template-columns: 7rem 1fr; gap: 1rem 2rem; position: sticky; top: 6rem; box-shadow: 0 -20px 40px rgba(0,0,0,.6); }
 .step:nth-child(2) { top: 7.2rem; } .step:nth-child(3) { top: 8.4rem; } .step:nth-child(4) { top: 9.6rem; }
 .step:nth-child(5) { top: 10.8rem; } .step:nth-child(6) { top: 12rem; } .step:nth-child(7) { top: 13.2rem; }
+/* Short screens: sticky steps would cover the content, so let them scroll. After the .step rules so it wins. */
+@media (max-height: 34rem) { .step { position: static; } }
 .step::before { content: counter(s, decimal-leading-zero); font-size: clamp(3rem, 7vw, 4.6rem); font-weight: 500; letter-spacing: -.05em; color: #8a8a91; line-height: .9; }
 .step .k { font-size: .74rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .step h3 { margin: .2rem 0 .4rem; font-size: clamp(1.3rem, 2.6vw, 1.75rem); letter-spacing: -.035em; font-weight: 600; }
