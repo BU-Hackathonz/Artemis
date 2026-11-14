@@ -333,6 +333,14 @@ transcript.
 - **A clarifying question ends the task** (design A4 stands): the developer's next utterance is a
   new task in the same agent conversation. `/tasks/{tid}/reply` and `awaiting_reply` stay reserved.
 
+### 5.5 Result earcons (behind `ARTEMIS_RESULT_EARCONS=on`, default off)
+With the flag on, the core plays one earcon just before the spoken line of: a `run.result` with exit
+code 0 (`"success"`), a `run.result` with a non-zero exit or a timeout (`"failure"`), and an
+`approval.requested` (`"approval"`). The line is still spoken in full; the tone is never a substitute.
+No earcon plays while the voice reports `listening`, and the flag is read once at startup. With the
+flag off, nothing plays. The voice `stub` never fails on these cues: `earcons.play` returns 0 when
+there is no output device, and the run goes on.
+
 ## 6. Launcher and launch token (decided 2026-11-14)
 
 **`infra/start.ps1` (Avery)**
