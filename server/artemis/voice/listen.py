@@ -103,6 +103,13 @@ class VoiceError(Exception):
     """Microphone problems the core should turn into an `error` event."""
 
 
+def _sentence(prefix: str, error: Exception) -> str:
+    """'prefix: detail.' always ending in a full stop, so the spoken recovery tip after it is a new sentence."""
+    detail = str(error).strip().rstrip(".")
+    text = f"{prefix}: {detail}" if detail else prefix
+    return text if text.endswith(("!", "?")) else text + "."
+
+
 def _input_stream(callback):
     import sounddevice as sd
 
@@ -170,7 +177,7 @@ class WhisperVoice:
             stream.start()
         except Exception as e:  # no device, device busy, permission denied
             self._wanted = False
-            raise VoiceError(f"Microphone not available: {e}") from e
+            raise VoiceError(_sentence("Microphone not available", e)) from e
         self._stream = stream
 
     async def stop_listening(self, client_request_id: str) -> str:
@@ -207,7 +214,7 @@ class WhisperVoice:
         except Exception as e:  # mic unplugged mid-recording
             with self._lock:
                 self._chunks, self._frames = [], 0
-            raise VoiceError(f"Microphone stopped unexpectedly: {e}") from e
+            raise VoiceError(_sentence("Microphone stopped unexpectedly", e)) from e
         with self._lock:
             audio = np.concatenate(self._chunks)[: RATE * MAX_SECONDS] if self._chunks else np.zeros(0, np.float32)
             self._chunks, self._frames = [], 0
