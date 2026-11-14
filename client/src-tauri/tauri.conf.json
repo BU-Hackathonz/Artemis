@@ -23,6 +23,7 @@
       },
       {
         "label": "companion",
+        "create": false,
         "title": "Artemis status",
         "url": "index.html#companion",
         "width": 420,

@@ -33,8 +33,10 @@ test('compact status has keyboard access to controls and never opens a core sess
   expect(await page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.every(c => ['get_companion_status','show_main'].includes(c)))).toBe(true);
 });
 
-for (const background of [true, false]) {
-  test(`native approval focuses ${background ? 'Reject when revealing background controls' : 'Approve in existing foreground controls'}`, async ({page}) => {
+// Compact status is opt-in (start.ps1 -Compact). The default launch keeps Approve focus even in the background.
+for (const {compact, background} of [{compact:true, background:true}, {compact:true, background:false}, {compact:false, background:true}]) {
+  const decision = compact && background ? 'Reject' : 'Approve';
+  test(`${compact ? 'compact' : 'default'} launch: native approval focuses ${decision}${compact ? (background ? ' when revealing background controls' : ' in existing foreground controls') : ' with no compact status calls'}`, async ({page}) => {
     const {createServer} = await import('node:http');
     let events: import('node:http').ServerResponse | undefined;
     const decisions:string[] = [];
@@ -64,8 +66,9 @@ for (const background of [true, false]) {
     });
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
     try {
-      await page.addInitScript(({url,background}) => {
+      await page.addInitScript(({url,compact,background}) => {
         const reveals:boolean[]=[]; Object.defineProperty(window,'approvalReveals',{value:reveals});
+        const commands:string[]=[]; Object.defineProperty(window,'nativeCommands',{value:commands});
         const focused:string[]=[]; Object.defineProperty(window,'approvalFocusHistory',{value:focused});
         if(background) Object.defineProperty(document,'hasFocus',{value:()=>false});
         document.addEventListener('focusin',event=>{
@@ -73,18 +76,23 @@ for (const background of [true, false]) {
           if(target instanceof HTMLButtonElement && target.closest('[role=dialog]')) focused.push(target.textContent??'');
         });
         Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args?:{status?:{approval:boolean}})=>{
+          commands.push(command);
           if(command==='reveal_approval'){reveals.push(Boolean(document.activeElement?.hasAttribute('data-approval-reject')));return;}
-          if(command==='get_core_config')return{core_url:url,token:'approval-focus-test'};
+          if(command==='get_core_config')return{core_url:url,token:'approval-focus-test',compact};
           if(command==='update_companion_status')return background && Boolean(args?.status?.approval);
           if(command.endsWith('is_registered'))return false;
           return;
         }}});
-      }, {url:`http://127.0.0.1:${(server.address() as {port:number}).port}`,background});
+      }, {url:`http://127.0.0.1:${(server.address() as {port:number}).port}`,compact,background});
       await page.goto('/');
-      const decision=background?'Reject':'Approve';
       await expect(page.getByRole('dialog')).toBeVisible();
       await expect(page.getByRole('button',{name:decision,exact:true})).toBeFocused();
-      if(background) {
+      await expect(page.getByRole('button',{name:'Use compact status',exact:true,includeHidden:true})).toHaveCount(compact ? 1 : 0);
+      if(!compact) {
+        const commands=await page.evaluate(()=>(window as unknown as {nativeCommands:string[]}).nativeCommands);
+        expect(commands.filter(c=>['update_companion_status','reveal_approval','enter_compact'].includes(c))).toEqual([]);
+      }
+      if(compact && background) {
         await expect.poll(()=>page.evaluate(()=>(window as unknown as {approvalReveals:boolean[]}).approvalReveals)).toEqual([true]);
         const history=await page.evaluate(()=>(window as unknown as {approvalFocusHistory:string[]}).approvalFocusHistory);
         expect(history.length).toBeGreaterThan(0);

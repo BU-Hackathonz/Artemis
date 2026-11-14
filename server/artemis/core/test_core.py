@@ -8,7 +8,7 @@ import pytest
 
 from artemis.agent.stub import StubAgent
 from artemis.conversation.controller import NVDA_RATE_LINE
-from artemis.contracts import Approval, Decision, EventDraft
+from artemis.contracts import Approval, Decision, EventDraft, Failed
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
@@ -236,6 +236,28 @@ async def test_agent_crash_is_spoken_not_silent(client, core, voice):
     errors = [e for e in session.bus.history if e.type == "error"]
     assert errors and errors[-1].announce.priority == "high"
     assert "secret detail" not in json.dumps([e.model_dump(mode="json") for e in session.bus.history])
+
+
+@pytest.mark.parametrize("message, line", [
+    # docs/demo.md, demo 1 fallbacks: the agent's own sentence keeps one full stop.
+    ("No internet connection to Claude.", "The task failed. No internet connection to Claude. You can try again."),
+    ("Claude is still busy. Try again in a minute.",
+     "The task failed. Claude is still busy. Try again in a minute. You can try again."),
+    ("", "The task failed. offline. You can try again."),  # no message: the code
+])
+async def test_a_failed_task_is_spoken_with_one_full_stop(client, core, voice, message, line):
+    class Offline:
+        async def run(self, task, tools, emit):
+            return Failed(code="offline", message=message)
+
+    core.make_agent = Offline
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "x"})).json()["task_id"]
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    errors = [e for e in session.bus.history if e.type == "error"]
+    assert [e.announce.text for e in errors] == [line]
+    assert ("high", line) in voice.spoken
 
 
 # ----- voice (§5) -----
