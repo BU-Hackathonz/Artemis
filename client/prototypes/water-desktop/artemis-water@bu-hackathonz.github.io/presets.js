@@ -136,15 +136,19 @@ export class CommandRunner {
 
     /** Type at a human pace; each keystroke sends a small ripple from the sphere. */
     async type(text, guard, perChar = 85) {
+        // While typing there's no ball or liquid: it disappears and comes back when it moves again.
+        this._body.setTyping?.(true);
+        try {
         for (const ch of text) {
             if (guard && !guard()) throw new Error('something else took the keyboard, so typing stopped');
             const keyval = ch === '\n' ? Clutter.KEY_Return : Clutter.unicode_to_keysym(ch.codePointAt(0));
             this._press(keyval);
             await this.sleep(35);
             this._release(keyval);
-            this._followCaret(ch);
-            this.tap(ch === ' ' ? 0.15 : 0.25);
             await this.sleep(perChar + Math.round((Math.random() - 0.5) * perChar * 0.6));
+        }
+        } finally {
+            this._body.setTyping?.(false);
         }
     }
 

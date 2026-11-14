@@ -280,6 +280,7 @@ export default class ArtemisWaterExtension extends Extension {
             },
             flyHome: () => this._agentGoHome(false),
             caret: () => (this._caret ??= new CaretTracker()).position(),
+            setTyping: (on) => { this._typing = on; this._wake(); },
             // ms a command waits before moving, so the ring can collapse into its droplet first
             startDelay: () => (this._isRing() ? MORPH_SECONDS * 1000 + 80 : 0),
         };
@@ -544,7 +545,7 @@ export default class ArtemisWaterExtension extends Extension {
         const animate = this._interface.enable_animations;
 
         // The sphere's own motion stirs the water (not the mouse).
-        if (!hidden && animate) this._trailSample(A.x, A.y, now, s);
+        if (!hidden && animate && !this._typing) this._trailSample(A.x, A.y, now, s);
         else this._drops = [];
         this._last = {x: A.x, y: A.y, t: now};
         const water = this._tickWater(now, s, TRAIL_LIFE);
@@ -553,7 +554,7 @@ export default class ArtemisWaterExtension extends Extension {
         const morph = this._isRing() ? this._tickMorph(now, A) : {value: 0, busy: false};
         // Top-edge island: at home the droplet hides behind the pill's ring; it only shows in flight.
         const tucked = false; // island: the ring rests, small, in the pill's slot
-        const orb = this._tickOrb(now, A.x, A.y, hidden || tucked, s, morph);
+        const orb = this._tickOrb(now, A.x, A.y, hidden || tucked || this._typing, s, morph);
         if (this._sphereButton) this._sphereButton.visible = !hidden && !A.awake && morph.value === 0;
 
         if (water || orb === 'busy' || A.awake) { this._sleeping = false; this._schedule(ACTIVE_MS); }
