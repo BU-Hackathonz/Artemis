@@ -45,9 +45,14 @@ function Finish([int]$Code, [string]$Message = "") {
 . (Join-Path $Here "credstore.ps1")
 
 if ($ForgetKey) {
-    [void](Remove-StoredSecret $ApiKeyTarget)
-    [void](Remove-StoredSecret $WorkspaceTarget)
-    Write-Host "Removed the Anthropic key and workspace ID saved by Artemis from Windows Credential Manager (if there were any)."
+    $r1 = Remove-StoredSecret $ApiKeyTarget
+    $r2 = Remove-StoredSecret $WorkspaceTarget
+    if ($r1 -eq "failed" -or $r2 -eq "failed") {
+        Write-Host "Could not change Windows Credential Manager ($script:CredStoreError). Delete 'Artemis/AnthropicApiKey' and 'Artemis/AnthropicWorkspaceId' by hand in Credential Manager." -ForegroundColor Red
+        exit 1
+    }
+    if ($r1 -eq "none" -and $r2 -eq "none") { Write-Host "Nothing was saved by Artemis, so nothing was removed." }
+    else { Write-Host "Removed the Anthropic key and workspace ID saved by Artemis from Windows Credential Manager." }
     exit 0
 }
 
@@ -91,7 +96,7 @@ try {
             $env:ANTHROPIC_API_KEY = $savedKey
             $keyFromPrompt = $true
             $chosen = "claude"
-            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. Run launch.ps1 -ForgetKey to remove it."
+            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. No internet? Run launch.ps1 -Agent stub. Run launch.ps1 -ForgetKey to remove the saved key."
         } else {
             Write-Host "Artemis demo launcher"
             Write-Host "Type your Anthropic API key (it is hidden and kept only in this window), or press Enter for the scripted stub agent."
@@ -110,7 +115,7 @@ try {
         if ($savedKey) {
             $env:ANTHROPIC_API_KEY = $savedKey
             $keyFromPrompt = $true
-            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. Run launch.ps1 -ForgetKey to remove it."
+            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. No internet? Run launch.ps1 -Agent stub. Run launch.ps1 -ForgetKey to remove the saved key."
         } else {
             if ($NoPause) { Finish 1 "Artemis could not start: -Agent claude needs ANTHROPIC_API_KEY in this window." }
             $secure = Read-Host -AsSecureString "Anthropic API key"
@@ -132,13 +137,17 @@ try {
             if ($ws) { $env:ANTHROPIC_WORKSPACE_ID = $ws; $workspaceFromPrompt = $true; $offerSave = $true }
         }
     }
-    if ($offerSave -and -not $NoPause) {
+    if ($offerSave -and -not $NoPause -and $script:CredStoreAvailable) {
         $answer = Read-Host "Save this in Windows Credential Manager (encrypted for your Windows account) so you don't retype it? (y/N)"
         if ($answer -match "^(y|yes)$") {
-            if ($keyFromPrompt) { [void](Set-StoredSecret $ApiKeyTarget $env:ANTHROPIC_API_KEY) }
-            if ($env:ANTHROPIC_WORKSPACE_ID) { [void](Set-StoredSecret $WorkspaceTarget $env:ANTHROPIC_WORKSPACE_ID) }
-            Write-Host "Saved. Run launch.ps1 -ForgetKey to remove it."
+            $savedOk = $true
+            if ($keyFromPrompt -and $secure) { $savedOk = (Set-StoredSecret $ApiKeyTarget $env:ANTHROPIC_API_KEY) }
+            if ($savedOk -and $env:ANTHROPIC_WORKSPACE_ID) { $savedOk = (Set-StoredSecret $WorkspaceTarget $env:ANTHROPIC_WORKSPACE_ID) }
+            if ($savedOk) { Write-Host "Saved. Run launch.ps1 -ForgetKey to remove it." }
+            else { Write-Host "Nothing was saved ($script:CredStoreError). You will be asked again next time." -ForegroundColor Red }
         }
+    } elseif ($offerSave -and -not $script:CredStoreAvailable) {
+        Write-Host "Saving is not available on this laptop ($script:CredStoreError). You will be asked again next time."
     }
 
     # ----- run -----
