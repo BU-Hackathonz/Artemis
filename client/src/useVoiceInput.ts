@@ -10,10 +10,10 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
   voiceReadyRef.current = voiceReady;
   const readyRef = useRef(ready);
   readyRef.current = ready;
-  // Read through a ref: the session id must not re-run (and re-register) the shortcut effect.
-  const sessionRef = useRef(sessionId);
-  sessionRef.current = sessionId;
-  const failure = useRef<{shortcut: string; isDisposed: () => boolean} | null>(null);
+  const setup = useRef<{shortcut?: string; failed?: string; isDisposed: () => boolean; notified: Set<string>} | null>(null);
+  const [setupVersion, setSetupVersion] = useState(0);
+  const readyRequests = useRef(new Map<string, Promise<void>>());
+  const [startupError, setStartupError] = useState('');
   const sources = useRef(new Set<string>());
   const shortcutDown = useRef(false);
   const [status, setStatus] = useState<TalkStatus>({state:'idle',message:'Voice input connects with the desktop core.'});
@@ -78,20 +78,19 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
       if (disposed) {void cleanup().catch(() => {}); return;}
       unregister = cleanup;
       setRegistered(true);
+      setup.current = {shortcut, isDisposed: () => disposed, notified:new Set()};
+      setSetupVersion(n => n + 1);
     }).catch(() => {
       if (disposed) return;
       setShortcutError(`Could not register ${shortcut}. Another app may use it. Choose another shortcut, use Start listening, or type your request.`);
       setShortcutErrorKind('registration');
-      // Without core speech, the local alert is the one announcement source.
-      if (!voiceReadyRef.current) return;
-      failure.current = {shortcut, isDisposed: () => disposed};
-      // Before the session id is known, the session effect below reports it once the id arrives.
-      if (sessionRef.current) reportFailure(sessionRef.current, shortcut, () => disposed, true);
+      setup.current = {failed:shortcut, isDisposed: () => disposed, notified:new Set()};
+      setSetupVersion(n => n + 1);
     });
     const unload = () => {sources.current.clear(); void talk.dispose(); void unregister?.().catch(() => {});};
     window.addEventListener('beforeunload', unload);
     return () => {
-      disposed = true; controller.current = null; failure.current = null;
+      disposed = true; controller.current = null; setup.current = null;
       window.removeEventListener('beforeunload', unload);
       sources.current.clear();
       void talk.dispose(); void unregister?.().catch(() => {});
@@ -100,12 +99,27 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
     // register of the same hotkey can race, and the registration then fails.
   }, [core, shortcut, revision, setSource]);
   useEffect(() => {
-    // Report a current registration failure to a session that did not hear it yet,
-    // e.g. when registration failed before the session id arrived.
-    const current = failure.current;
-    if (!sessionId || !current || current.isDisposed() || !voiceReadyRef.current) return;
-    reportFailure(sessionId, current.shortcut, current.isDisposed, false);
-  }, [sessionId, reportFailure]);
+    const current = setup.current;
+    if (!core || !sessionId || !ready || !current || current.isDisposed() || current.notified.has(sessionId)) return;
+    current.notified.add(sessionId);
+    let announcement = readyRequests.current.get(sessionId);
+    if (!announcement) {
+      announcement = core.announceReady(sessionId, current.shortcut).catch(error => {
+        readyRequests.current.delete(sessionId);
+        throw error;
+      });
+      readyRequests.current.set(sessionId, announcement);
+    }
+    void announcement.then(() => {
+      if (!current.isDisposed()) setStartupError('');
+    }).catch(() => {
+      current.notified.delete(sessionId);
+      if (!current.isDisposed()) setStartupError('Could not announce that Artemis is ready. Typed requests remain available; check the core connection.');
+    }).finally(() => {
+      // Readiness completes before a shortcut diagnostic, so the failure is heard last.
+      if (!current.isDisposed() && current.failed && voiceReadyRef.current) reportFailure(sessionId, current.failed, current.isDisposed, true);
+    });
+  }, [core, sessionId, ready, setupVersion, reportFailure]);
   useEffect(() => {
     if (!ready) {sources.current.clear(); controller.current?.release();}
   }, [ready]);
@@ -123,6 +137,6 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
       sources.current.clear(); controller.current?.release();
     } else if (status.state !== 'stopping' && !status.stopUnconfirmed) setSource('button',true);
   }
-  return {toggleButton, status, shortcut, draft, setDraft, apply, shortcutError, shortcutErrorKind, noticeFailed, registered, active, setSource, fail};
+  return {toggleButton, status, shortcut, draft, setDraft, apply, shortcutError, shortcutErrorKind, noticeFailed, startupError, registered, active, setSource, fail};
 }
 export type VoiceInputState = ReturnType<typeof useVoiceInput>;

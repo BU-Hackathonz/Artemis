@@ -28,6 +28,7 @@ export interface Core {
   reply(taskId: string, text: string): Promise<void>;
   speech(action: 'repeat' | 'stop'): Promise<void>;
   listen(action: 'start' | 'stop'): Promise<void>;
+  announceReady(sid: string, shortcut?: string): Promise<void>;
   reportShortcutFailure(sid: string, shortcut: string): Promise<void>;
   subscribe(sid: string, receive: (event: CoreEvent) => void, status: (message: string) => void): () => void;
 }

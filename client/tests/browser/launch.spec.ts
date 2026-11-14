@@ -16,6 +16,7 @@ async function mockNative(page: import('@playwright/test').Page, config: {core_u
 
 test('native auto-connect uses one config command and authenticated HTTP/SSE with no form', async ({page}) => {
   const paths: string[] = [];
+  const readyBodies: unknown[] = [];
   const server = createServer((req,res) => {
     res.setHeader('access-control-allow-origin','http://127.0.0.1:1420');
     res.setHeader('access-control-allow-headers','Authorization,Content-Type,Last-Event-ID');
@@ -27,6 +28,10 @@ test('native auto-connect uses one config command and authenticated HTTP/SSE wit
       res.writeHead(200,{'content-type':'text/event-stream'});
       res.write(`id: 1\ndata: ${JSON.stringify({seq:1,session_id:'ses_native',task_id:null,at:new Date().toISOString(),type:'agent.message',data:{text:'Core connected'},announce:{text:'Core connected',priority:'normal'}})}\n\n`);
       return;
+    }
+    if (req.url === '/sessions/ses_native/ready') {
+      let body=''; req.on('data', part => {body += part;});
+      req.on('end', () => {readyBodies.push(JSON.parse(body)); res.writeHead(204).end();}); return;
     }
     res.setHeader('content-type','application/json');
     if (req.url === '/health') res.end(JSON.stringify({ok:true,version:'native-fixture',voice_ready:false,screen_reader:null}));
@@ -45,7 +50,8 @@ test('native auto-connect uses one config command and authenticated HTTP/SSE wit
     await expect(page.getByRole('button',{name:'Try in-memory demo',exact:true})).toHaveCount(0);
     await expect(page.getByLabel('What would you like to build?')).toBeFocused();
     expect(await page.evaluate(() => (window as unknown as {nativeCalls:string[]}).nativeCalls.filter(c=>c==='get_core_config'))).toEqual(['get_core_config']);
-    expect(paths).toEqual(['/health','/sessions','/sessions/ses_native/events']);
+    await expect.poll(() => readyBodies).toEqual([{shortcut:'Control+Shift+Space'}]);
+    expect(paths).toEqual(['/health','/sessions','/sessions/ses_native/events','/sessions/ses_native/ready']);
     expect(await page.locator('body').innerText()).not.toContain('launch-test-token');
     expect(page.url()).not.toContain('launch-test-token');
     expect(await page.evaluate(() => [localStorage.length,sessionStorage.length])).toEqual([0,0]);

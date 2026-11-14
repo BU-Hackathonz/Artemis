@@ -29,6 +29,8 @@ async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceRead
   let events:ServerResponse|undefined;
   const diagnostics:unknown[]=[];
   let starts=0;
+  let seq=0;
+  const readies:unknown[]=[];
   const server=createServer((req,res)=>{
     res.setHeader('access-control-allow-origin','http://127.0.0.1:1420');
     res.setHeader('access-control-allow-headers','Authorization,Content-Type,Last-Event-ID');
@@ -38,10 +40,17 @@ async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceRead
     if(req.url==='/sessions/ses_voice/events'){
       events=res;res.writeHead(200,{'content-type':'text/event-stream'});res.write(': connected\n\n');return;
     }
+    if(req.url==='/sessions/ses_voice/ready'){
+      let body='';req.on('data',part=>{body+=part;});req.on('end',()=>{
+        readies.push(JSON.parse(body));
+        events?.write(`id: ${++seq}\ndata: ${JSON.stringify({seq,session_id:'ses_voice',task_id:null,at:new Date().toISOString(),type:'agent.message',data:{text:'Artemis is ready.'},announce:{text:'Artemis is ready.',priority:'normal'}})}\n\n`);
+        res.writeHead(204).end();
+      });return;
+    }
     if(req.url==='/sessions/ses_voice/diagnostics'){
       let body='';req.on('data',part=>{body+=part;});req.on('end',()=>{
         diagnostics.push(JSON.parse(body));
-        if(diagnosticsStatus===204)events?.write(`id: 1\ndata: ${JSON.stringify({seq:1,session_id:'ses_voice',task_id:null,at:new Date().toISOString(),type:'error',data:{code:'shortcut_registration_failed',message:'Shortcut could not be registered',recovery:'Use Start listening.'},announce:{text:"The push-to-talk shortcut couldn't be registered. Use Start listening.",priority:'high'}})}\n\n`);
+        if(diagnosticsStatus===204)events?.write(`id: ${++seq}\ndata: ${JSON.stringify({seq,session_id:'ses_voice',task_id:null,at:new Date().toISOString(),type:'error',data:{code:'shortcut_registration_failed',message:'Shortcut could not be registered',recovery:'Use Start listening.'},announce:{text:"The push-to-talk shortcut couldn't be registered. Use Start listening.",priority:'high'}})}\n\n`);
         res.writeHead(diagnosticsStatus).end();
       });return;
     }
@@ -62,7 +71,7 @@ async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceRead
   });
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   const url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
-  return{actions,diagnostics,url,finishStart:()=>pendingStart?.writeHead(204).end(),close:async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
+  return{actions,diagnostics,readies,url,finishStart:()=>pendingStart?.writeHead(204).end(),close:async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
 }
 async function send(page:Page,state:'Pressed'|'Released') {await page.evaluate(state=>(window as unknown as {voiceBridge:Bridge}).voiceBridge.send(state),state);}
 
@@ -143,6 +152,7 @@ test('SAPI-ready registration failure uses the bounded core diagnostic without a
   try{
     await bridge(page,core.url,'always');await page.goto('/');
     await expect.poll(()=>core.diagnostics.length).toBe(1);
+    expect(core.readies).toEqual([{}]);
     expect(core.diagnostics).toEqual([{code:'shortcut_registration_failed',shortcut:'Control+Shift+Space'}]);
     await expect(page.locator('#shortcut-error')).toContainText('Could not register');
     await expect(page.getByRole('alert')).toHaveCount(0);
