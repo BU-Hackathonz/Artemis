@@ -8,6 +8,7 @@ ARTEMIS_CONVERSATION  off (default) | on: built-in spoken phrases and follow-ups
 ARTEMIS_PROJECTS_DIR, ARTEMIS_LOG_DIR
 """
 
+import functools
 import logging
 import os
 from pathlib import Path
@@ -34,11 +35,9 @@ def make_voice():
     return StubVoice()
 
 
-def agent_factory():
+def agent_factory(config: Config):
     try:
         from artemis.agent import make_agent  # PR #11; one agent per session
-
-        return make_agent
     except ImportError:
         from artemis.agent.stub import StubAgent
 
@@ -46,6 +45,17 @@ def agent_factory():
             # Don't fall back silently (demo runbook review): say it in the core log at startup.
             log.warning("ARTEMIS_AGENT=claude, but this build has no real agent yet; using StubAgent")
         return StubAgent
+
+    client = None
+    if config.agent == "claude":
+        try:
+            from artemis.agent.claude import make_client
+
+            client = make_client(config)  # reads the API key and workspace here, once, at startup
+        except ImportError:
+            pass  # no SDK: make_agent fails on each new session, as it always has
+    # The config and client come from startup, so a new session doesn't read the environment again.
+    return functools.partial(make_agent, config, client=client)
 
 
 def make_scan():
@@ -86,7 +96,7 @@ def build():
     core = Core(
         voice=make_voice(),
         make_runner=runner_factory(),
-        make_agent=agent_factory(),
+        make_agent=agent_factory(config),
         projects_dir=config.projects_dir,
         scan=make_scan(),
         log_dir=log_dir,

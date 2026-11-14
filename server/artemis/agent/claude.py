@@ -28,6 +28,15 @@ FALLBACK_BETA = "server-side-fallback-2026-07-01"
 log = logging.getLogger("artemis.agent")
 
 
+def make_client(config: Config):
+    """The SDK client. Build it once at startup, not per session: the SDK reads ANTHROPIC_API_KEY
+    here, and a session's first call can overlap a Playwright driver start that hides it from os.environ.
+    The constructor doesn't check the key, so a missing key still fails as a spoken error on the first call."""
+    workspace = config.workspace_id
+    headers = {"anthropic-workspace-id": workspace} if workspace else None
+    return anthropic.AsyncAnthropic(default_headers=headers)
+
+
 class ClaudeAgent:
     """One instance per session: it keeps the conversation across tasks."""
 

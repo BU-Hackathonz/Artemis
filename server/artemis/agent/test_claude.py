@@ -664,6 +664,49 @@ def test_the_workspace_id_is_redacted_like_the_key(monkeypatch):
     assert "wrkspc_01TESTnotreal" not in redact("workspace wrkspc_01TESTnotreal failed")
 
 
+def test_client_built_at_startup_keeps_key_and_workspace_while_secrets_are_hidden(monkeypatch):
+    """A session's first call can run while Playwright's driver start hides the secrets. The client
+    built at startup already has the key and workspace, and the request must not read os.environ again."""
+    from artemis.agent.claude import make_client
+    from artemis.childenv import secrets_hidden_from_environ
+
+    key, workspace = "sk-ant-api03-FAKEfakeFAKE", "wrkspc_01TESTnotreal"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", key)
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", workspace)
+    seen = []
+    reply = {
+        "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+        "content": [{"type": "text", "text": "Hello."}],
+        "stop_reason": "end_turn", "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+    def handler(request):
+        seen.append(request.headers)
+        return httpx2.Response(200, json=reply)
+
+    real = anthropic.AsyncAnthropic
+
+    def offline(**kwargs):  # no api_key here: the SDK reads it from the environment, as in production
+        return real(
+            max_retries=0,
+            http_client=anthropic.DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handler)),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(claude_module.anthropic, "AsyncAnthropic", offline)
+    config = Config.from_env()
+    client = make_client(config)  # startup, secrets visible
+    agent = ClaudeAgent(config, client=client)
+    with secrets_hidden_from_environ():
+        assert "ANTHROPIC_API_KEY" not in os.environ
+        assert asyncio.run(agent._request()).content[0].text == "Hello."
+
+    assert seen[0].get("authorization") == f"Bearer {key}"
+    assert seen[0].get("anthropic-workspace-id") == workspace
+    assert key not in repr(config)
+
+
 def test_real_sdk_client_builds_the_request_and_replays_thinking_blocks(tmp_path):
     """Everything except the network: the real AsyncAnthropic serializes our request, and the
     second request carries the first response's blocks back unchanged."""

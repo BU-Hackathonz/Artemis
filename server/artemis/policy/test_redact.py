@@ -197,3 +197,11 @@ def test_redact_obj_walks_nested_data():
     data = {"a": [f"x {FAKE_KEY}", {"b": "password=hunter22", "n": 3}], "ok": True}
     out = redact_obj(data)
     assert out == {"a": [f"x {REDACTED}", {"b": f"password={REDACTED}", "n": 3}], "ok": True}
+
+
+def test_env_value_hidden_for_a_playwright_start_is_still_redacted(monkeypatch):
+    from artemis.childenv import secrets_hidden_from_environ
+
+    monkeypatch.setenv("ARTEMIS_TOKEN", "zq81-plain-value")
+    with secrets_hidden_from_environ():
+        assert redact("saw zq81-plain-value in output") == f"saw {REDACTED} in output"

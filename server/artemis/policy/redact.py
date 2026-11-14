@@ -5,6 +5,8 @@ import os
 import re
 from typing import Any
 
+from artemis.childenv import hidden_secret_values
+
 REDACTED = "[redacted]"
 
 _ENV_NAME = re.compile(r"^ANTHROPIC_|_(TOKEN|KEY|SECRET)$")
@@ -41,6 +43,8 @@ def _env_secrets() -> list[str]:
         for name, value in os.environ.items()
         if _ENV_NAME.search(name.upper()) and len(value) >= _MIN_ENV_VALUE
     }
+    # Secrets hidden from os.environ while Playwright's driver starts are still secrets to redact.
+    values.update(value for value in hidden_secret_values() if len(value) >= _MIN_ENV_VALUE)
     # Longest first, so a secret that contains another is replaced whole.
     return sorted(values, key=len, reverse=True)
 
