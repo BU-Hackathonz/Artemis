@@ -147,16 +147,12 @@ try {
     $startArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Here "start.ps1"),
         "-Agent", $chosen, "-Voice", $Voice, "-AppPath", $exe)
     if ($Conversation) { $startArgs += "-Conversation" }
-    # start.ps1 exits 0 even when the core dies while the app runs, so watch its output for that
-    # and keep the window open: a double-click user must be able to read why it stopped.
-    $coreDied = $false
-    & powershell.exe @startArgs | ForEach-Object {
-        Write-Host $_
-        if ($_ -match "The core stopped while the app was running") { $coreDied = $true }
-    }
+    # start.ps1 exit codes: 0 normal close, 1 could not start, 2 the core stopped while the app ran.
+    # Anything but 0 keeps the window open: a double-click user must be able to read why it stopped.
+    & powershell.exe @startArgs
     $code = $LASTEXITCODE
+    if ($code -eq 2) { Finish 1 "Artemis stopped because its core stopped while the app was running. The lines above say why." }
     if ($code -ne 0) { Finish $code "Artemis stopped with an error (exit code $code). The lines above say why." }
-    if ($coreDied) { Finish 1 "Artemis stopped because its core stopped while the app was running. The lines above say why." }
 } finally {
     if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
     if ($secure) { $secure.Dispose() }
