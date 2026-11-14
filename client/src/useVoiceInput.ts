@@ -17,7 +17,7 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
   const sources = useRef(new Set<string>());
   const shortcutDown = useRef(false);
   const [status, setStatus] = useState<TalkStatus>({state:'idle',message:'Voice input connects with the desktop core.'});
-  const [shortcut, setShortcut] = useState('Control+Alt+Space');
+  const [shortcut, setShortcut] = useState('Control+Shift+Space');
   const [draft, setDraft] = useState(shortcut);
   const [revision, setRevision] = useState(0);
   const noticeRequests = useRef(new Map<string, Promise<void>>());
