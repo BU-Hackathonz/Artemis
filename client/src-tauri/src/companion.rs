@@ -104,25 +104,8 @@ pub fn require_label(actual: &str, label: &str) -> Result<(), String> {
         Err("This window cannot perform that action.".into())
     }
 }
-fn controls(app: &AppHandle, focus: bool) -> Result<(), String> {
-    let main = app
-        .get_webview_window("main")
-        .ok_or("Artemis controls are unavailable.")?;
-    main.show()
-        .map_err(|_| "Could not show Artemis controls.")?;
-    main.unminimize()
-        .map_err(|_| "Could not restore Artemis controls.")?;
-    if focus {
-        main.set_focus()
-            .map_err(|_| "Choose Artemis controls in the taskbar.")?;
-    }
-    // Keep Open controls available if Windows leaves the revealed main window in the background.
-    if focus || main.is_focused().unwrap_or(false) {
-        if let Some(companion) = app.get_webview_window("companion") {
-            let _ = companion.hide();
-        }
-    }
-    Ok(())
+fn controls(app: &AppHandle, focus: bool, guard: bool) -> Result<(), String> {
+    crate::controls::request(app, crate::controls::View::Full, focus, guard)
 }
 /// Opt-in only (start.ps1 -Compact): tauri.conf.json declares this window with `create: false`.
 pub fn create(app: &AppHandle) -> Option<WebviewWindow> {
@@ -154,10 +137,10 @@ pub fn place(app: &AppHandle) -> Result<(), String> {
         .ok_or("No monitor is available.")?;
     let area = monitor.work_area();
     let scale = monitor.scale_factor();
-    let width = 420.0_f64.min((area.size.width as f64 / scale - 24.0).max(240.0));
+    let width = 184.0_f64.min((area.size.width as f64 / scale - 24.0).max(1.0));
     // The slim pill fits one row at every width place() allows, so the window height is fixed.
     window
-        .set_size(tauri::LogicalSize::new(width, 64.0))
+        .set_size(tauri::LogicalSize::new(width, 48.0))
         .map_err(|_| "Could not size desktop status.")?;
     let physical_width = (width * scale) as i32;
     let x = area.position.x + (area.size.width as i32 - physical_width) / 2;
@@ -193,7 +176,7 @@ pub fn update_companion_status(
         window.is_focused().unwrap_or(false),
     )?;
     if transition.show {
-        let _ = controls(&app, transition.foreground);
+        let _ = controls(&app, transition.foreground, false);
     }
     Ok(transition.focus_reject)
 }
@@ -206,7 +189,7 @@ pub fn reveal_approval(
 ) -> Result<(), String> {
     require_label(window.label(), "main")?;
     if state.acknowledge()? {
-        controls(&app, true)?;
+        controls(&app, true, true)?;
     }
     Ok(())
 }
@@ -214,7 +197,7 @@ pub fn reveal_approval(
 #[tauri::command]
 pub fn show_main(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
     require_label(window.label(), "companion")?;
-    controls(&app, true)
+    controls(&app, true, true)
 }
 #[tauri::command]
 pub fn enter_compact(
@@ -247,13 +230,6 @@ pub fn enter_compact(
 }
 pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if window.label() == "main" {
-        if let tauri::WindowEvent::Focused(true) = event {
-            if window.is_focused().unwrap_or(false) {
-                if let Some(companion) = window.app_handle().get_webview_window("companion") {
-                    let _ = companion.hide();
-                }
-            }
-        }
         if let tauri::WindowEvent::Resized(_) = event {
             if window.is_minimized().unwrap_or(false) {
                 let state = window.app_handle().state::<CompanionState>();
@@ -269,7 +245,7 @@ pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
         if window.label() == "companion" {
             api.prevent_close();
-            let _ = controls(window.app_handle(), true);
+            let _ = controls(window.app_handle(), true, true);
         } else if window.label() == "main" {
             window.app_handle().exit(0);
         }
@@ -350,7 +326,11 @@ mod tests {
         assert_eq!(capability["local"], json!(true));
         assert_eq!(
             capability["permissions"],
-            json!(["allow-get-companion-status", "allow-show-main"])
+            json!([
+                "allow-get-companion-status",
+                "allow-show-main",
+                "allow-show-settings"
+            ])
         );
     }
 }

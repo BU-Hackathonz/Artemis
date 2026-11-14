@@ -1,5 +1,5 @@
 import type {CompanionStatus} from './desktopStatus';
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 
 // compact: the launcher opted in to the compact desktop status (infra/start.ps1 -Compact).
 export interface NativeCoreConfig { core_url: string; token: string; compact: boolean }
@@ -37,6 +37,14 @@ export const platform = {
   getCompanionStatus(): Promise<CompanionStatus> {return invoke('get_companion_status');},
   enterCompact(): Promise<void> {return invoke('enter_compact');},
   revealApproval(): Promise<void> {return invoke('reveal_approval');},
+  registerControlsHandler(handler: (notice: {revision: number; view: 'full' | 'settings'; guard: boolean}) => void): Promise<void> {
+    const channel = new Channel<{revision: number; view: 'full' | 'settings'; guard: boolean}>();
+    channel.onmessage = handler;
+    return invoke('register_controls_handler', {handler: channel});
+  },
+  showSettings(): Promise<void> {return invoke('show_settings');},
+  setControlsView(view: 'full' | 'settings'): Promise<void> {return invoke('set_controls_view', {view});},
+  controlsViewReady(revision: number): Promise<void> {return invoke('controls_view_ready', {revision});},
   showMain(): Promise<void> {return invoke('show_main');},
   getCoreConfig(): Promise<NativeCoreConfig> {
     if (!native) return Promise.reject(new Error(launchError));

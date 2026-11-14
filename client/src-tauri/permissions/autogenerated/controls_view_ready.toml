@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-controls-view-ready"
+description = "Enables the controls_view_ready command without any pre-configured scope."
+commands.allow = ["controls_view_ready"]
+
+[[permission]]
+identifier = "deny-controls-view-ready"
+description = "Denies the controls_view_ready command without any pre-configured scope."
+commands.deny = ["controls_view_ready"]

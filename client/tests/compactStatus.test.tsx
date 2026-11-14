@@ -7,6 +7,8 @@ import type {Approval, Core, CoreEvent} from '../src/contracts';
 // The native launcher passes compact=true only for infra/start.ps1 -Compact.
 const launch = {compact: false, background: false};
 const native = {
+  registerControlsHandler: vi.fn(async () => {}),
+  controlsViewReady: vi.fn(async () => {}),
   getCoreConfig: vi.fn(async () => ({core_url: 'http://127.0.0.1:9', token: 'test-only', compact: launch.compact})),
   updateCompanionStatus: vi.fn(async (status: {approval: boolean}) => launch.background && status.approval),
   revealApproval: vi.fn(async () => {}),

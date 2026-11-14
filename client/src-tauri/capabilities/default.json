@@ -13,6 +13,9 @@
     "global-shortcut:allow-is-registered",
     "allow-update-companion-status",
     "allow-enter-compact",
-    "allow-reveal-approval"
+    "allow-reveal-approval",
+    "allow-register-controls-handler",
+    "allow-set-controls-view",
+    "allow-controls-view-ready"
   ]
 }

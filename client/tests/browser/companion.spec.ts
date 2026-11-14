@@ -8,26 +8,26 @@ test('compact status has keyboard access to controls and never opens a core sess
     Object.defineProperty(window, '__TAURI_INTERNALS__', {value:{invoke:async (command:string) => {
       probe.commands.push(command);
       if (command === 'get_companion_status') return {...probe.status};
-      if (command === 'show_main') return;
+      if (command === 'show_settings') return;
       throw new Error('Unexpected command');
     }}});
   });
   const coreRequests:string[] = [];
   page.on('request', request => {if (/\/(?:health|sessions)(?:\/|$)/.test(new URL(request.url()).pathname)) coreRequests.push(request.url());});
-  await page.setViewportSize({width:420, height:64});
+  await page.setViewportSize({width:184, height:48});
   await page.goto('/#companion');
   await expect(page.getByText('Task working', {exact:true})).toBeVisible();
-  const open = page.getByRole('button', {name:'Open controls', exact:true});
+  const open = page.getByRole('button', {name:'Open settings and controls', exact:true});
   await expect(open).toBeFocused();
   expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
   await page.keyboard.press('Enter');
-  await expect.poll(() => page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.filter(c => c === 'show_main').length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.filter(c => c === 'show_settings').length)).toBe(1);
   await page.evaluate(() => {(window as unknown as {companionProbe:{status:{approval:boolean}}}).companionProbe.status.approval = true;});
   await expect(page.getByText('Approval needed · open controls', {exact:true})).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect.poll(() => page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.filter(c => c === 'show_main').length)).toBe(2);
+  await expect.poll(() => page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.filter(c => c === 'show_settings').length)).toBe(2);
   expect(coreRequests).toEqual([]);
-  expect(await page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.every(c => ['get_companion_status','show_main'].includes(c)))).toBe(true);
+  expect(await page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.every(c => ['get_companion_status','show_settings'].includes(c)))).toBe(true);
 });
 
 // Compact status is opt-in (start.ps1 -Compact). The default launch keeps Approve focus even in the background.
@@ -70,6 +70,8 @@ for (const {compact, background, press, title} of cases) {
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
     try {
       await page.addInitScript(({url,compact,background}) => {
+        let controlsHandler: {onmessage:(notice:{revision:number;view:'full';guard:boolean})=>void}|undefined;
+        let revision=0;
         const reveals:boolean[]=[]; Object.defineProperty(window,'approvalReveals',{value:reveals});
         const commands:string[]=[]; Object.defineProperty(window,'nativeCommands',{value:commands});
         const focused:string[]=[]; Object.defineProperty(window,'approvalFocusHistory',{value:focused});
@@ -78,9 +80,10 @@ for (const {compact, background, press, title} of cases) {
           const target=event.target;
           if(target instanceof HTMLButtonElement && target.closest('[role=dialog]')) focused.push(target.textContent??'');
         });
-        Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args?:{status?:{approval:boolean}})=>{
+        Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args?:{status?:{approval:boolean};handler?:typeof controlsHandler})=>{
           commands.push(command);
-          if(command==='reveal_approval'){reveals.push(Boolean(document.activeElement?.hasAttribute('data-approval-approve')));return;}
+          if(command==='register_controls_handler'){controlsHandler=args?.handler;controlsHandler?.onmessage({revision,view:'full',guard:false});return;}
+          if(command==='reveal_approval'){reveals.push(Boolean(document.activeElement?.hasAttribute('data-approval-approve')));controlsHandler?.onmessage({revision:++revision,view:'full',guard:true});return;}
           if(command==='get_core_config')return{core_url:url,token:'approval-focus-test',compact};
           if(command==='update_companion_status')return background && Boolean(args?.status?.approval);
           if(command.endsWith('is_registered'))return false;
