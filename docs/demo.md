@@ -18,7 +18,7 @@ run.
 | Real Claude agent, `edit_file`, Bandit scan (#11, #12), live Hello World test passed (17.9 s) | merged |
 | `inspect_page`, Echo Check for the agent (#25, #26) | merged |
 | `scan_project`, the security scan on request (#35); the scan can't be switched off by `.bandit` or `# nosec` (#37) | merged |
-| Push-to-talk Ctrl+Alt+Space + **Start listening / Stop listening** toggle (#32, #38) | merged; native Windows check by Yaovi in progress |
+| Push-to-talk Ctrl+Shift+Space + **Start listening / Stop listening** toggle (#32, #38) | merged; native Windows check by Yaovi in progress |
 | Approval focus: Approve for normal approvals, Reject for blocked ones (#33) | merged |
 | "Still working" cue after about 3 s of silence while working (#28) | merged: a low-priority spoken "Still working." (an earcon may replace it) |
 
@@ -36,14 +36,16 @@ the real agent isn't installed: run the uv sync from the setup checklist again.
 | Approval dialog | Escape | Reject. |
 | Blocked approval | Tab, then Shift+Enter | Override: on **Approve blocked action (Shift+Enter)**, only Shift+Enter approves. Enter and clicks do nothing there. |
 | Main window | Tab to the buttons | **Cancel task**, **Repeat last speech**, **Stop speech**. |
-| Anywhere | hold Ctrl+Alt+Space | Push-to-talk: rising earcon, speak, release, falling earcon, then "Heard: ...". Works without window focus. |
+| Anywhere | hold Ctrl+Shift+Space | Push-to-talk: rising earcon, speak, release, falling earcon, then "Heard: ...". Works without window focus. |
 | Main window | **Start listening**, then **Stop listening** | The same, as a toggle: press once to start, again to stop. Works with NVDA browse-mode clicks. |
 
-If another app already owns Ctrl+Alt+Space, Artemis says so once ("The push-to-talk shortcut Control
-Alt Space couldn't be registered…") and the **Start listening** toggle still works. To get a held
-shortcut back, type `Control+Shift+Space` into **Global voice shortcut** and choose **Apply shortcut**
-(it applies to this launch). On Yaovi's laptop another desktop app held Ctrl+Alt+Space even with
-Artemis closed (Windows can't say which), while Ctrl+Shift+Space was free.
+If another app already owns Ctrl+Shift+Space, Artemis says so once ("The push-to-talk shortcut Control
+Shift Space couldn't be registered…") and the **Start listening** toggle still works. To get a held
+shortcut back, type another chord (for example `Control+Alt+Space`) into **Global voice shortcut**
+and choose **Apply shortcut** (it applies to this launch). The default used to be Ctrl+Alt+Space,
+but on both test laptops (Yaovi's and David's) another desktop app held it even with Artemis closed
+(Windows can't say which; error 1409), while Ctrl+Shift+Space was free on both. Judges' laptops may
+differ, so check on the demo laptop.
 
 The core's spoken summary ends with "Enter to approve, Escape to reject." That matches the contract
 (contracts.md §2: only a *blocked* approval defaults to Reject), and since #33 the client focuses
@@ -71,10 +73,10 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
      the user's NVDA voice. If the DLL is missing, the core goes silent and the app's activity log
      speaks through NVDA instead.
    - Off: the core speaks with Windows SAPI. Never both at once.
-4. **Global shortcut.** Quit apps that may take Ctrl+Alt+Space as a global shortcut (desktop
+4. **Global shortcut.** Quit apps that may take Ctrl+Shift+Space as a global shortcut (desktop
    assistants' quick-entry keys are likely suspects). Start Artemis and listen: if it says the
-   push-to-talk shortcut couldn't be registered, apply `Control+Shift+Space` (see Keys above)
-   before the judges arrive.
+   push-to-talk shortcut couldn't be registered, apply another chord (see Keys above) before the
+   judges arrive.
 5. **Microphone.** Set the Windows default input device and test it in Sound settings. Push-to-talk
    (#32) uses it; `-Voice stub` skips the mic entirely, and typing always works.
 6. **Demo projects.**
@@ -108,7 +110,7 @@ before/after comparison is kept in memory for the session.
 
 ### 1. Hello World
 
-- **Type** (or hold the push-to-talk shortcut, Ctrl+Alt+Space by default, and say "Artemis, create a Python
+- **Type** (or hold the push-to-talk shortcut, Ctrl+Shift+Space by default, and say "Artemis, create a Python
   program that prints Hello World"; release):
   `Create a Python program that prints Hello World, and run it.`
 - **Hear:**
@@ -253,7 +255,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 
 | # | Check | How | Pass means | Owner | Status |
 |---|---|---|---|---|---|
-| 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, the fallback `Control+Shift+Space` applies and registers | Yaovi | not run |
+| 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | not run |
 | 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
 | 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` is "create a Python program that prints Hello World, and run it" word for word (the wake word is stripped), or the misses are posted | Yaovi | not run |
 | 4 | Keyboard path to Start listening | NVDA on, Tab from the request field | Reaches **Start listening** past the enabled buttons (Repeat, Stop) and the activity log (Send and Cancel are disabled when idle) | Yaovi | not run |

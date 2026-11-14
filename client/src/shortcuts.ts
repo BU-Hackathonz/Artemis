@@ -1,5 +1,5 @@
 const modifiers = new Map([['control','Control'],['ctrl','Control'],['alt','Alt'],['shift','Shift']]);
-const guidance = 'Use Control or Alt plus another modifier, for example Control+Alt+Space.';
+const guidance = 'Use Control or Alt plus another modifier, for example Control+Shift+Space.';
 export function normalizeVoiceShortcut(input: string): string {
   if (input.length > 80) throw new Error(guidance);
   const parts = input.split('+').map(part=>part.trim());
