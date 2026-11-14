@@ -50,10 +50,19 @@ does not say whether the key, the workspace id, or the network is at fault.
    Manager target names (`Artemis/AnthropicApiKey`, `Artemis/AnthropicWorkspaceId`), so both paths agree.
    A "Forget key" control deletes both.
 
-Considered and not chosen: (a) an OS credential dialog opened from Rust (CredUI). It keeps the key
-out of the webview entirely and NVDA reads it, but it is more native code to write and test before
-judging; keep as the upgrade if the webview field is judged too exposed. (b) A hosted proxy holding
-the key: needs auth, spend limits and a new attack surface; rejected earlier.
+**Decided by David (2026-11-14): the webview password field for now.**
+
+**Noted upgrade path: an OS credential dialog opened from Rust (CredUI).** It keeps the key out of
+the webview entirely, and NVDA reads the system dialog, but it is more native code (unsafe Windows
+API calls) to write and test. Move to it if any of these happens: the webview field is judged too
+exposed in a security review; the page ever loads anything other than our own local files; a
+screen-reader problem with the password field cannot be fixed in the page; or after the demo when
+there is time to test native code. The core endpoint and the Credential Manager storage are
+identical in both designs, so the upgrade changes only how the key is typed, not the core or the
+saved entry.
+
+Considered and not chosen: a hosted proxy holding the key: needs auth, spend limits and a new
+attack surface; rejected earlier.
 
 ## Security requirements (David's rules, restated as tests)
 
@@ -89,8 +98,11 @@ speech or the log; a clear way back to the request field.
 Order: contract, core, then client; the launcher path keeps working throughout, so nothing blocks
 the demo. After the demo, not before the keyed rehearsal passes.
 
-## Decisions needed
+## Decisions
 
-- David: webview password field (proposed) or the OS credential dialog.
+- David: **webview password field, decided.** OS credential dialog is the noted upgrade (above).
+
+## Still open
+
 - Avery: the endpoint shape and result codes.
 - Jun: whether Setup sits inside the notch's "Open controls" window or its own section of the full window.
