@@ -65,8 +65,11 @@ fn controls(app: &AppHandle, focus: bool) -> Result<(), String> {
         main.set_focus()
             .map_err(|_| "Choose Artemis controls in the taskbar.")?;
     }
-    if let Some(companion) = app.get_webview_window("companion") {
-        let _ = companion.hide();
+    // Keep Open controls available if Windows leaves the revealed main window in the background.
+    if focus || main.is_focused().unwrap_or(false) {
+        if let Some(companion) = app.get_webview_window("companion") {
+            let _ = companion.hide();
+        }
     }
     Ok(())
 }
@@ -174,6 +177,26 @@ pub fn enter_compact(
         .map_err(|_| "Could not minimize Artemis controls.".into())
 }
 pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    if window.label() == "main" {
+        if let tauri::WindowEvent::Focused(true) = event {
+            if window.is_focused().unwrap_or(false) {
+                if let Some(companion) = window.app_handle().get_webview_window("companion") {
+                    let _ = companion.hide();
+                }
+            }
+        }
+        if let tauri::WindowEvent::Resized(_) = event {
+            if window.is_minimized().unwrap_or(false) {
+                let state = window.app_handle().state::<CompanionState>();
+                let may_compact = state.0.lock().map(|s| !s.approval).unwrap_or(false);
+                if may_compact {
+                    if let Some(companion) = window.app_handle().get_webview_window("companion") {
+                        let _ = companion.show();
+                    }
+                }
+            }
+        }
+    }
     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
         if window.label() == "companion" {
             api.prevent_close();
