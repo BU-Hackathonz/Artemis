@@ -98,9 +98,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Change an existing file in the current project with search and replace edits. Each "
         "edit replaces old with new; old must be copied exactly from the file, including "
         "indentation, and must appear exactly once, so include enough surrounding lines to "
-        "make it unique. Edits apply in order. The developer hears a summary of the lines "
-        "added and removed and approves the change before it is written. Use this instead of "
-        "write_files whenever the file already exists; read the file first."
+        "make it unique. Edits apply in order, each one to the text left by the edits before "
+        "it. The developer hears a summary of the lines added and removed and approves the "
+        "change before it is written. Use this instead of write_files whenever the file already exists; read the file first."
     ),
 }
 
