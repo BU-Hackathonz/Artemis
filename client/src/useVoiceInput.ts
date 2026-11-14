@@ -100,7 +100,11 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
   }, [core, shortcut, revision, setSource]);
   useEffect(() => {
     const current = setup.current;
-    if (!core || !sessionId || !ready || !current || current.isDisposed() || current.notified.has(sessionId)) return;
+    if (!core || !sessionId || !ready || !current || current.isDisposed()) return;
+    const announced = current.notified.has(sessionId);
+    // A failure held back while core voice was unavailable is reported here, once the voice flips ready.
+    const reportPending = !!current.failed && voiceReady && !current.reported.has(sessionId);
+    if (announced && !reportPending) return;
     current.notified.add(sessionId);
     let announcement = readyRequests.current.get(sessionId);
     if (!announcement) {
@@ -124,7 +128,7 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
         reportFailure(sessionId, current.failed, current.isDisposed, !alreadyReported);
       }
     });
-  }, [core, sessionId, ready, setupVersion, reportFailure]);
+  }, [core, sessionId, ready, voiceReady, setupVersion, reportFailure]);
   useEffect(() => {
     if (!ready) {sources.current.clear(); controller.current?.release();}
   }, [ready]);
