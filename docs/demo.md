@@ -17,6 +17,7 @@ run.
 | Core, approvals, event stream, runner, NVDA/SAPI speech, typed requests, approval dialog | merged |
 | Real Claude agent, `edit_file`, Bandit scan (#11, #12), live Hello World test passed (17.9 s) | merged |
 | `inspect_page`, Echo Check for the agent (#25, #26) | merged |
+| `scan_project`, the security scan on request (#35); the scan can't be switched off by `.bandit` or `# nosec` (#37) | merged |
 | Push-to-talk Ctrl+Alt+Space + Hold to talk button (#32) | merged; native Windows check by Yaovi in progress |
 | Approval focus: Approve for normal approvals, Reject for blocked ones (#33) | merged |
 | "Still working" cue after about 3 s of silence while working (#28) | merged: a low-priority spoken "Still working." (an earcon may replace it) |
@@ -174,6 +175,21 @@ Optional live version (depends on what Claude writes):
   the gate is there for when it doesn't, then switch to the primary version.
 - **Fallback (API down):** `-Agent stub` can't do this one. Show
   `uv run --group dev --group agent --group security pytest artemis/agent/test_flows.py -k "security or risky" -v` from `server/`.
+
+### 3b. "Check my code for security problems" (`scan_project`, optional, about 20 s)
+
+Right after demo 3, while `old-app` is open. Read-only: nothing is written or run, so there is
+no approval.
+
+- **Type or say:** `Check this project for security vulnerabilities.`
+- **Hear:** "Scanning old-app for security problems." then
+  "Found 2 security issues in 1 Python file: 1 high, 1 low. The worst is main.py line 5, subprocess call with shell=True identified, security issue."
+  then *(model)* what the risk means and a safer version, offered as a change you'd approve.
+- **Point out:** the counts and the worst finding are written by the gateway from Bandit's results,
+  not by the model. A `# nosec` comment or a `.bandit` file in the project can't hide a finding,
+  and a file the scanner skipped is reported as skipped, never as clean.
+- **Fallback:** if the model answers without calling the tool, say "Run the security scan on this
+  project."
 
 ### 4. A prompt injection in a README, shown harmless
 
