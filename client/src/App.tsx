@@ -222,10 +222,10 @@ export function App() {
         else void changeView('full');
       }
     }}>
-      <h1 ref={settingsHeading} tabIndex={-1} aria-label="Settings and controls">Artemis</h1>
+      <h1 ref={settingsHeading} tabIndex={-1}>Artemis</h1>
       <p role="status" className="settings-status">{status} · Task: {taskLabel(state, pendingTaskId)}</p>
       {error && <p role="alert">{error}</p>}{companionError && <p role="alert">{companionError}</p>}
-      <button aria-label="Open request and activity controls" onClick={() => void changeView('full')}>Requests and activity</button>
+      <button onClick={() => void changeView('full')}>Requests and activity</button>
       {compact && <button disabled={state.approvals.length > 0} onClick={() => void platform.enterCompact().catch(() => setCompanionError('Could not return to the notch.'))}>Return to notch</button>}
       <section aria-label="Task and speech controls">{taskControls}</section>
       {connection && !connection.demo && <details className="settings-voice"><summary>Voice</summary><VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/></details>}
