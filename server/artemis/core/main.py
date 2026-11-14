@@ -40,6 +40,9 @@ def agent_factory():
     except ImportError:
         from artemis.agent.stub import StubAgent
 
+        if os.environ.get("ARTEMIS_AGENT") == "claude":
+            # Don't fall back silently (demo runbook review): say it in the core log at startup.
+            log.warning("ARTEMIS_AGENT=claude, but this build has no real agent yet; using StubAgent")
         return StubAgent
 
 
