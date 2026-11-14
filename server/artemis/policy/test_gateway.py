@@ -86,7 +86,8 @@ def test_happy_path_event_order(tmp_path):
     write_approval, run_approval = w.approvals.requests
     assert write_approval.kind == "write_files"
     assert write_approval.summary == (
-        "Create project hello-world with 1 file: main.py, 1 line. Enter to approve, Escape to reject."
+        "Create project hello-world with 1 file: main.py, 1 line. "
+        "Not scanned: the security scanner isn't installed. Enter to approve, Escape to reject."
     )
     assert write_approval.diff == '--- /dev/null\n+++ main.py\n@@ -0,0 +1 @@\n+print("Hello, World!")\n'
     assert write_approval.files[0].model_dump() == {
@@ -94,7 +95,10 @@ def test_happy_path_event_order(tmp_path):
     }
     assert run_approval.kind == "run_program"
     assert run_approval.run.model_dump() == {"preset": "python", "entry": "main.py", "timeout_s": 10}
-    assert run_approval.summary == "Run main.py with Python. Enter to run, Escape to reject."
+    assert run_approval.summary == (
+        "Run main.py with Python. Not scanned: the security scanner isn't installed. "
+        "Enter to run, Escape to reject."
+    )
     assert w.runner.runs == [("main.py", [], 10)]
 
     requested = w.log.of("approval.requested")[0]
@@ -453,7 +457,7 @@ def test_lower_findings_are_spoken_but_do_not_block(tmp_path):
     assert approval.summary.endswith("Enter to approve, Escape to reject.")
 
 
-def test_clean_scan_says_so_and_no_scan_says_nothing(tmp_path):
+def test_clean_scan_says_so_and_no_scanner_says_not_scanned(tmp_path):
     async def go(scan):
         folder = tmp_path / ("scan" if scan else "noscan")
         folder.mkdir()
@@ -464,12 +468,24 @@ def test_clean_scan_says_so_and_no_scan_says_nothing(tmp_path):
 
     clean = asyncio.run(go(scan_returning()))
     assert all("No security findings." in a.summary for a in clean.approvals.requests)
+    assert "Not scanned" not in " ".join(a.summary for a in clean.approvals.requests)
     assert "security.findings" not in clean.log.types()
     assert clean.approvals.requests[1].summary == (
         "Run main.py with Python. No security findings. Enter to run, Escape to reject."
     )
+
+    # No scanner configured: the approval must say so, for writes and for runs.
     unscanned = asyncio.run(go(None))
-    assert not any("security findings" in a.summary for a in unscanned.approvals.requests)
+    assert [a.kind for a in unscanned.approvals.requests] == ["write_files", "run_program"]
+    assert all(
+        "Not scanned: the security scanner isn't installed." in a.summary
+        for a in unscanned.approvals.requests
+    )
+    assert "No security findings" not in " ".join(a.summary for a in unscanned.approvals.requests)
+    assert unscanned.approvals.requests[1].summary == (
+        "Run main.py with Python. Not scanned: the security scanner isn't installed. "
+        "Enter to run, Escape to reject."
+    )
 
 
 def test_run_scans_the_real_project_folder(tmp_path):

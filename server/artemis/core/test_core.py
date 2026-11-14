@@ -735,3 +735,39 @@ async def test_bus_keeps_streaming_when_speech_or_the_log_fails(tmp_path):
                                   data={"text": f"m{i}", "kind": "answer"}))
     assert [q.get_nowait().seq for _ in range(3)] == [1, 2, 3]
     assert [e.seq for e in bus.history] == [1, 2, 3]
+# ----- startup: the security scanner (main.make_scan) -----
+
+
+@pytest.fixture
+def core_main(monkeypatch, tmp_path):
+    """artemis.core.main builds the app on import, so give it a safe environment first."""
+    import importlib
+    import sys
+
+    monkeypatch.setenv("ARTEMIS_TOKEN", "t" * 32)
+    monkeypatch.setenv("ARTEMIS_VOICE", "stub")
+    monkeypatch.setenv("ARTEMIS_RUNNER", "fake")
+    monkeypatch.setenv("ARTEMIS_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("ARTEMIS_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.delitem(sys.modules, "artemis.core.main", raising=False)
+    module = importlib.import_module("artemis.core.main")
+    monkeypatch.setitem(sys.modules, "artemis.core.main", module)  # removed again after the test
+    return module
+
+
+def test_missing_scanner_is_logged_not_silent(core_main, monkeypatch, caplog):
+    from artemis.policy import scan
+
+    monkeypatch.setattr(scan, "available", lambda: False)
+    with caplog.at_level("WARNING", logger="artemis.core.main"):
+        assert core_main.make_scan() is None
+    assert "Security scanner (Bandit) is not installed" in caplog.text
+
+
+def test_installed_scanner_is_used_quietly(core_main, monkeypatch, caplog):
+    from artemis.policy import scan
+
+    monkeypatch.setattr(scan, "available", lambda: True)
+    with caplog.at_level("WARNING", logger="artemis.core.main"):
+        assert core_main.make_scan() is scan.scan
+    assert "not installed" not in caplog.text

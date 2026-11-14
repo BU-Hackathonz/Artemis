@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from artemis.agent.config import Config
+from artemis.policy.redact import install_log_redaction
 
 from .app import Core, create_app
 
@@ -51,8 +52,13 @@ def make_scan():
     try:
         from artemis.policy import scan  # PR #11 (Bandit)
     except ImportError:
+        scan = None
+    if scan is None or not scan.available():
+        # Approvals then carry no scan result, so say it where the team will look.
+        log.warning("Security scanner (Bandit) is not installed: writes and runs are not scanned. "
+                    "Install it with: uv sync --group security")
         return None
-    return scan.scan if scan.available() else None
+    return scan.scan
 
 
 def make_vocabulary():
@@ -74,6 +80,7 @@ def runner_factory():
 
 
 def build():
+    install_log_redaction()  # core.log gets tracebacks too; uvicorn has configured logging by now
     config = Config.from_env()
     log_dir = Path(os.environ.get("ARTEMIS_LOG_DIR") or Path.home() / ".artemis" / "logs")
     core = Core(

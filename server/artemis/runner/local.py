@@ -12,6 +12,7 @@ import time
 import uuid
 from pathlib import Path
 
+from artemis.childenv import child_environ
 from artemis.contracts import FileChange, ProjectRef, RunResult
 
 log = logging.getLogger(__name__)
@@ -46,7 +47,9 @@ def _is_core_venv_path(path: Path) -> bool:
 
 def _probe(cmd: list[str], cwd: Path) -> Path | None:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=15, cwd=cwd, stdin=subprocess.DEVNULL)
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15, cwd=cwd, stdin=subprocess.DEVNULL, env=child_environ()
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     line = out.stdout.strip().splitlines()[-1:] if out.returncode == 0 else []
@@ -168,7 +171,14 @@ class LocalRunner:
         root.mkdir(parents=True, exist_ok=False)
         if shutil.which("git"):
             try:
-                subprocess.run(["git", "init", "-q"], cwd=root, capture_output=True, timeout=15, stdin=subprocess.DEVNULL)
+                subprocess.run(
+                    ["git", "init", "-q"],
+                    cwd=root,
+                    capture_output=True,
+                    timeout=15,
+                    stdin=subprocess.DEVNULL,
+                    env=child_environ(),
+                )
             except (OSError, subprocess.TimeoutExpired):
                 log.warning("git init failed in %s", root)
         return ProjectRef(slug=name, root=str(root))
