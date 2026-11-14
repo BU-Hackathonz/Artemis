@@ -11,7 +11,7 @@ ISO 8601 UTC, and workspace paths are always **relative** to the project root.
 ## 1. Client → core (HTTP, `127.0.0.1` only)
 
 Every request sends `Authorization: Bearer <launch token>`. `infra/start.ps1` generates the token
-and passes it to both processes.
+and passes it to both processes (§6).
 
 | Method | Path | Body → Response | Notes |
 |---|---|---|---|
@@ -222,3 +222,33 @@ running but its controller DLL is missing, which makes the core silent. The core
 `voice.status` at session start and on every change. The client turns its log's live region on
 (`aria-live="polite"`) whenever `voice_ready` is false and off when it's true, instead of deciding
 once from `/health` at connect.
+
+## 6. Launcher and launch token (decided 2026-11-14)
+
+**`infra/start.ps1` (Avery)**
+1. Generates a 32-byte random token (base64url) and picks a free port on `127.0.0.1`.
+2. Starts the core with `ARTEMIS_TOKEN` in its environment
+   (`uv run uvicorn ... --host 127.0.0.1 --port <port>`).
+3. Waits until `GET /health` with the token answers.
+4. Launches the Tauri app with `ARTEMIS_CORE_URL` and `ARTEMIS_TOKEN` in the app's environment.
+5. Stops the core when the app exits.
+
+Environment variables, not command-line arguments: on Windows any process can list other
+processes' command lines. Malware running as the same user is out of scope for the weekend.
+
+**Client (Jun)**
+- Reads `ARTEMIS_CORE_URL` and `ARTEMIS_TOKEN` once into native state, and exposes only one Tauri
+  command, `get_core_config`, to the main window. The capability file allows nothing else.
+- Checks that the address is loopback, then connects automatically: no address or token form.
+- If either value is missing or partial, it shows an actionable launch error. It never falls back
+  to a remote or unauthenticated connection.
+- Browser dev mode (`npm run dev`) keeps the manual address and token form.
+
+**Core (Avery)**
+- Requires `Authorization: Bearer <token>` on every route, the SSE stream included.
+- CORS allows only `http://tauri.localhost` and `http://127.0.0.1:1420`.
+- Origin check: a request **with no `Origin`** (the launcher's readiness probe, curl) is allowed
+  when the token is valid; a **listed** Origin is allowed; **any other** Origin gets `403`,
+  including `Origin: null` (sandboxed frames, `file:` pages), which counts as unlisted. That way
+  a website open in the user's browser can't drive the local core.
+- The token is never logged, spoken, put in a URL, or included in an event.
