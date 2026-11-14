@@ -1,0 +1,38 @@
+[
+  {
+    "seq": 20, "session_id": "ses_1", "task_id": "tsk_9", "type": "security.findings",
+    "at": "2026-11-14T16:10:00Z",
+    "announce": {
+      "text": "1 high-severity issue, main.py line 4, subprocess call with shell=True.",
+      "priority": "high"
+    },
+    "data": {
+      "op_id": "op_14",
+      "tool": "bandit",
+      "findings": [
+        { "rule": "B602", "severity": "high", "path": "main.py", "line": 4, "message": "subprocess call with shell=True" }
+      ]
+    }
+  },
+  {
+    "seq": 22, "session_id": "ses_1", "task_id": "tsk_9", "type": "approval.requested",
+    "at": "2026-11-14T16:10:00Z",
+    "announce": {
+      "text": "Blocked: 1 high-severity issue, main.py line 4, subprocess call with shell=True. Run main.py with Python. Escape to reject.",
+      "priority": "high"
+    },
+    "data": {
+      "approval_id": "apr_8",
+      "kind": "run_program",
+      "approval_hash": "sha256:7a6f0f0d5f1a3c1c2b7e8a9d4c6b5a4e3f2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b",
+      "summary": "Blocked: 1 high-severity issue, main.py line 4, subprocess call with shell=True. Run main.py with Python. Escape to reject.",
+      "files": [],
+      "diff": null,
+      "run": { "preset": "python", "entry": "main.py", "timeout_s": 10 },
+      "findings": [
+        { "rule": "B602", "severity": "high", "path": "main.py", "line": 4, "message": "subprocess call with shell=True" }
+      ],
+      "blocking": true
+    }
+  }
+]

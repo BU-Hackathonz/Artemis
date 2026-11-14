@@ -1,0 +1,21 @@
+{
+  "seq": 12,
+  "session_id": "ses_1",
+  "task_id": "tsk_7",
+  "type": "run.result",
+  "at": "2026-11-14T15:03:02Z",
+  "announce": {
+    "text": "main.py ran successfully. It printed: Hello, World!",
+    "priority": "high"
+  },
+  "data": {
+    "op_id": "op_9",
+    "preset": "python",
+    "exit_code": 0,
+    "timed_out": false,
+    "duration_ms": 64,
+    "stdout_tail": "Hello, World!\n",
+    "stderr_tail": "",
+    "truncated": false
+  }
+}
