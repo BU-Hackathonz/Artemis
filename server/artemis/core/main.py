@@ -51,8 +51,13 @@ def make_scan():
     try:
         from artemis.policy import scan  # PR #11 (Bandit)
     except ImportError:
+        scan = None
+    if scan is None or not scan.available():
+        # Approvals then carry no scan result, so say it where the team will look.
+        log.warning("Security scanner (Bandit) is not installed: writes and runs are not scanned. "
+                    "Install it with: uv sync --group security")
         return None
-    return scan.scan if scan.available() else None
+    return scan.scan
 
 
 def make_vocabulary():
