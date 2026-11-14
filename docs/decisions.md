@@ -21,8 +21,8 @@ agrees on the board; record any change here.
 | 7 | Agent loop | Anthropic Python SDK, our own tools, approval pause owned by the orchestrator | Proposed | David |
 | 8 | Model | `claude-opus-5-5`, effort `medium` | Proposed | David |
 | 9 | Patch format | Search/replace edits → core-built unified diff, hashed for approval | Proposed | David + Avery |
-| 10 | Runner isolation | `run_program` with a fixed argv per file type, no shell; approval + scan first; git as the undo | Proposed | Infra |
-| 11 | Echo Check | Playwright for Python (Chromium) + `aria_snapshot()` + axe-core; after the MVP, web projects only | Proposed | Infra + Jun |
+| 10 | Runner isolation | `run_program` with a fixed argv per file type, no shell; approval + scan first; git as the undo | Proposed | Avery |
+| 11 | Echo Check | Playwright for Python (Chromium) + `aria_snapshot()` + axe-core; after the MVP, web projects only | Proposed | Avery + Jun |
 | 12 | Event transport | `POST` commands + Server-Sent Events with sequence ids | Proposed | Avery |
 | 13 | UI components | Semantic HTML first; React Aria for dialogs/listboxes; Tailwind for styling only | Proposed | Jun |
 | 14 | Security scanning | Semgrep with vendored local rules (team pick); Bandit as the Windows-safe fallback for the Python MVP | Proposed | David |
@@ -73,7 +73,7 @@ approval/rejection, task event) is a Pydantic model in `server/artemis/contracts
 publishes OpenAPI, and `openapi-typescript` generates `client/src/generated/api.ts`. The same
 models validate tool arguments in the policy gate. Next to them sit the four sample payloads the
 handoff names (submission, approve/reject, failed check, successful Echo Check) as JSON fixtures.
-Everyone stubs against those samples first. Avery merges contract changes.
+Everyone stubs against those samples first. David accepts contract changes until Avery is on site; then Avery owns them.
 
 ## 5. Spoken output: SAPI, live regions, or NVDA itself?
 

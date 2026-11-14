@@ -1,6 +1,6 @@
 # Artemis contracts (proposal for kickoff)
 
-Status: **proposed**. Avery owns the contract. Once agreed, these become Pydantic models in
+Status: **proposed**. Avery owns the contract; David accepts changes until Avery is on site. Once agreed, these become Pydantic models in
 `server/artemis/contracts/`, the TS types are generated from FastAPI's OpenAPI, and the samples
 below become JSON fixtures that every stub is tested against. Change the contract first, then the
 code.
@@ -99,7 +99,7 @@ AgentOutcome = Answered(text) | Failed(code, message) | Canceled()
 The agent never touches files or processes directly; it only calls `tools`. Canceling a task
 cancels the coroutine (`asyncio.CancelledError`). `emit(agent.message …)` reports progress.
 
-### 3.2 Agent → policy gate → tools (David ↔ Infra)
+### 3.2 Agent → policy gate → tools (David ↔ Avery)
 
 ```python
 class ToolGateway(Protocol):
@@ -141,7 +141,7 @@ class Voice(Protocol):
 The event bus calls `announce()` for every event that has an `announce` field, so no other
 component speaks directly.
 
-### 3.4 Runner (Infra)
+### 3.4 Runner (Avery, infrastructure)
 
 ```python
 class Runner(Protocol):

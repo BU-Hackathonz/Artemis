@@ -10,7 +10,7 @@ Nothing is implemented yet. This doc separates what the team has **confirmed**, 
 | Item | Status |
 |---|---|
 | Windows-only native desktop app + headless core + fully nonvisual interaction | **Confirmed** |
-| Six workstreams and owners (Infrastructure unassigned) | **Confirmed** |
+| Six workstreams and owners (Avery also owns Infrastructure; David approves merges until Avery arrives) | **Confirmed** |
 | First MVP: "create a Python program that prints Hello World", run it, hear the result | **Confirmed** |
 | Tauri 2 + React + TS + Tailwind; Python + FastAPI core | Proposed by team (treated as the plan) |
 | Whisper STT, SAPI TTS, Semgrep, UI Automation, axe-core + Playwright | Proposed by team |
@@ -21,7 +21,7 @@ Nothing is implemented yet. This doc separates what the team has **confirmed**, 
 ## Feasibility
 
 **The MVP is feasible in the HackUMass window if two things happen in the first hours:**
-Infrastructure gets an owner (the runner is on the MVP's critical path, step 7), and a
+Avery has time for the runner as well as the core (it is on the MVP's critical path, step 7), and a
 keyboard-only walking skeleton with a stub agent works end to end by about hour 8. Everything after
 that is swapping real parts in behind interfaces that already work.
 
@@ -40,8 +40,8 @@ FastAPI core (server/artemis/)                     one Python process
    voice/       mic capture, faster-whisper, announce() → NVDA / SAPI            (Yaovi)
    agent/       Claude tool loop, project context, explanations                  (David)
    policy/      tool gate, path checks, approval requirements, scanners          (David)
-   runner/      workspace files, restricted program runs                         (Infra)
-   echo/        Echo Check (post-MVP)                                            (Infra + Jun)
+   runner/      workspace files, restricted program runs                         (Avery)
+   echo/        Echo Check (post-MVP)                                            (Avery + Jun)
    │
    ▼
 Workspace: %USERPROFILE%\ArtemisProjects\<project>\   (git repo per project)
@@ -79,7 +79,7 @@ Every pause, failure and completion is spoken. Silence longer than about 3 secon
 
 | # | Risk or gap | Impact | Fix |
 |---|---|---|---|
-| 1 | **Infrastructure has no owner**, and the runner is MVP step 7 | MVP blocked | Assign at kickoff. If nobody can, Avery takes `runner/`; it's small (§ contracts 3.4) |
+| 1 | **Avery owns both orchestration and infrastructure**, and isn't on site yet; the runner is MVP step 7 | MVP blocked | Keep `runner/` small (§ contracts 3.4) and stub it first; anyone may build the stub, with a handoff on the board |
 | 2 | **Spoken output when Artemis isn't focused.** Live regions and a webview's speech only reach NVDA from the foreground window | User misses results | `announce()` in the core speaks through NVDA's Controller Client (`nvdaController_speakText`), falling back to SAPI. Works from any app |
 | 3 | **Two voices at once** (SAPI over NVDA) | Unusable for real NVDA users | Use one output at a time: NVDA if running, else SAPI. The client's live region stays quiet |
 | 4 | **Generated programs inherit the core's environment**, including `ANTHROPIC_API_KEY` | Secret leak through generated code | Runner starts children with an explicit minimal env, never `os.environ` |
@@ -102,7 +102,7 @@ multi-project management, Echo Check.
 ## Build order
 
 **Phase 0: kickoff (first 2 to 3 hours), everyone**
-- Assign Infrastructure. Agree on [`contracts.md`](contracts.md) and the sample payloads.
+- David accepts the contracts (Avery reviews on arrival). Agree on [`contracts.md`](contracts.md) and the sample payloads.
 - Jun: Tauri builds and runs on the demo laptop; NVDA installed.
 - Yaovi: faster-whisper model downloaded; mic records on the demo laptop; the NVDA controller DLL speaks a test string.
 - David: API key works; one tool call round-trips; Bandit and Semgrep install check.
@@ -116,7 +116,7 @@ This proves the client, core, approvals, events and speech before any AI or audi
 **Phase 2: swap in the real parts (about hours 8 to 18), in parallel, each behind its interface**
 - David: real agent loop + policy gate + scan before run.
 - Yaovi: push-to-talk → transcript → task; NVDA/SAPI `announce()`.
-- Infra: real runner (env scrub, timeout, process-tree kill), `create_project`.
+- Avery (infrastructure): real runner (env scrub, timeout, process-tree kill), `create_project`.
 - Jun: approval dialog, log navigation, "repeat last" and "stop speech" keys, settings.
 - Avery: cancel, error events, reconnect and replay with `Last-Event-ID`.
 
