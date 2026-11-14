@@ -9,10 +9,10 @@ and nothing here can approve anything: approvals stay on the keyboard.
 from dataclasses import dataclass, field
 from typing import Literal
 
+from artemis.contracts import Style
+
 from .intents import match
 
-Verbosity = Literal["brief", "normal", "detailed"]
-Focus = Literal["none", "visual", "code"]
 Action = Literal[
     "none",  # nothing to do (an empty transcript)
     "submit",  # start a task with `text`
@@ -31,14 +31,6 @@ _MAX_SPOKEN_REQUEST = 80
 
 
 @dataclass(frozen=True)
-class Style:
-    """How the developer asked to be answered. The agent gets it with each task."""
-
-    verbosity: Verbosity = "normal"
-    focus: Focus = "none"
-
-
-@dataclass(frozen=True)
 class Decision:
     intent: str  # an intent name from intents.py, or "request"
     action: Action = "none"
@@ -48,6 +40,12 @@ class Decision:
     delta: int = 0
     # Spoken after the action when an approval is open, so an interruption never hides it.
     reminder: str | None = None
+
+
+@dataclass(frozen=True)
+class FollowUp:
+    say: str
+    start: str | None = None  # the request to start now; None when it was dropped
 
 
 @dataclass
@@ -106,8 +104,6 @@ class Controller:
             if not task.active:
                 self.approval = None
                 self.expecting_reply = task.state == "succeeded" and task.answer.rstrip().endswith("?")
-                if task.state == "canceled":
-                    self.queued = None  # "cancel" means everything they asked for
         elif event.type == "agent.message":
             if data.get("kind") == "progress":
                 task.progress = data.get("text", "")
@@ -122,14 +118,20 @@ class Controller:
             if path and path not in task.files:
                 task.files.append(path)
 
-    def next_request(self) -> tuple[str, str] | None:
-        """Call when a task has ended. Returns (request, announcement) for the follow-up to
-        start now, or None. The announcement reads the request back, so a misheard follow-up
-        never starts unnoticed."""
+    def next_request(self) -> "FollowUp | None":
+        """Call when a task has ended: what to do with the request that was waiting, if any.
+
+        After a success it starts, and is read back first so a misheard one never starts
+        unnoticed. After a failure it is dropped and said so, because it may have depended on
+        the task that failed. A canceled task already took it along (see `observe`).
+        """
         text, self.queued = self.queued, None
         if text is None:
             return None
-        return text, f"Now the follow-up: {_short(text)}."
+        if self.task is not None and self.task.state == "succeeded":
+            # The core then announces "Working on: <request>" as for any task: that is the read-back.
+            return FollowUp("Starting the follow-up.", start=text)
+        return FollowUp(f"Dropped the follow-up, because the task before it didn't finish: {_short(text)}.")
 
     # ----- what the developer said -----
 
@@ -144,8 +146,8 @@ class Controller:
         if intent == "cancel":
             if self.queued is not None:
                 # The follow-up goes first: it hasn't started, so dropping it loses nothing.
+                said = f"Dropped: {_short(self.queued)}."
                 self.queued = None
-                said = "Okay, I dropped the follow-up."
                 if active:
                     said += " The current task is still going. Say cancel again to stop it."
                 return Decision(intent, "say", said, reminder=reminder)
@@ -153,7 +155,9 @@ class Controller:
                 return Decision(intent, "cancel")
             return Decision(intent, "say", "Nothing to cancel.")
         if intent == "stop_speaking":
-            return Decision(intent, "stop_speech", reminder=reminder)
+            # If nothing was being said, "stop" probably meant the task: never answer with silence.
+            hint = None if reminder or not active else "Say cancel to stop the task."
+            return Decision(intent, "stop_speech", say=hint, reminder=reminder)
         if intent == "repeat":
             if self.approval:
                 # The decision matters more than whatever was said last.
@@ -164,7 +168,7 @@ class Controller:
         if intent == "changed_files":
             return Decision(intent, "say", self.changed_files(), reminder=reminder)
         if intent in ("brief", "detailed", "normal"):
-            self.style = Style(intent, self.style.focus)
+            self.style = Style(verbosity=intent, focus=self.style.focus)
             said = {
                 "brief": "Okay, I'll keep it brief.",
                 "detailed": "Okay, I'll explain in detail.",
@@ -172,7 +176,7 @@ class Controller:
             }[intent]
             return Decision(intent, "say", said, reminder=reminder)
         if intent in ("visual", "code"):
-            self.style = Style(self.style.verbosity, intent)
+            self.style = Style(verbosity=self.style.verbosity, focus=intent)
             said = (
                 "Visual mode. I'll describe the layout and how accessible it is."
                 if intent == "visual"
@@ -193,9 +197,12 @@ class Controller:
 
         # Anything else is for the agent, in the developer's own words.
         if active:
-            replaced = self.queued is not None
+            if self.queued is not None:
+                # One slot, and it is never replaced silently.
+                said = f"I already have one waiting: {_short(self.queued)}. Say cancel to drop it."
+                return Decision("request", "say", said, reminder=reminder)
             self.queued = transcript
-            said = "I'll do that next, instead of the earlier follow-up." if replaced else "I'll do that next."
+            said = "I'll do that next."
             if self.approval:
                 said += " A decision is still waiting: Enter to approve, Escape to reject."
             return Decision("request", "queue", said, text=transcript)

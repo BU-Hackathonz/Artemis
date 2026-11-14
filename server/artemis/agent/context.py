@@ -45,7 +45,25 @@ def task_message(task: TaskContext) -> str:
             f'<task id="{task.task_id}" project="{task.project.slug}">\n'
             f"{wrap('file names', listing)}\n</task>"
         )
-    return f"{header}\n\n{task.request}"
+    return f"{header}\n\n{_style_note(task)}{task.request}"
+
+
+_VERBOSITY = {
+    "brief": "Keep the answer to one or two short sentences.",
+    "detailed": "They asked for detail: explain step by step, in as many sentences as it takes.",
+}
+_FOCUS = {
+    "visual": "Describe what the page looks like and how accessible it is. Say what you "
+    "actually checked: changing the CSS is not the same as inspecting the rendered page.",
+    "code": "Explain which files and functions you changed and why.",
+}
+
+
+def _style_note(task: TaskContext) -> str:
+    """One line for the answer style the developer asked for, or nothing for the defaults."""
+    parts = [_VERBOSITY.get(task.style.verbosity), _FOCUS.get(task.style.focus)]
+    note = " ".join(part for part in parts if part)
+    return f"[Answer style: {note}]\n\n" if note else ""
 
 
 def vocabulary(project: ProjectRef) -> list[str]:

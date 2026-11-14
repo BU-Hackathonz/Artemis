@@ -6,7 +6,9 @@ succeeded / failed / canceled; the gateway emits the states in between.
 """
 
 import asyncio
+import inspect
 import logging
+import os
 import re
 import time
 import uuid
@@ -28,6 +30,7 @@ from artemis.contracts import (
     TranscriptData,
     TurnSummary,
 )
+from artemis.conversation import Controller
 from artemis.policy.gateway import ToolGateway
 
 from .approvals import SessionApprovals
@@ -87,6 +90,7 @@ class Session:
         log_dir: Path | None = None,
         on_project: Callable[[object], None] | None = None,
         heartbeat_s: float = HEARTBEAT_S,
+        conversation: bool | None = None,
     ):
         self.session_id = session_id
         self.voice = voice
@@ -106,6 +110,10 @@ class Session:
         self.history: list[TurnSummary] = []
         self.reported: set[str] = set()  # client diagnostic codes already spoken this session
         self._on_project = on_project
+        # contracts.md §5.4, off by default: None means today's §5.2 rules, unchanged.
+        if conversation is None:
+            conversation = os.environ.get("ARTEMIS_CONVERSATION", "off").lower() == "on"
+        self.conversation: Controller | None = Controller() if conversation else None
 
     async def emit(self, draft: EventDraft) -> None:
         if draft.announce or draft.type == "task.state":
@@ -115,6 +123,8 @@ class Session:
         await self.bus.emit(draft)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
+        if self.conversation:
+            self.conversation.observe(draft)
 
     @property
     def active_task(self) -> Task | None:
@@ -133,6 +143,8 @@ class Session:
         task = Task(new_id("tsk"), request)
         self.tasks[task.task_id] = task
         self._by_request[request.client_request_id] = task.task_id
+        if self.conversation:
+            self.conversation.begin(task.task_id, request.text)
         await self._state(task.task_id, "queued", f"Working on: {request.text}", "normal")
         task.job = asyncio.create_task(self._run(task))
         task.heartbeat = asyncio.create_task(self._heartbeat(task))
@@ -184,6 +196,8 @@ class Session:
             project=self.gateway.project,
             history=self.history[-MAX_HISTORY_TURNS:],
         )
+        if self.conversation:
+            context.style = self.conversation.style
         project_before = self.gateway.project
         outcome_text = ""
         try:
@@ -228,6 +242,8 @@ class Session:
                 self._on_project(self.gateway.project)
             except Exception:
                 log.exception("on_project hook failed")
+        if self.conversation:
+            await self._follow_up()
 
     async def cancel(self, task_id: str) -> bool:
         task = self.tasks.get(task_id)
@@ -256,6 +272,9 @@ class Session:
 
     async def spoken(self, text: str, client_request_id: str) -> None:
         """Handle a final transcript: control words, the one-task rule, or a new task."""
+        if self.conversation:
+            await self._converse(text, client_request_id)
+            return
         await self.emit(
             EventDraft(
                 type="transcript.final",
@@ -294,6 +313,70 @@ class Session:
             )
             return
         await self.submit(TaskRequest(client_request_id=client_request_id, source="voice", text=text))
+
+    # ----- conversation (§5.4, only with ARTEMIS_CONVERSATION=on) -----
+
+    async def _converse(self, text: str, client_request_id: str) -> None:
+        """Ask the controller what this utterance is, then do exactly that."""
+        decision = self.conversation.decide(text)
+        await self.emit(
+            EventDraft(
+                type="transcript.final",
+                announce=Announce(text=f"Heard: {text}", priority="normal") if text else None,
+                data=TranscriptData(
+                    text=text,  # always the raw transcript
+                    client_request_id=client_request_id,
+                    intent=decision.intent if text.strip() else None,
+                ).model_dump(),
+            )
+        )
+        active = self.active_task
+        tid = active.task_id if active else None
+        action = decision.action
+        if action == "none":
+            return
+        if action == "submit":
+            await self.submit(TaskRequest(client_request_id=client_request_id, source="voice", text=decision.text))
+            return
+        if action == "cancel" and active:
+            await self.cancel(active.task_id)
+        elif action == "repeat":
+            await self.voice.repeat_last()
+        elif action == "stop_speech":
+            was_speaking = self._speaking()
+            await self.voice.stop_speech()
+            if decision.say and not was_speaking:
+                # Nothing was being said, so "stop" may have meant the task: never stay silent.
+                await self.say(tid, decision.say)
+        elif action == "rate":
+            set_rate = getattr(self.voice, "set_rate", None)  # optional (SAPI only, Yaovi)
+            if set_rate is None:
+                await self.say(tid, decision.say)
+            else:
+                result = set_rate(decision.delta)
+                if inspect.isawaitable(result):
+                    await result
+        elif decision.say:  # "say", and "queue" (the controller already kept the request)
+            await self.say(tid, decision.say, decision.priority)
+        if decision.reminder:
+            await self.say(tid, decision.reminder)
+
+    def _speaking(self) -> bool:
+        """True only when we know Artemis is speaking. NVDA can't tell us, so that is False."""
+        announcer = getattr(self.voice, "announcer", None)
+        try:
+            return bool(announcer.current().busy())
+        except Exception:
+            return False
+
+    async def _follow_up(self) -> None:
+        """A task just ended: start the request that was waiting, or say it was dropped."""
+        follow = self.conversation.next_request()
+        if follow is None:
+            return
+        await self.say(None, follow.say)
+        if follow.start:
+            await self.submit(TaskRequest(client_request_id=new_id("cr"), source="voice", text=follow.start))
 
     async def say(self, task_id: str | None, text: str, priority="normal") -> None:
         await self.emit(

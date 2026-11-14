@@ -497,6 +497,20 @@ def test_task_message_without_and_with_a_project(tmp_path):
     assert text_.count("</untrusted>") == 1 and text_.endswith("explain it")
 
 
+def test_task_message_carries_the_answer_style_only_when_one_was_asked_for():
+    from artemis.contracts import Style
+
+    plain = task_message(TaskContext(task_id="t", request="add a footer"))
+    assert "Answer style" not in plain and plain.endswith("\n\nadd a footer")
+    styled = task_message(
+        TaskContext(task_id="t", request="add a footer", style=Style(verbosity="brief", focus="visual"))
+    )
+    assert "[Answer style: Keep the answer to one or two short sentences. Describe what the page looks like" in styled
+    assert styled.endswith("]\n\nadd a footer")  # the request itself is never rewritten
+    detailed = task_message(TaskContext(task_id="t", request="r", style=Style(verbosity="detailed", focus="code")))
+    assert "step by step" in detailed and "which files and functions" in detailed
+
+
 def test_task_message_tree_is_capped(tmp_path):
     root = tmp_path / "big"
     root.mkdir()

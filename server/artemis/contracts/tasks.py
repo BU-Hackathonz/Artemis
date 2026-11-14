@@ -15,11 +15,20 @@ class TurnSummary(BaseModel):
     outcome: str
 
 
+class Style(BaseModel):
+    """How the developer asked to be answered ("keep it brief", "visual mode"). Set by the
+    conversation controller; the agent shapes its answer to it."""
+
+    verbosity: Literal["brief", "normal", "detailed"] = "normal"
+    focus: Literal["none", "visual", "code"] = "none"
+
+
 class TaskContext(BaseModel):
     task_id: str
     request: str  # the final transcript or typed text
     project: ProjectRef | None = None  # None until one is created or selected
     history: list[TurnSummary] = []  # earlier tasks in this session, short
+    style: Style = Style()
 
 
 class Answered(BaseModel):

@@ -42,8 +42,11 @@ class Announce(BaseModel):
 
 
 class TranscriptData(BaseModel):
-    text: str
+    text: str  # always the raw transcript
     client_request_id: str
+    # How the core handled it: "request", or a built-in phrase such as "status". None when the
+    # conversation controller is off.
+    intent: str | None = None
 
 
 class TaskStateData(BaseModel):

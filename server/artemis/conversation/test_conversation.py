@@ -2,8 +2,8 @@
 
 import pytest
 
-from artemis.contracts import EventDraft
-from artemis.conversation import INTENTS, Controller, Style, match, simplify
+from artemis.contracts import EventDraft, Style
+from artemis.conversation import INTENTS, Controller, FollowUp, match, simplify
 from artemis.conversation.controller import KEYBOARD_ONLY, WAITING
 
 # ----- phrases -----
@@ -228,15 +228,16 @@ def test_a_request_during_a_task_is_kept_for_next_and_read_back_when_it_starts()
     assert c.decide("status").say.endswith(" Next up: Also add a dark mode toggle.")
     assert c.queued == "Also add a dark mode toggle."  # asking for status doesn't use it up
     c.observe(event("task.state", state="succeeded"))
-    assert c.next_request() == ("Also add a dark mode toggle.", "Now the follow-up: Also add a dark mode toggle.")
+    assert c.next_request() == FollowUp("Starting the follow-up.", start="Also add a dark mode toggle.")
     assert c.next_request() is None
 
 
-def test_a_second_follow_up_replaces_the_first_and_says_so():
+def test_a_second_request_never_replaces_the_one_waiting():
     c = working()
     c.decide("add dark mode")
     d = c.decide("actually add a footer")
-    assert d.say == "I'll do that next, instead of the earlier follow-up." and c.queued == "actually add a footer"
+    assert d.action == "say" and d.text is None and c.queued == "add dark mode"
+    assert d.say == "I already have one waiting: add dark mode. Say cancel to drop it."
 
 
 def test_a_follow_up_during_an_approval_mentions_the_decision():
@@ -250,15 +251,26 @@ def test_cancel_drops_the_follow_up_first_and_the_task_second():
     c.decide("add dark mode")
     first = c.decide("never mind")
     assert first.action == "say" and c.queued is None and c.task.active
-    assert first.say == "Okay, I dropped the follow-up. The current task is still going. Say cancel again to stop it."
+    assert first.say == "Dropped: add dark mode. The current task is still going. Say cancel again to stop it."
     assert c.decide("cancel").action == "cancel"
 
 
-def test_a_canceled_task_takes_its_follow_up_with_it():
+@pytest.mark.parametrize("state", ["failed", "canceled"])
+def test_a_follow_up_is_dropped_out_loud_when_the_task_before_it_did_not_finish(state):
     c = working()
-    c.queued = "add dark mode"
-    c.observe(event("task.state", state="canceled"))
+    c.decide("then add tests")
+    c.observe(event("task.state", state=state))
+    follow = c.next_request()
+    assert follow.start is None  # never started: it may have depended on the task that failed
+    assert follow.say == "Dropped the follow-up, because the task before it didn't finish: then add tests."
     assert c.next_request() is None
+
+
+def test_stop_with_a_task_running_says_how_to_cancel_instead_of_staying_silent():
+    d = working().decide("stop")
+    assert (d.action, d.say) == ("stop_speech", "Say cancel to stop the task.")
+    assert Controller().decide("stop").say is None  # nothing running: nothing to add
+    assert awaiting_approval().decide("stop").say is None  # the approval reminder is said instead
 
 
 # ----- preferences -----
@@ -266,15 +278,15 @@ def test_a_canceled_task_takes_its_follow_up_with_it():
 
 def test_style_phrases_change_how_the_next_task_is_answered():
     c = Controller()
-    assert c.style == Style("normal", "none")
+    assert c.style == Style()
     assert c.decide("keep it brief").say == "Okay, I'll keep it brief."
     assert c.decide("visual mode").say.startswith("Visual mode.")
-    assert c.style == Style("brief", "visual")
+    assert c.style == Style(verbosity="brief", focus="visual")
     c.decide("deep dive")
     c.decide("code mode")
-    assert c.style == Style("detailed", "code")
+    assert c.style == Style(verbosity="detailed", focus="code")
     c.decide("normal mode")
-    assert c.style == Style("normal", "code")
+    assert c.style == Style(focus="code")
 
 
 def test_slower_is_honest_about_what_it_can_change():

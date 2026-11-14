@@ -49,7 +49,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 
 | `type` | `data` |
 |---|---|
-| `transcript.partial` / `transcript.final` | `{text, client_request_id}` |
+| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is always the raw transcript; `intent` is set on `transcript.final` when the conversation controller is on (§5.4) |
 | `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP |
 | `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}` |
 | `approval.requested` | `Approval` (below) |
@@ -99,6 +99,7 @@ class TaskContext:
     request: str                 # the final transcript or typed text
     project: ProjectRef | None   # root path + slug; None until one is created or selected
     history: list[TurnSummary]   # earlier tasks in this session, short
+    style: Style                 # {verbosity: brief|normal|detailed, focus: none|visual|code}; defaults unless §5.4 is on
 
 AgentOutcome = Answered(text) | Failed(code, message) | Canceled()
 ```
@@ -195,10 +196,12 @@ call does the whole sequence: stop current speech (SAPI purge, or NVDA's `cancel
 "listening" earcon to the end, then open the mic. `stop_listening()` plays the "stopped" earcon.
 The core doesn't call `stop_speech()` itself here. Artemis's own voice (SAPI through the speakers)
 must never be recorded and transcribed as a request. The client's own "Stop speech" control is
-unchanged.
+unchanged. Cutting off speech never hides an open approval: see §5.4.
 
 ### 5.2 One active task per session
-A task is active from `queued` until `succeeded`, `failed` or `canceled`.
+A task is active from `queued` until `succeeded`, `failed` or `canceled`. The spoken rules below
+are the default; `ARTEMIS_CONVERSATION=on` replaces them with §5.4 (bare "stop" then stops speech,
+not the task, and a spoken request during a task waits its turn).
 - **Typed request while a task is active:** `POST /sessions/{sid}/tasks` returns
   `409 {error: "task_active", task_id}`. No second task starts.
 - **Spoken request while a task is active:** the core still emits `transcript.final` (so the text
@@ -223,6 +226,45 @@ running but its controller DLL is missing, which makes the core silent. The core
 `voice.status` at session start and on every change. The client turns its log's live region on
 (`aria-live="polite"`) whenever `voice_ready` is false and off when it's true, instead of deciding
 once from `/health` at connect.
+
+What the developer can change by voice depends on who is speaking. With SAPI, "stop talking" stops
+only Artemis. With NVDA, Artemis speaks through NVDA's controller, so stopping also cuts whatever
+NVDA itself was saying, and Artemis can't change NVDA's speaking rate: "slower" is answered with a
+pointer to NVDA's own rate setting. The controller knows which applies from `voice.status`.
+
+### 5.4 Conversation (behind `ARTEMIS_CONVERSATION=on`, default off)
+With the flag off, §5.1 and §5.2 apply exactly as written above. With it on, every final
+transcript goes to `artemis.conversation.Controller.decide()`, which is deterministic (no model,
+no audio) and returns what the core should do. `transcript.final` always carries the raw
+transcript, plus `intent`: `"request"` or the name of the built-in phrase.
+
+- **Built-in phrases.** Matched only when the phrase is the whole utterance, after the wake word,
+  fillers and "please" are stripped from the edges: "stop the server from crashing" goes to the
+  agent. Everything that isn't one of these goes to the agent in the developer's exact words.
+
+  | Phrase (examples) | What happens |
+  |---|---|
+  | `stop`, `stop talking`, `be quiet` | Stops speech only; the task keeps going. With a task active and no approval open, the core adds "Say cancel to stop the task." unless speech was cut off |
+  | `cancel`, `cancel the task`, `never mind` | Drops the waiting follow-up if there is one ("Dropped: …"); otherwise cancels the active task; otherwise "Nothing to cancel." |
+  | `repeat`, `say that again` | With an approval open, its summary again at `high`; otherwise the last announcement |
+  | `what are you doing`, `status`, `are you done` | A fixed sentence from task state. No task is created |
+  | `which file did you change`, `what changed` | The files changed by the current or last task |
+  | `keep it brief`, `deep dive`, `normal mode`, `visual mode`, `code mode` | Sets `TaskContext.style` for the following tasks and confirms it |
+  | `slower`, `faster` | See §5.3 |
+  | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | Never applied: "Use the keyboard to decide…" as in §5.2 |
+
+  No phrase can approve a write or a run, hide a warning, or run code.
+- **A spoken request while a task is active** is kept as the one waiting follow-up ("I'll do that
+  next.") instead of the `task_active` error. A second one doesn't replace it: "I already have one
+  waiting: …. Say cancel to drop it." When the active task succeeds, the follow-up is started as
+  a normal task, announced with "Starting the follow-up." and then read back by the usual
+  "Working on: …". When it fails or is canceled, the follow-up is
+  dropped and the core says so. A typed request still gets `409 task_active`.
+- **An interruption never hides an open approval** (adds to §5.1). After any utterance handled
+  while an approval is open, the core says "A decision is still waiting. Say repeat to hear it
+  again."
+- **A clarifying question ends the task** (design A4 stands): the developer's next utterance is a
+  new task in the same agent conversation. `/tasks/{tid}/reply` and `awaiting_reply` stay reserved.
 
 ## 6. Launcher and launch token (decided 2026-11-14)
 

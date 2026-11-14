@@ -37,6 +37,7 @@ from .tasks import (
     Canceled,
     Failed,
     ProjectRef,
+    Style,
     TaskContext,
     TaskRequest,
     TurnSummary,
