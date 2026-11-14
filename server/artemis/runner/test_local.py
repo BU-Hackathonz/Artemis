@@ -217,7 +217,7 @@ def test_windows_tree_kill_uses_taskkill_not_killpg(monkeypatch):
         raise AssertionError("killpg is POSIX-only")
 
     monkeypatch.setattr(local.subprocess, "run", fake_run)
-    monkeypatch.setattr(local.os, "killpg", no_killpg)
+    monkeypatch.setattr(local.os, "killpg", no_killpg, raising=False)  # absent on Windows
     proc = _FakeProc()
     local._kill_tree(proc)
     assert ran[0][0] == ["taskkill", "/T", "/F", "/PID", "4242"]
