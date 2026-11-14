@@ -397,6 +397,36 @@ def test_stub_voice_passes_set_rate_through():
     assert asyncio.run(v.set_rate(1)) is RateStatus.FASTER and sapi.rate == 1
 
 
+
+def test_speechlint_flags_run_on_sentences():
+    from artemis.voice.speechlint import run_ons
+
+    assert run_ons("Result It worked.") == ["Result It"]
+    assert run_ons("No input device Check the microphone, or type the request.") == ["device Check"]
+    assert run_ons("Give me a second, I'm busy. Retrying.") == []
+    assert run_ons("Artemis is ready. Hold Control Shift Space and speak, or type a request.") == []
+    assert run_ons("Echo Check found 2 problems.") == []  # a product name, not a run-on
+
+
+def test_server_string_literals_have_no_run_ons():
+    from pathlib import Path
+
+    from artemis.voice.speechlint import scan
+
+    assert scan(Path(__file__).resolve().parents[1]) == []
+
+
+def test_mic_errors_end_a_sentence_before_the_recovery_tip():
+    from artemis.voice.listen import _sentence
+    from artemis.voice.speechlint import run_ons
+
+    recovery = "Check the microphone, or type the request."  # core/app.py appends this after a space
+    for raw in ["No Default Input Device Available", "Error querying device -1.", ""]:
+        message = _sentence("Microphone not available", RuntimeError(raw))
+        assert message.endswith(".") and ".." not in message
+        assert run_ons(f"{message} {recovery}") == []
+    assert _sentence("Microphone not available", RuntimeError("")) == "Microphone not available."
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
