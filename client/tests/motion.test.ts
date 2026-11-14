@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {
   ISLAND_MOTION as M, createIslandMotion, stepIslandMotion, stillIslandFrame,
   type IslandFrame, type IslandMode, type IslandMotionInput, type Point,
-} from '../src/islandMotion';
+} from '../src/motion';
 
 const HOME: Point = {x: 100, y: 28};
 const FAR: Point = {x: 900, y: 500};
