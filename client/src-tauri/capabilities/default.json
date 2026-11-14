@@ -1,1 +1,1 @@
-{"$schema":"../gen/schemas/desktop-schema.json", "identifier":"main", "description":"Client window with no privileged native commands", "windows":["main"], "permissions":[]}
+{"$schema":"../gen/schemas/desktop-schema.json", "identifier":"main", "description":"Only the local main window can read the launch configuration", "local":true, "windows":["main"], "permissions":["allow-get-core-config"]}
