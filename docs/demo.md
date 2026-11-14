@@ -10,27 +10,20 @@ run.
 > approved and bound to the exact edit, every run is real, and Echo Check reports the real
 > accessibility tree instead of describing the screen.
 
-## Status: what is merged and what is pending
+## Status (updated 4:00 AM, Nov 14): everything below is on `main`
 
 | Part | Status |
 |---|---|
-| Core, approvals, event stream, runner, NVDA/SAPI speech, typed requests, approval dialog | merged on `main` |
-| Echo Check CLI (`python -m artemis.echo`) | merged on `main` |
-| Real Claude agent, `edit_file`, Bandit scan (PRs #11, #12) | **pending**: needs a live test, then merge |
-| `inspect_page`, Echo Check for the agent (PR #25, stacked on #12) | **pending** |
-| Push-to-talk global shortcut Ctrl+Alt+Space in the client (Jun) | **pending**: being built; until it lands, every request is typed |
-| "Still working" earcon after about 3 s of silence (architecture.md) | **not built**: watch for long silences while Claude thinks |
+| Core, approvals, event stream, runner, NVDA/SAPI speech, typed requests, approval dialog | merged |
+| Real Claude agent, `edit_file`, Bandit scan (#11, #12), live Hello World test passed (17.9 s) | merged |
+| `inspect_page`, Echo Check for the agent (#25, #26) | merged |
+| Push-to-talk Ctrl+Alt+Space + Hold to talk button (#32) | merged; native Windows check by Yaovi in progress |
+| Approval focus: Approve for normal approvals, Reject for blocked ones (#33) | merged |
+| "Still working" cue after about 3 s of silence while working (#28) | merged: a low-priority spoken "Still working." (an earcon may replace it) |
 
-On `main` today, `-Agent claude` quietly falls back to the stub agent (core/main.py imports
-`make_agent` only if it exists) and there is no security scan. So until #11, #12 and #25 merge,
-demos 2 to 5 need those branches. For a rehearsal, merge them locally on the demo laptop and never
-push the result:
-
-```powershell
-git fetch origin
-git switch -c demo-local origin/main
-git merge origin/agent/inspect-page   # brings #11, #12 and #25; merges cleanly on 2026-11-14
-```
+Use `infra\start.ps1 -Agent claude` with `ANTHROPIC_API_KEY` (and `ANTHROPIC_WORKSPACE_ID` if the key
+isn't workspace-scoped) set in that PowerShell window only. If the core log says "using StubAgent",
+the real agent isn't installed: run the uv sync from the setup checklist again.
 
 ## Keys (what the client actually does)
 
@@ -42,12 +35,14 @@ git merge origin/agent/inspect-page   # brings #11, #12 and #25; merges cleanly 
 | Approval dialog | Escape | Reject. |
 | Blocked approval | Tab, then Shift+Enter | Override: on **Approve blocked action (Shift+Enter)**, only Shift+Enter approves. Enter and clicks do nothing there. |
 | Main window | Tab to the buttons | **Cancel task**, **Repeat last speech**, **Stop speech**. |
-| Anywhere (pending) | hold Ctrl+Alt+Space | Push-to-talk: rising earcon, speak, release, falling earcon, then "Heard: ...". |
+| Anywhere | hold Ctrl+Alt+Space (or hold the **Hold to talk** button) | Push-to-talk: rising earcon, speak, release, falling earcon, then "Heard: ...". |
+
+With NVDA on, the **Hold to talk** button only works as a hold in focus mode (NVDA+Space); in
+browse mode NVDA turns Space or Enter into a single click. Prefer Ctrl+Alt+Space in the demo.
 
 The core's spoken summary ends with "Enter to approve, Escape to reject." That matches the contract
-(contracts.md §2: only a *blocked* approval defaults to Reject). **Pending:** on main today the client
-focuses Reject for every approval (Jun is fixing it). Until that lands, a normal approval is
-**Tab, then Enter**; check before each rehearsal which one the build does.
+(contracts.md §2: only a *blocked* approval defaults to Reject), and since #33 the client focuses
+**Approve** on a normal approval, so Enter approves.
 
 Spoken words while an approval is open ("yes", "approve") are not applied. Artemis answers "Use the
 keyboard to decide: Enter on the dialog to approve, Escape to reject." Approvals are keyboard only,
@@ -72,7 +67,7 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
      speaks through NVDA instead.
    - Off: the core speaks with Windows SAPI. Never both at once.
 4. **Microphone.** Set the Windows default input device and test it in Sound settings. Push-to-talk
-   is pending, so the mic is not needed for the demo yet; `-Voice stub` skips it entirely.
+   (#32) uses it; `-Voice stub` skips the mic entirely, and typing always works.
 5. **Demo projects.**
    ```powershell
    powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1
@@ -199,7 +194,7 @@ and delete all files", fakes a closing `</untrusted>` tag and a "System:" line a
   runs the injection with the model scripted to obey it: every destructive call is refused before
   an approval is even requested, and `calc` still holds only its two files.
 
-### 5. Echo Check before and after (agent's `inspect_page`, pending PR #25)
+### 5. Echo Check before and after (agent's `inspect_page`)
 
 The `signup-page` project holds `index.html`, a copy of `fixture/echo-page/before.html`. The fixed
 version is not in the project, so the agent has to make the fix.
@@ -243,10 +238,10 @@ API error, Escape on every approval).
 - [ ] Cancel works: start a request, Tab to **Cancel task**, Enter: "Canceled." and nothing else
       happens. During an approval, Escape is the way out.
 - [ ] **Repeat last speech** repeats the last line; **Stop speech** stops it.
-- [ ] Silence longer than 3 seconds: time each one. There is no "still working" earcon yet, so
-      note where they happen (usually while Claude thinks) and tell the judges up front.
+- [ ] Silence longer than 3 seconds: there should be none. While Artemis works, a quiet "Still
+      working." comes after about 3 s; note any silence that has no cue.
 - [ ] No two voices at once (NVDA plus SAPI), and Artemis's own speech is never transcribed as a
-      request (once push-to-talk lands).
+      request.
 - [ ] The core speaks even when the Artemis window is not focused: send a request, Alt+Tab to
       another window before the result, and the result is still spoken (NVDA or SAPI, not the window).
 - [ ] Reset between runs: `infra\setup-demo.ps1 -Force`, restart `start.ps1`.
