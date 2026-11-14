@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createHttpCore, HttpError } from './api';
 import { createDemoCore } from './demo';
-import { ApprovalDialog } from './ApprovalDialog';
+import { ApprovalDialog, ENTER_GUARD_MS } from './ApprovalDialog';
 import { initialState, reduceEvent, taskLabel } from './state';
 import { terminal, isTaskState } from './contracts';
 import type { Core, CoreEvent, Health } from './contracts';
@@ -31,7 +31,7 @@ export function App() {
   const [status, setStatus] = useState('Not connected');
   // Compact desktop status is opt-in (start.ps1 -Compact). Off: no status window, approvals focus as in the browser.
   const [compact, setCompact] = useState(false);
-  const [backgroundApproval, setBackgroundApproval] = useState<string | null>(null);
+  const [revealGuard, setRevealGuard] = useState<{approvalId: string; until: number} | null>(null);
   const lastCompanionApproval = useRef<string | null>(null);
   const [companionError, setCompanionError] = useState('');
   const [error, setError] = useState('');
@@ -77,11 +77,12 @@ export function App() {
     }, approvalChanged).then(focusReject => {
       const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
       if (focusReject && approvalId && lastCompanionApproval.current === approvalId) {
-        setBackgroundApproval(approvalId);
         if (dialog?.dataset.approvalId === approvalId) {
-          const reject = dialog.querySelector<HTMLButtonElement>('[data-approval-reject]');
-          reject?.focus();
-          if (reject && document.activeElement === reject) {
+          // Blocking approvals keep Reject focused; normal approvals focus Approve, as in a foreground approval.
+          const target = dialog.querySelector<HTMLButtonElement>(state.approvals[0]?.approval.blocking ? '[data-approval-reject]' : '[data-approval-approve]');
+          target?.focus();
+          if (target && document.activeElement === target) {
+            setRevealGuard({approvalId, until: Date.now() + ENTER_GUARD_MS});
             void platform.revealApproval().catch(() => setCompanionError('Switch to Artemis controls to review the pending proposal.'));
           }
         }
@@ -226,6 +227,6 @@ export function App() {
       </div>
       {/* After the request form in tab order: focus starts in the request field after connect. */}
       {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
-      {state.approvals[0] && connection && ready && <ApprovalDialog preferReject={platform.native && compact && (backgroundApproval === state.approvals[0].approval.approval_id || !document.hasFocus())} key={state.approvals[0].approval.approval_id} approval={state.approvals[0].approval} decide={decision => connection.core.decide(state.approvals[0].approval, decision)}/>}
+      {state.approvals[0] && connection && ready && <ApprovalDialog enterGuardUntil={revealGuard?.approvalId === state.approvals[0].approval.approval_id ? revealGuard.until : undefined} key={state.approvals[0].approval.approval_id} approval={state.approvals[0].approval} decide={decision => connection.core.decide(state.approvals[0].approval, decision)}/>}
     </main><footer>Writes and runs require approval. Review every proposal before approving.</footer></>;
 }

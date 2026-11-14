@@ -31,9 +31,15 @@ test('compact status has keyboard access to controls and never opens a core sess
 });
 
 // Compact status is opt-in (start.ps1 -Compact). The default launch keeps Approve focus even in the background.
-for (const {compact, background} of [{compact:true, background:true}, {compact:true, background:false}, {compact:false, background:true}]) {
-  const decision = compact && background ? 'Reject' : 'Approve';
-  test(`${compact ? 'compact' : 'default'} launch: native approval focuses ${decision}${compact ? (background ? ' when revealing background controls' : ' in existing foreground controls') : ' with no compact status calls'}`, async ({page}) => {
+// Background reveals focus Approve too; Enter is ignored for 600 ms after the reveal, Escape is not guarded.
+const cases: {compact:boolean; background:boolean; press:'guard'|'escape'|'enter'; title:string}[] = [
+  {compact:true, background:true, press:'guard', title:'compact launch: background reveal focuses Approve, ignores Enter for 600 ms, then Enter approves'},
+  {compact:true, background:true, press:'escape', title:'compact launch: Escape during the background reveal guard rejects'},
+  {compact:true, background:false, press:'enter', title:'compact launch: foreground approval focuses Approve and Enter approves immediately'},
+  {compact:false, background:true, press:'enter', title:'default launch: approval focuses Approve with no compact status calls'},
+];
+for (const {compact, background, press, title} of cases) {
+  test(title, async ({page}) => {
     const {createServer} = await import('node:http');
     let events: import('node:http').ServerResponse | undefined;
     const decisions:string[] = [];
@@ -74,7 +80,7 @@ for (const {compact, background} of [{compact:true, background:true}, {compact:t
         });
         Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args?:{status?:{approval:boolean}})=>{
           commands.push(command);
-          if(command==='reveal_approval'){reveals.push(Boolean(document.activeElement?.hasAttribute('data-approval-reject')));return;}
+          if(command==='reveal_approval'){reveals.push(Boolean(document.activeElement?.hasAttribute('data-approval-approve')));return;}
           if(command==='get_core_config')return{core_url:url,token:'approval-focus-test',compact};
           if(command==='update_companion_status')return background && Boolean(args?.status?.approval);
           if(command.endsWith('is_registered'))return false;
@@ -83,7 +89,7 @@ for (const {compact, background} of [{compact:true, background:true}, {compact:t
       }, {url:`http://127.0.0.1:${(server.address() as {port:number}).port}`,compact,background});
       await page.goto('/');
       await expect(page.getByRole('dialog')).toBeVisible();
-      await expect(page.getByRole('button',{name:decision,exact:true})).toBeFocused();
+      await expect(page.getByRole('button',{name:'Approve',exact:true})).toBeFocused();
       await expect(page.getByRole('button',{name:'Use compact status',exact:true,includeHidden:true})).toHaveCount(compact ? 1 : 0);
       if(!compact) {
         const commands=await page.evaluate(()=>(window as unknown as {nativeCommands:string[]}).nativeCommands);
@@ -93,11 +99,27 @@ for (const {compact, background} of [{compact:true, background:true}, {compact:t
         await expect.poll(()=>page.evaluate(()=>(window as unknown as {approvalReveals:boolean[]}).approvalReveals)).toEqual([true]);
         const history=await page.evaluate(()=>(window as unknown as {approvalFocusHistory:string[]}).approvalFocusHistory);
         expect(history.length).toBeGreaterThan(0);
-        expect(history.some(name=>name.startsWith('Approve'))).toBe(false);
+        expect(history.some(name=>name.startsWith('Approve'))).toBe(true);
+        expect(history.some(name=>name==='Reject')).toBe(false);
       }
       else expect(await page.evaluate(()=>(window as unknown as {approvalReveals:boolean[]}).approvalReveals)).toEqual([]);
-      await page.keyboard.press('Enter');
-      await expect.poll(()=>decisions).toEqual([decision.toLowerCase()]);
+      if(press==='guard') {
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(150);
+        expect(decisions).toEqual([]);
+        await expect(page.getByRole('dialog')).toBeVisible();
+        await page.waitForTimeout(650);
+        await page.keyboard.press('Enter');
+        await expect.poll(()=>decisions).toEqual(['approve']);
+      }
+      else if(press==='escape') {
+        await page.keyboard.press('Escape');
+        await expect.poll(()=>decisions).toEqual(['reject']);
+      }
+      else {
+        await page.keyboard.press('Enter');
+        await expect.poll(()=>decisions).toEqual(['approve']);
+      }
     } finally {server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
   });
 }

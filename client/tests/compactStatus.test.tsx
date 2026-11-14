@@ -73,14 +73,21 @@ describe('compact desktop status is opt-in', () => {
     expect(companionCalls()).toBe(0);
   });
 
-  it('compact launch: a background approval focuses Reject before revealing controls', async () => {
+  it('compact launch: a background approval focuses Approve, reveals controls, and ignores an immediate Enter', async () => {
     launch.compact = true; launch.background = true;
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     await openApproval();
-    await vi.waitFor(() => expect(focusedButton()).toBe('Reject'));
+    await vi.waitFor(() => expect(focusedButton()).toBe('Approve'));
     await vi.waitFor(() => expect(native.revealApproval).toHaveBeenCalledTimes(1));
     expect(native.updateCompanionStatus).toHaveBeenCalled();
     expect(document.body.textContent).toContain('Use compact status');
+    const approve = document.querySelector<HTMLButtonElement>('[data-approval-approve]')!;
+    await act(async () => {
+      approve.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+      approve.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', bubbles: true, cancelable: true}));
+    });
+    await flush();
+    expect(core.decide).not.toHaveBeenCalled();
   });
 
   it('compact launch: a foreground approval keeps Approve', async () => {
