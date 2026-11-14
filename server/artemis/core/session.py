@@ -49,6 +49,7 @@ APPROVAL_WORDS = {"approve", "yes", "reject", "no"}
 HEARTBEAT_S = 3.0
 HEARTBEAT_STATES = {"working", "running"}  # never queued, awaiting_approval or a final state
 STILL_WORKING = "Still working."
+EMPTY_PAIR_S = 1.5  # a second empty transcript this soon after the first is the same tap
 
 
 def normalize(text: str) -> str:
@@ -97,6 +98,7 @@ class Session:
         self.runner = runner
         self.heartbeat_s = heartbeat_s
         self._quiet_since = time.monotonic()  # last announcement or task state change
+        self._last_empty = float("-inf")  # when the last empty transcript arrived
         self.bus = EventBus(
             session_id,
             speak=voice.announce if voice else None,
@@ -275,6 +277,14 @@ class Session:
 
     async def spoken(self, text: str, client_request_id: str) -> None:
         """Handle a final transcript: control words, the one-task rule, or a new task."""
+        if not text.strip():
+            # A quick tap sends stop twice (the client's stop barrier, so a late start can't
+            # leave the mic open), and each stop yields an empty transcript. Treat the pair as
+            # one tap, so nothing reacts twice (e.g. the approval said again twice).
+            now = time.monotonic()
+            if now - self._last_empty < EMPTY_PAIR_S:
+                return
+            self._last_empty = now
         if self.conversation:
             try:
                 await self._converse(text, client_request_id)

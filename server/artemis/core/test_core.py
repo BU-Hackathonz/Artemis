@@ -539,3 +539,15 @@ async def test_diagnostics_need_the_token_and_a_session(client):
     body = {"code": "shortcut_registration_failed"}
     assert (await client.post("/sessions/ses_x/diagnostics", json=body)).status_code == 401
     assert (await client.post("/sessions/ses_x/diagnostics", headers=AUTH, json=body)).status_code == 404
+
+
+async def test_a_quick_taps_two_empty_transcripts_count_once(client, core, voice):
+    """Yaovi's Windows run: a quick tap sends stop twice (the client's stop barrier)."""
+    sid, session = await start(client, core)
+    voice.transcript = ""
+    before = len(session.bus.history)
+    for _ in range(2):
+        await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await asyncio.sleep(0.1)
+    finals = [e for e in session.bus.history[before:] if e.type == "transcript.final"]
+    assert len(finals) == 1
