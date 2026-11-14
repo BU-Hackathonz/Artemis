@@ -98,3 +98,32 @@ def test_child_env_is_explicit(python, monkeypatch):
 def test_find_python_refuses_missing_override(tmp_path):
     with pytest.raises(NoInterpreter):
         find_python(str(tmp_path / "nope.exe"))
+
+
+def test_probes_and_git_init_get_no_secrets(tmp_path, monkeypatch):
+    """Interpreter probes and `git init` run with the core's tools only, never the key or the token (finding 3)."""
+    from types import SimpleNamespace
+
+    import artemis.runner.local as local
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+    monkeypatch.setenv("ARTEMIS_TOKEN", "token-should-not-leak")
+    monkeypatch.delenv("ARTEMIS_RUN_PYTHON", raising=False)
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs))
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr(local.subprocess, "run", fake_run)
+    monkeypatch.setattr(local.shutil, "which", lambda name: f"/fake/bin/{name}")
+    with pytest.raises(NoInterpreter):
+        find_python()
+    LocalRunner(tmp_path / "projects", python=Path(sys.executable)).create_project("demo")
+
+    assert any(cmd[:2] == ["git", "init"] for cmd, _ in calls)
+    assert any(cmd[0] == "/fake/bin/python3" for cmd, _ in calls)
+    for cmd, kwargs in calls:
+        env = kwargs["env"]
+        assert "ANTHROPIC_API_KEY" not in env and "ARTEMIS_TOKEN" not in env, cmd
+        assert "PATH" in env, cmd
