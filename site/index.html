@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>artemis. Build software by voice, without sight</title>
+<meta name="description" content="Artemis is a voice-first development environment for blind developers. Speak or type a request, approve every change by keyboard, and hear the result.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+<header class="site-header">
+  <a class="brand" href="index.html" aria-label="artemis, home">artemis<span class="dot">.</span></a>
+  <nav class="site-nav" aria-label="Main">
+    <ul>
+      <li><a href="index.html" aria-current="page">Home</a></li>
+      <li><a href="how-it-works.html">How it works</a></li>
+      <li><a href="trust.html">Accessibility and safety</a></li>
+      <li><a href="get-started.html">Get started</a></li>
+      <li><a href="team.html">Team</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <h1 id="hero-title" class="wordmark">artemis<span class="dot">.</span></h1>
+    <p class="lede">A development environment you run by voice, keyboard and screen reader. Built for blind developers, so no step needs sighted help.</p>
+    <div class="actions">
+      <a class="button" href="get-started.html">Get started</a>
+      <a href="how-it-works.html">See how a request flows</a>
+    </div>
+  </section>
+
+  <section class="block" aria-labelledby="log-title">
+    <h2 id="log-title">What a first request sounds like</h2>
+    <dl class="log">
+      <dt class="you">You say</dt>
+      <dd>Artemis, create a Python program that prints Hello World.</dd>
+      <dt>Artemis says</dt>
+      <dd>Heard: create a Python program that prints Hello World.</dd>
+      <dt>Artemis says</dt>
+      <dd>Create project hello-world with one file, main.py, 1 line. Press Enter to approve, Escape to reject.</dd>
+      <dt class="you">You press</dt>
+      <dd><span class="key">Enter</span></dd>
+      <dt>Artemis says</dt>
+      <dd>Run main.py with Python. No security findings. Enter to run.</dd>
+      <dt class="you">You press</dt>
+      <dd><span class="key">Enter</span></dd>
+      <dt>Artemis says</dt>
+      <dd>main.py ran successfully. It printed: Hello, World!</dd>
+    </dl>
+    <p class="log-caption">Every line is spoken in your own NVDA voice and kept in a log you can review, replay or read in braille.</p>
+  </section>
+
+  <section class="block" aria-labelledby="principles-title">
+    <h2 id="principles-title">Three promises</h2>
+    <dl class="principles">
+      <div>
+        <dt>Speak or type</dt>
+        <dd>Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> and talk, or type the same request. Artemis reads back what it heard before anything starts, and you can correct it.</dd>
+      </div>
+      <div>
+        <dt>Approve every change</dt>
+        <dd>Nothing is written or run until you press Enter on the exact change. If the files change underneath, the approval is cancelled and asked again.</dd>
+      </div>
+      <div>
+        <dt>Hear the real result</dt>
+        <dd>Runs are real. Failures are spoken first, with the exit code and the first error line word for word, before any explanation.</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="block" aria-labelledby="status-title">
+    <h2 id="status-title">Where Artemis is today</h2>
+    <div class="status prose">
+      <p>Artemis is being built at HackUMass 2026. Voice input and spoken output, the approval rules, the coding agent and the desktop app each work on their own. The core that joins them into one live run is in progress, so the desktop app's demo mode is simulated for now and says so.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <p>artemis<span class="dot">.</span> Built at HackUMass 2026.</p>
+  <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
+</footer>
+</body>
+</html>

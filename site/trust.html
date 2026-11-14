@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Accessibility and safety | artemis.</title>
+<meta name="description" content="How Artemis works with screen readers, keeps you in control of every change, and what data leaves your computer.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+<header class="site-header">
+  <a class="brand" href="index.html" aria-label="artemis, home">artemis<span class="dot">.</span></a>
+  <nav class="site-nav" aria-label="Main">
+    <ul>
+      <li><a href="index.html">Home</a></li>
+      <li><a href="how-it-works.html">How it works</a></li>
+      <li><a href="trust.html" aria-current="page">Accessibility and safety</a></li>
+      <li><a href="get-started.html">Get started</a></li>
+      <li><a href="team.html">Team</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main id="main">
+  <div class="page-head">
+    <h1>Accessibility and safety</h1>
+    <p class="lede">Artemis is designed around a screen reader, and around one rule: the developer decides every change.</p>
+  </div>
+
+  <section class="block prose" aria-labelledby="a11y-title">
+    <h2 id="a11y-title">Built for screen readers</h2>
+    <ul>
+      <li><strong>Your voice, not a second one.</strong> When NVDA is running, Artemis speaks through it, in your voice and at your speed, and sends the same text to your braille display. Without NVDA it uses the Windows voice. It never uses both at once.</li>
+      <li><strong>Works from any app.</strong> Push-to-talk and spoken results work even when Artemis isn't the focused window.</li>
+      <li><strong>Interruptible.</strong> Pressing push-to-talk stops current speech first, so Artemis never records itself. You can also stop or repeat the last line at any time.</li>
+      <li><strong>Keyboard first.</strong> Approvals are Enter and Escape on a focused dialog. Focus moves to the dialog when it opens and back when it closes.</li>
+      <li><strong>Nothing silent.</strong> Every pause, failure and completion is announced, and everything spoken is kept in a log you can review.</li>
+    </ul>
+  </section>
+
+  <section class="block prose" aria-labelledby="control-title">
+    <h2 id="control-title">You approve every change</h2>
+    <ul>
+      <li><strong>Exact approvals.</strong> An approval covers one exact edit or one exact run. If the files change before you decide, it is cancelled and asked again.</li>
+      <li><strong>A spoken "yes" never approves.</strong> Approvals are keyboard-only, so a misheard word can't write or run anything.</li>
+      <li><strong>Blocked actions stay blocked by default.</strong> When a security scan finds a serious problem, Enter alone rejects. Overriding takes a separate shortcut on the Approve button.</li>
+      <li><strong>No shell, no installs.</strong> The agent can read files, propose edits and ask to run a program. That is the whole list.</li>
+      <li><strong>Files are untrusted.</strong> Text in your project, such as a comment telling the AI to delete everything, is treated as data. No tool exists that could carry it out.</li>
+    </ul>
+  </section>
+
+  <section class="block prose" aria-labelledby="data-title">
+    <h2 id="data-title">Your data</h2>
+    <ul>
+      <li><strong>Speech stays on your computer.</strong> Recognition runs locally. Audio is held in memory only while you speak and is discarded after transcription. It is never saved or uploaded.</li>
+      <li><strong>The agent uses Claude.</strong> Your request and the project files the agent reads are sent to Anthropic's Claude API to plan changes. The API key is never put in prompts, logs or speech.</li>
+      <li><strong>Local only.</strong> The core listens on your own computer and requires a secret token for each launch, so websites and other programs can't control it.</li>
+      <li><strong>This site</strong> has no cookies, analytics or scripts, and loads nothing from other servers.</li>
+    </ul>
+  </section>
+
+  <section class="block prose" aria-labelledby="limits-title">
+    <h2 id="limits-title">Known limits</h2>
+    <ul>
+      <li>Programs run with approval, a static scan, a time limit and a minimal environment. That is gated and limited, but it is not an operating-system sandbox.</li>
+      <li>Artemis supports Windows 11 with NVDA. Other screen readers and systems are not tested yet.</li>
+      <li>Speech recognition can mishear names and symbols. Artemis reads every transcript back, and typing is always available.</li>
+    </ul>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <p>artemis<span class="dot">.</span> Built at HackUMass 2026.</p>
+  <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
+</footer>
+</body>
+</html>
