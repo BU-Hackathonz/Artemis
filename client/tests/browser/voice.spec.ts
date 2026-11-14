@@ -1,4 +1,4 @@
-import {test, expect, type Page} from '@playwright/test';
+import {test, expect, type Page, type CDPSession} from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import {createServer, type ServerResponse} from 'node:http';
 
@@ -22,8 +22,11 @@ async function bridge(page:Page, url:string, failFirst:boolean|'always'=false) {
     }}});
   },{url,failFirst});
 }
-async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceReady=false,diagnosticsStatus=204}: {failFirstStart?:boolean;delayFirstStart?:boolean;voiceReady?:boolean;diagnosticsStatus?:number} = {}) {
+async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceReady=false,diagnosticsStatus=204,heard=[]}: {failFirstStart?:boolean;delayFirstStart?:boolean;voiceReady?:boolean;diagnosticsStatus?:number;heard?:string[]} = {}) {
   const actions:string[]=[];
+  const transcripts=[...heard];
+  const speech:string[]=[];
+  const tasks:unknown[]=[];
   let pendingStart:ServerResponse|undefined;
   let events:ServerResponse|undefined;
   const diagnostics:unknown[]=[];
@@ -61,6 +64,15 @@ async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceRead
           if(delayFirstStart){pendingStart=res;return;}
         }
         res.writeHead(204).end();
+        // Like the core: the transcript arrives as an event after stop (contracts.md, /voice/listen).
+        const text=action==='stop'?transcripts.shift():undefined;
+        if(text)events?.write(`id: ${++seq}\ndata: ${JSON.stringify({seq,session_id:'ses_voice',task_id:null,at:new Date().toISOString(),type:'transcript.final',data:{text,client_request_id:`cr_${seq}`},announce:{text:`Heard: ${text}`,priority:'normal'}})}\n\n`);
+      });return;
+    }
+    if(req.url==='/speech' || req.url==='/sessions/ses_voice/tasks'){
+      let body='';req.on('data',part=>{body+=part;});req.on('end',()=>{
+        if(req.url==='/speech'){speech.push(JSON.parse(body).action);res.writeHead(204).end();return;}
+        tasks.push(JSON.parse(body));res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify({task_id:'tsk_voice'}));
       });return;
     }
     res.setHeader('content-type','application/json');
@@ -70,7 +82,7 @@ async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceRead
   });
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   const url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
-  return{actions,diagnostics,readies,url,finishStart:()=>pendingStart?.writeHead(204).end(),close:async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
+  return{actions,speech,tasks,diagnostics,readies,url,finishStart:()=>pendingStart?.writeHead(204).end(),close:async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
 }
 async function send(page:Page,state:'Pressed'|'Released') {await page.evaluate(state=>(window as unknown as {voiceBridge:Bridge}).voiceBridge.send(state),state);}
 
@@ -213,3 +225,146 @@ test('Tab from the request field reaches the listening toggle before wrapping to
     await expect(talk).not.toBeFocused();
   }finally{await core.close();}
 });
+
+// Chromium's computed role and name for the focused element: what a screen reader is told on focus.
+async function focused(cdp:CDPSession):Promise<string> {
+  const {result}=await cdp.send('Runtime.evaluate',{expression:'document.activeElement===document.body?null:document.activeElement'});
+  if(!result.objectId)return 'page';
+  const {nodes}=await cdp.send('Accessibility.getPartialAXTree',{objectId:result.objectId,fetchRelatives:false});
+  await cdp.send('Runtime.releaseObject',{objectId:result.objectId});
+  return `${nodes[0]?.role?.value} "${nodes[0]?.name?.value ?? ''}"`;
+}
+async function walk(page:Page,cdp:CDPSession,key:'Tab'|'Shift+Tab',until:string,max=15) {
+  const seen=[await focused(cdp)];
+  for(let i=0;i<max && seen.at(-1)!==until;i++){await page.keyboard.press(key);seen.push(await focused(cdp));}
+  return seen;
+}
+const REQUEST='textbox "What would you like to build?"';
+const TO_TOGGLE=[REQUEST,'button "Repeat last speech"','button "Stop speech"','log "Activity log"','button "Start listening"'];
+
+test('demo.md row 4: Tab from the request field passes Repeat, Stop and the log to Start listening, with no trap',async({page})=>{
+  const core=await coreFixture();
+  try{
+    await bridge(page,core.url);await page.goto('/');
+    await expect(page.getByText('Global shortcut is registered.',{exact:true})).toBeVisible();
+    const request=page.getByLabel('What would you like to build?');
+    await expect(request).toBeFocused();
+    await expect(request).toHaveValue('');
+    // Idle with an empty field: nothing to send and nothing to cancel, so Tab skips both.
+    await expect(page.getByRole('button',{name:'Send request',exact:true})).toBeDisabled();
+    await expect(page.getByRole('button',{name:'Cancel task',exact:true})).toBeDisabled();
+    const cdp=await page.context().newCDPSession(page);
+    expect(await walk(page,cdp,'Tab','button "Start listening"')).toEqual(TO_TOGGLE);
+    // No trap: onward Tab leaves the page after the voice controls and comes back round to the field.
+    const onward=await walk(page,cdp,'Tab',REQUEST);
+    expect(onward.slice(0,5)).toEqual(['button "Start listening"','textbox "Global voice shortcut"','button "Apply shortcut"','page','link "Skip to request"']);
+    expect(onward.at(-1)).toBe(REQUEST);
+    // With text in the field (typed, or a transcript after a voice request) Send request is a stop too.
+    await request.fill('draft');
+    const withText=[REQUEST,'button "Send request"',...TO_TOGGLE.slice(1)];
+    expect(await walk(page,cdp,'Tab','button "Start listening"')).toEqual(withText);
+    // Back the same way. Escape outside a dialog does nothing: focus and text stay, nothing is sent.
+    for(const stop of [...withText].reverse()){
+      expect(await focused(cdp)).toBe(stop);
+      await page.keyboard.press('Escape');
+      expect(await focused(cdp)).toBe(stop);
+      if(stop!==REQUEST)await page.keyboard.press('Shift+Tab');
+    }
+    await expect(request).toHaveValue('draft');
+    expect([core.actions,core.speech,core.tasks]).toEqual([[],[],[]]);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  }finally{await core.close();}
+});
+
+test('demo.md keys, idle: Enter sends only a non-empty request; Enter on Repeat and Stop reaches the core',async({page})=>{
+  const core=await coreFixture();
+  try{
+    await bridge(page,core.url);await page.goto('/');
+    await expect(page.getByText('Global shortcut is registered.',{exact:true})).toBeVisible();
+    const request=page.getByLabel('What would you like to build?');
+    await expect(request).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(request).toBeFocused();
+    await expect(request).toHaveValue('');
+    for(const [name,action] of [['Repeat last speech','repeat'],['Stop speech','stop']]){
+      await page.keyboard.press('Tab');
+      const button=page.getByRole('button',{name,exact:true});
+      await expect(button).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect.poll(()=>core.speech.at(-1)).toBe(action);
+      await expect(button).toBeFocused();
+    }
+    expect(core.speech).toEqual(['repeat','stop']);
+    await request.focus();
+    await page.keyboard.type('hello');
+    await page.keyboard.press('Enter');
+    await expect.poll(()=>core.tasks).toEqual([{text:'hello',source:'keyboard',client_request_id:expect.any(String)}]);
+    await expect(request).toHaveValue('');
+    expect(core.actions).toEqual([]);
+  }finally{await core.close();}
+});
+
+for(const voiceReady of [false,true]){
+  test(`demo.md row 5: the Start listening toggle matches hold-to-talk (core speech ${voiceReady?'available':'unavailable'})`,async({page})=>{
+    const core=await coreFixture({voiceReady,heard:['held','toggled with Enter','toggled with Space']});
+    try{
+      await bridge(page,core.url);await page.goto('/');
+      await expect(page.getByText('Global shortcut is registered.',{exact:true})).toBeVisible();
+      const request=page.getByLabel('What would you like to build?');
+      const status=page.getByLabel('Microphone status');
+      // NVDA reads the status line itself only when the core can't speak.
+      await expect(status).toHaveAttribute('aria-live',voiceReady?'off':'polite');
+      await status.evaluate(el=>{
+        const seen:string[]=[];Object.defineProperty(window,'statusSeen',{value:seen});
+        new MutationObserver(()=>{if(seen.at(-1)!==el.textContent)seen.push(el.textContent??'');}).observe(el,{childList:true,characterData:true,subtree:true});
+      });
+      const cycle=['Opening microphone. Wait for the listening tone, then speak.','Listening. Release Control+Shift+Space or choose Stop listening.','Stopping microphone. Waiting for the transcript.','Microphone stopped. Hold Control+Shift+Space or choose Start listening to speak again.'];
+      // The status lines shown since the last check: the cycle in order. "Opening" and "Stopping" can pass
+      // too quickly to render (React batches them with the next line); "Listening" and "stopped" must show.
+      const expectCycle=async()=>{
+        const seen=await page.evaluate(()=>(window as unknown as {statusSeen:string[]}).statusSeen.splice(0));
+        expect(cycle.filter(line=>seen.includes(line))).toEqual(seen);
+        expect(seen).toEqual(expect.arrayContaining([cycle[1],cycle[3]]));
+      };
+      const log=page.getByRole('log');
+
+      // Row 2, hold-to-talk: one start, one stop, then "Heard: ..." and the transcript in the field.
+      await send(page,'Pressed');
+      await expect(status).toHaveText(cycle[1]);
+      await send(page,'Released');
+      await expect(status).toHaveText(cycle[3]);
+      await expect(log).toContainText('Heard: held');
+      await expect(request).toHaveValue('held');
+      expect(core.actions).toEqual(['start','stop']);
+      await expectCycle();
+
+      // Row 5, the toggle, from the keyboard (Enter, then Space): the same requests, status and result.
+      for(const [key,heard] of [['Enter','toggled with Enter'],['Space','toggled with Space']]){
+        const before=core.actions.length;
+        const start=page.getByRole('button',{name:'Start listening',exact:true});
+        await start.focus();
+        await page.keyboard.press(key);
+        const stop=page.getByRole('button',{name:'Stop listening',exact:true});
+        await expect(stop).toBeFocused();
+        await expect(status).toHaveText(cycle[1]);
+        await expect(status).toHaveAttribute('aria-live',voiceReady?'off':'polite');
+        // A label toggle: the name says what pressing does next, so no aria-pressed on top of it.
+        await expect(stop).not.toHaveAttribute('aria-pressed');
+        // Speaking: unlike the held chord, nothing is held, and the microphone stays on until the second press.
+        await page.waitForTimeout(1500);
+        await expect(status).toHaveText(cycle[1]);
+        expect(core.actions.slice(before)).toEqual(['start']);
+        await page.keyboard.press(key);
+        await expect(start).toBeFocused();
+        await expect(status).toHaveText(cycle[3]);
+        await expect(start).not.toHaveAttribute('aria-pressed');
+        await expect(log).toContainText(`Heard: ${heard}`);
+        await expect(request).toHaveValue(heard);
+        expect(core.actions.slice(before)).toEqual(['start','stop']);
+        await expectCycle();
+      }
+      await expect(page.getByRole('alert')).toHaveCount(0);
+    }finally{await core.close();}
+  });
+}
