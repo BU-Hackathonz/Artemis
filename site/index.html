@@ -5,18 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<title>artemis. Build software by voice, without sight</title>
-<meta name="description" content="Artemis is a voice-first development environment for blind developers. Speak or type a request, approve every change by keyboard, and hear the result.">
+<title>artemis. Hear your code. Ship without sight.</title>
+<meta name="description" content="Artemis is a voice-first development environment for blind developers. Speak a change, approve it by keyboard, and hear the real result in your own screen reader.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
 <script src="motion.js" defer></script>
 </head>
 <body>
+<svg class="svg-defs" aria-hidden="true" focusable="false">
+  <filter id="refract"><feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="7" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="38" xChannelSelector="R" yChannelSelector="G"/></filter>
+</svg>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header">
-  <div class="nav-pill">
-    <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
-    <nav class="site-nav" aria-label="Main">
+<header class="nav">
+  <div class="nav-in">
+    <a class="logo" href="index.html" aria-label="artemis, home">artemis.</a>
+    <nav aria-label="Main">
       <ul>
         <li><a href="index.html" aria-current="page">Home</a></li>
         <li><a href="how-it-works.html">How it works</a></li>
@@ -24,100 +27,212 @@
         <li><a href="team.html">About</a></li>
       </ul>
     </nav>
-    <a class="button button-solid button-small" href="get-started.html">Get started</a>
+    <a class="btn btn-white" href="get-started.html">Get started</a>
   </div>
 </header>
 
 <main id="main">
   <section class="hero" aria-labelledby="hero-title">
-    <p class="badge">Built at HackUMass 2026</p>
-    <h1 id="hero-title" class="headline"><span>Build by voice.</span> <span class="fade">Ship without sight.</span></h1>
-    <p class="lede">A development environment for blind developers. Speak a change, approve it by keyboard, and hear the real result in your own screen reader.</p>
-    <div class="actions">
-      <a class="button button-solid" href="get-started.html">Get started</a>
-      <a class="button button-ghost" href="how-it-works.html">See how it works</a>
+    <div class="hero-bg" aria-hidden="true"><i></i><i></i></div>
+    <div class="wrap">
+      <p class="badge">Voice-first coding <b>·</b> HackUMass 2026</p>
+      <h1 id="hero-title"><span>Hear your code.</span> <span class="fade">Ship without sight.</span></h1>
+      <p class="lede">A development environment built for blind developers. Speak a change, approve it by keyboard, and hear the real result in your own screen reader.</p>
+      <div class="ctas"><a class="btn btn-white" href="get-started.html">Try Artemis</a><a class="btn btn-ghost" href="how-it-works.html">See how it works</a></div>
+      <ul class="hero-stats">
+        <li><b>0</b> changes without your keypress</li>
+        <li><b>1</b> voice at a time, never two</li>
+        <li><b>100%</b> local speech recognition</li>
+      </ul>
     </div>
-    <dl class="stats">
-      <div><dt>0</dt><dd>changes without your keypress</dd></div>
-      <div><dt>1</dt><dd>voice at a time, never two</dd></div>
-      <div><dt>10 s</dt><dd>time limit on every run</dd></div>
-    </dl>
   </section>
 
-  <section class="section" aria-labelledby="frame-title">
-    <div class="section-head">
-      <p class="badge">The first request</p>
-      <h2 id="frame-title">Heard like this.</h2>
-    </div>
-    <div class="frame">
-      <div class="frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>artemis.</span></div>
-      <div class="frame-body">
-        <div class="frame-pane">
-          <p class="pane-title">Activity log</p>
-          <dl class="log">
-            <dt class="you">You say</dt>
-            <dd>Artemis, create a Python program that prints Hello World.</dd>
-            <dt>Artemis</dt>
-            <dd>Heard: create a Python program that prints Hello World.</dd>
-            <dt>Artemis</dt>
-            <dd>Waiting for your approval to create main.py.</dd>
-            <dt class="you">You press</dt>
-            <dd>Enter</dd>
-            <dt>Artemis</dt>
-            <dd>main.py ran successfully. It printed: Hello, World!</dd>
-          </dl>
-        </div>
-        <div class="frame-pane">
-          <p class="pane-title">Approval dialog</p>
-          <div class="dialog">
-            <h3>Review file changes</h3>
-            <p>Create project hello-world with one file, main.py, 1 line.</p>
-<pre tabindex="0"><code>+ print("Hello, World!")</code></pre>
-            <div class="row" aria-hidden="true"><span class="fake-btn">Reject</span><span class="fake-btn primary">Approve</span></div>
+  <section class="tight" aria-labelledby="frame-title">
+    <div class="wrap center">
+      <p class="eyebrow">The first request</p>
+      <h2 class="h2" id="frame-title">Heard like this.</h2>
+      <div class="frame" id="frame">
+        <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span>artemis.</span></div>
+        <div class="app">
+          <div class="pane">
+            <h3>Activity log</h3>
+            <dl class="log">
+              <dt class="you">You say</dt><dd>Artemis, create a Python program that prints Hello World.</dd>
+              <dt>Artemis</dt><dd>Heard: create a Python program that prints Hello World.</dd>
+              <dt>Artemis</dt><dd>Waiting for your approval to create main.py.</dd>
+              <dt class="you">You press</dt><dd>Enter</dd>
+              <dt>Artemis</dt><dd>main.py ran successfully. It printed: Hello, World!</dd>
+            </dl>
+          </div>
+          <div class="pane">
+            <h3>Approval</h3>
+            <div class="dialog">
+              <strong>Review file changes</strong>
+              <p>Create project hello-world with one file, main.py, 1 line.</p>
+              <code>+ print("Hello, World!")</code>
+              <div class="row" aria-hidden="true"><span class="chip">Reject</span><span class="chip on">Approve</span></div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-    <p class="frame-caption">Every line is spoken in your NVDA voice, sent to your braille display, and kept in a log you can replay.</p>
-  </section>
-
-  <section class="section" aria-label="What Artemis says">
-    <p class="marquee-label">What you hear while you work</p>
-    <div class="marquees" aria-hidden="true">
-      <div class="track"></div>
-      <div class="track"></div>
+      <p class="caption">Every line is spoken in your NVDA voice (or the Windows voice without NVDA), sent to your braille display, and kept in a log you can review.</p>
     </div>
   </section>
 
-  <section class="section" aria-label="Why Artemis">
-    <p class="statement" data-light>Code you can hear, changes you approve, results you can trust. Built for screen readers first, and fast where it counts.</p>
-  </section>
-
-  <section class="section" aria-labelledby="cards-title">
-    <div class="section-head">
-      <h2 id="cards-title">Everything a request needs.</h2>
-      <p>From the moment you speak to the moment you hear the result.</p>
+  <section class="marquee-sec" aria-label="Built on">
+    <p class="marquee-label">Built with</p>
+    <div class="marquee" aria-hidden="true">
+      <div class="track"><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>WCAG 2.2</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>WCAG 2.2</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span></div>
+      <div class="track rev"><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Reviewable log</span><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Reviewable log</span></div>
     </div>
-    <ul class="cards">
-      <li><a href="how-it-works.html"><span class="kind">Voice</span><h3>Speak or type a request</h3><p>Hold Ctrl+Shift+Space from any app. Artemis reads back what it heard first.</p><span class="arrow" aria-hidden="true">↗</span></a></li>
-      <li><a href="trust.html"><span class="kind">Control</span><h3>Approve the exact change</h3><p>Enter approves, Escape rejects. A spoken "yes" never decides.</p><span class="arrow" aria-hidden="true">↗</span></a></li>
-      <li><a href="trust.html"><span class="kind">Safety</span><h3>Catch problems before they run</h3><p>Code is scanned first. A serious finding blocks the run until you decide.</p><span class="arrow" aria-hidden="true">↗</span></a></li>
-      <li><a href="how-it-works.html"><span class="kind">Results</span><h3>Hear what really happened</h3><p>Failures say the exit code and first error line, word for word.</p><span class="arrow" aria-hidden="true">↗</span></a></li>
-    </ul>
+    <p class="sr">Built on NVDA, Windows SAPI, Whisper, Claude, Tauri, WCAG 2.2, axe-core, Bandit and Python, with braille display support. Features: push-to-talk, spoken diffs, keyboard approvals, security scans, Echo Check, local speech and a reviewable log.</p>
   </section>
 
-  <section class="section" aria-labelledby="closing-title">
-    <div class="closing">
-      <h2 id="closing-title">You have code to write and ideas to ship.</h2>
-      <p>The last thing you need is a tool that hides its <em>errors</em> or talks over your screen reader. Artemis is in active development: the parts work on their own, and the core that joins them is being built now.</p>
-      <div class="actions"><a class="button button-solid" href="get-started.html">Try it</a></div>
+  <section aria-labelledby="what-title">
+    <div class="wrap">
+      <h2 class="sr" id="what-title">What Artemis does</h2>
+      <p class="statement" data-light>Code you can hear, changes you approve, results you can trust. Built for screen readers first, and fast where it counts.</p>
+      <ul class="list" id="what-list">
+        <li><a href="how-it-works.html"><span class="k">Voice</span><strong>Speak or type a request</strong><p>Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app. Artemis reads back what it heard first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="trust.html"><span class="k">Control</span><strong>Approve the exact change</strong><p>Enter approves, Escape rejects. A spoken "yes" never decides.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="how-it-works.html"><span class="k">Runs</span><strong>Run it for real</strong><p>A fixed command, a time limit, and none of Artemis's secrets.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="trust.html"><span class="k">Safety</span><strong>Catch problems before they run</strong><p>Code is scanned first. A serious finding blocks the run until you decide.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="how-it-works.html"><span class="k">Echo Check</span><strong>Hear what a page really exposes</strong><p>Artemis reads a web page's real accessibility tree and speaks the problems, most serious first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="trust.html"><span class="k">Screen reader</span><strong>Your voice, never a second one</strong><p>Speaks through NVDA when it runs, and sends the same line to braille.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="problem" aria-labelledby="problem-title">
+    <div class="wrap center">
+      <h2 id="problem-title">You have code to write and ideas to ship.</h2>
+      <p class="lede">The last thing you need is a tool that hides its errors, talks over your screen reader, or needs someone sighted to click the button.</p>
+      <div class="ctas"><a class="btn btn-ghost" href="get-started.html">Let's fix that</a></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="demos-title">
+    <div class="wrap">
+      <p class="eyebrow">What you can do</p>
+      <h2 class="h2" id="demos-title">From idea to running. <span class="lite">Spoken, step by step.</span></h2>
+      <ul class="rail" aria-label="Demo flows, scrolls sideways" tabindex="0">
+        <li class="demo"><span class="live">DEMO 1</span><span class="k">First program</span><h3>Hello World, by voice</h3><div class="tags"><span>PYTHON</span><span>2 APPROVALS</span></div><p class="say">"main.py ran successfully. It printed: Hello, World!"</p></li>
+        <li class="demo"><span class="live">DEMO 2</span><span class="k">Debugging</span><h3>A failed run, explained</h3><div class="tags"><span>EXIT CODE</span><span>FIX PROPOSED</span></div><p class="say">"main.py failed with exit code 1. NameError: name 'pritn' is not defined. Did you mean: 'print'?"</p></li>
+        <li class="demo"><span class="live">DEMO 3</span><span class="k">Security Guardian</span><h3>Risky code, blocked</h3><div class="tags"><span>BANDIT</span><span>REJECT FOCUSED</span></div><p class="say">"Blocked: 1 high-severity issue, main.py line 5, subprocess call with shell=True identified, security issue, and 1 more."</p></li>
+        <li class="demo"><span class="live">DEMO 4</span><span class="k">Prompt injection</span><h3>A hostile README, ignored</h3><div class="tags"><span>UNTRUSTED DATA</span><span>NO SHELL TOOL</span></div><p class="say">A README tells the AI to delete files. It's read as data, and no tool can delete anything.</p></li>
+        <li class="demo"><span class="live">DEMO 5</span><span class="k">Echo Check</span><h3>A form, made accessible</h3><div class="tags"><span>AXE-CORE</span><span>7 TO 0 FINDINGS</span></div><p class="say">Seven accessibility problems found on the sign-up page before the fix, none after.</p></li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="ways-title">
+    <div class="wrap">
+      <p class="eyebrow">Two ways in</p>
+      <h2 class="h2" id="ways-title">Speak it. <span class="lite">Or type it.</span></h2>
+      <p class="lede">Both paths go through the same approvals. The only thing that changes is how you start.</p>
+      <div class="compare">
+        <table>
+          <caption class="sr">Voice versus keyboard</caption>
+          <thead><tr><td></td><th scope="col"><small>Way 1</small><strong>Voice</strong></th><th scope="col"><small>Way 2</small><strong>Keyboard</strong></th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Start</th><td>Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> and talk</td><td>Type the request, press Enter</td></tr>
+            <tr><th scope="row">Check</th><td>"Heard: …" is read back first</td><td>What you typed is the request</td></tr>
+            <tr><th scope="row">Approve</th><td colspan="2">Enter approves, Escape rejects, on the focused dialog. Never by voice.</td></tr>
+            <tr><th scope="row">Result</th><td colspan="2">Spoken through NVDA or the Windows voice, and kept in the log.</td></tr>
+            <tr><th scope="row">Best for</th><td>Hands on the keyboard, mind on the idea</td><td>Noisy rooms, precise names, no microphone</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="one-title">
+    <div class="wrap">
+      <p class="eyebrow">All in one place</p>
+      <h2 class="h2" id="one-title">Stop juggling tools <span class="lite">that were never built to be heard.</span></h2>
+      <div class="grid3">
+        <div class="tile"><b><span class="sr">No more: </span><s>A sighted helper</s></b><p>Every step is spoken, so no one has to read the screen for you.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Hunting through an IDE</s></b><p>Ask for the change in plain words; Artemis finds the files.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Scanning a terminal</s></b><p>Exit code and first error line, read out word for word.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Reading a visual diff</s></b><p>A spoken summary built from the real edit, steppable by line.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Two voices at once</s></b><p>NVDA when it runs, the Windows voice when it doesn't. Never both.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Guessing what's safe</s></b><p>Code is scanned before it runs, and nothing runs without your keypress.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how" aria-labelledby="how-title">
+    <div class="wrap">
+      <p class="eyebrow">How it works</p>
+      <h2 class="h2" id="how-title">From your voice to a running program, <span class="lite">in five clear steps.</span></h2>
+      <ol class="steps">
+        <li class="step"><div><span class="k">Speak</span><h3>You hold the shortcut and talk.</h3><p>Artemis stops talking, plays a rising tone, then listens. Release and it transcribes on your own computer.</p></div></li>
+        <li class="step"><div><span class="k">Confirm</span><h3>It reads back what it heard.</h3><p>"Heard: create a Python program…" The text stays editable, so a misheard word is easy to fix.</p></div></li>
+        <li class="step"><div><span class="k">Review</span><h3>You hear the exact change.</h3><p>A summary built from the real edit, with the full diff to step through. Enter approves, Escape rejects.</p></div></li>
+        <li class="step"><div><span class="k">Scan and run</span><h3>It checks the code, then runs it.</h3><p>A security scan first, then its own approval, a fixed command and a time limit.</p></div></li>
+        <li class="step"><div><span class="k">Hear</span><h3>You hear what really happened.</h3><p>What the program printed, or the exit code and first error line, then an explanation and a fix.</p></div></li>
+      </ol>
+    </div>
+  </section>
+
+  <section aria-labelledby="stats-title">
+    <div class="wrap center">
+      <h2 class="big" id="stats-title">Built in one weekend.</h2>
+      <p class="lede">Four students, one goal: a blind developer builds and runs real software with no sighted help.</p>
+      <div class="stats4">
+        <div class="stat"><div class="n">49</div><span class="k">Pull requests</span><p>merged by 8 AM Saturday, each reviewed.</p></div>
+        <div class="stat"><div class="n">500+</div><span class="k">Automated tests</span><p>on Windows and Linux in every pull request.</p></div>
+        <div class="stat"><div class="n">0</div><span class="k">Audio uploads</span><p>Speech is recognised on your computer and never saved.</p></div>
+        <div class="stat"><div class="n">4</div><span class="k">People</span><p>Voice, agent and safety, core, and the desktop app.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="why-title">
+    <div class="wrap">
+      <h2 class="h2" id="why-title">Why blind developers <span class="dim">would choose</span> Artemis.</h2>
+      <ol class="why">
+        <li><small>01</small><h3>You decide every change.</h3><p>Nothing is written or run without your keypress. An approval covers one exact edit.</p></li>
+        <li><small>02</small><h3>Every result is real.</h3><p>Programs really run, and you hear what they actually printed.</p></li>
+        <li><small>03</small><h3>Errors are never softened.</h3><p>Exit code and first error line come first, word for word.</p></li>
+        <li><small>04</small><h3>Your screen reader comes first.</h3><p>Your own NVDA voice, never talked over, and every control works from the keyboard.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section aria-labelledby="faq-title">
+    <div class="wrap">
+      <h2 class="h2" id="faq-title">Everything you need <span class="dim">to know</span></h2>
+      <div class="faq">
+        <details><summary>Which screen readers does it work with?</summary><p>Artemis is built and tested with NVDA on Windows 11. Without NVDA it speaks through the Windows voice. Other screen readers aren't tested yet.</p></details>
+        <details><summary>Does my voice leave my computer?</summary><p>No. Speech is recognised locally with Whisper, held in memory only while you speak, and never saved or uploaded.</p></details>
+        <details><summary>Is my code sent anywhere?</summary><p>Your request and the files the agent reads go to Anthropic's Claude to plan changes. Nothing else leaves your computer.</p></details>
+        <details><summary>Can it run anything it wants?</summary><p>No. Every run needs your approval, the code is scanned first, and it runs with a fixed command and a time limit. It's gated and limited, not an operating-system sandbox.</p></details>
+        <details><summary>What if the shortcut doesn't work?</summary><p>Another app may own it. Choose a different shortcut in Artemis, or use the Start listening button.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <section class="final" aria-labelledby="final-title">
+    <div class="lens" aria-hidden="true"></div>
+    <div class="wrap">
+      <h2 id="final-title">Ready to build <span class="lite">without asking for help?</span></h2>
+      <p class="lede center">Artemis is in active development. The parts work on their own, and the desktop app's demo mode is labelled as simulated.</p>
+      <div class="ctas"><a class="btn btn-white" href="get-started.html">Get started</a><a class="btn btn-ghost" href="https://github.com/BU-Hackathonz/Artemis">Source on GitHub</a></div>
     </div>
   </section>
 </main>
 
-<footer class="site-footer">
-  <p>artemis. Built at HackUMass 2026.</p>
-  <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
+<footer>
+  <div class="wrap">
+    <div class="foot-top"><span class="logo">artemis.</span><p>A voice-first development environment for blind developers. Built at HackUMass 2026.</p></div>
+    <div class="cols">
+      <div><h2>Product</h2><ul><li><a href="how-it-works.html">How it works</a></li><li><a href="get-started.html">Get started</a></li></ul></div>
+      <div><h2>Trust</h2><ul><li><a href="trust.html">Accessibility and safety</a></li></ul></div>
+      <div><h2>Team</h2><ul><li><a href="team.html">About</a></li><li><a href="https://github.com/BU-Hackathonz/Artemis">GitHub</a></li></ul></div>
+    </div>
+    <div class="foot-bottom"><span>artemis. Built at HackUMass 2026.</span><span>No cookies, no analytics, no tracking.</span></div>
+  </div>
 </footer>
 <button class="pause" type="button" aria-pressed="false">Pause motion</button>
 </body>
