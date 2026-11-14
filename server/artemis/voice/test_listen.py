@@ -147,6 +147,37 @@ def test_post_roll_comes_from_the_environment(monkeypatch, caplog):
         assert f"ARTEMIS_PTT_POST_ROLL={bad!r}" in caplog.text
 
 
+
+def test_busy_listening_covers_the_earcon_and_the_post_roll():
+    # The core reads busy_listening before playing a result earcon (#127); a tone in this window is recorded.
+    v, _, _ = make(1, earcon_s=0.1, post_roll=0.2)
+
+    async def run():
+        assert not v.busy_listening
+        start = asyncio.create_task(v.start_listening())
+        await asyncio.sleep(0.03)
+        assert v.busy_listening and not v.listening  # the listening earcon plays; the mic isn't open yet
+        await start
+        assert v.busy_listening and v.listening
+        stop = asyncio.create_task(v.stop_listening("cr_1"))
+        await asyncio.sleep(0.05)
+        assert v.busy_listening and not v.listening  # released, but the post-roll still records
+        await stop
+        assert not v.busy_listening and not v.listening
+
+    asyncio.run(run())
+
+
+def test_stub_busy_listening_matches_listening():
+    from artemis.voice import StubVoice
+
+    v = StubVoice(announcer=FakeAnnouncer([]))
+    assert not v.busy_listening
+    asyncio.run(v.start_listening())
+    assert v.busy_listening
+    asyncio.run(v.stop_listening("cr_1"))
+    assert not v.busy_listening
+
 def test_press_during_post_roll_closes_that_mic_first_and_skips_its_stopped_earcon():
     log = []
     v, _, streams = make(1, log=log, post_roll=5.0)
