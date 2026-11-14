@@ -31,16 +31,33 @@ class FakeSpeaker:
 def test_strip_wake_word():
     assert strip_wake_word("Artemis, create a file") == "create a file"
     assert strip_wake_word("hey artemis. run it") == "run it"
+    assert strip_wake_word("Hey Artemus, create a Python program") == "create a Python program"  # "Hey Artemis" misheard
     assert strip_wake_word("  ARTEMIS run it") == "run it"
     assert strip_wake_word("run artemis.py") == "run artemis.py"  # only a leading wake word
     assert strip_wake_word("Artemisia is a plant") == "Artemisia is a plant"
     assert strip_wake_word("Artemis") == ""
 
 
+def test_strip_wake_word_accepts_close_spellings():
+    for variant in ["Artemus", "Artemiss", "Arthemis", "Ardemis", "Artimis", "ARTHEMIS"]:
+        assert strip_wake_word(f"{variant}, create a file") == "create a file", variant
+        assert strip_wake_word(f"hey {variant}. run it") == "run it", variant
+        assert strip_wake_word(f"ok {variant} run it") == "run it", variant
+    assert strip_wake_word("okay Artimis run it") == "run it"
+
+
+def test_strip_wake_word_leaves_other_words_alone():
+    for text in ["artistic rendering", "art is hard", "If so, then create a program", "Artemisia is a plant",
+                 "run artemus.py", "Armis is a name"]:
+        assert strip_wake_word(text) == text, text
+
+
 def test_vocabulary_prompt_dedupes_and_caps():
-    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm"]) == "main.py, LoginForm"
+    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm"]) == "Hey Artemis, Artemis, Python, main.py, LoginForm"
+    assert vocabulary_prompt(["artemis", "PYTHON"]) == "Hey Artemis, Artemis, Python, main.py"
+    assert vocabulary_prompt([]) == "Hey Artemis, Artemis, Python, main.py"
     p = vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=50)
-    assert len(p) <= 50 and p.startswith("word0, word1")
+    assert len(p) <= 50 and p.startswith("Hey Artemis, Artemis, Python, main.py, word0")
 
 
 def router(nvda_up=True, sapi_up=True, running=False, busy=False):
@@ -91,8 +108,8 @@ def test_stub_voice_returns_mvp_request():
     assert text == "create a Python program that prints Hello World" and not v.listening
     asyncio.run(v.announce(f"Heard: {text}", "normal"))
     assert s.said == [("Heard: create a Python program that prints Hello World", False)]
-    v.set_vocabulary(["main.py"])
-    assert v.prompt == "main.py"
+    v.set_vocabulary(["LoginForm"])
+    assert v.prompt == "Hey Artemis, Artemis, Python, main.py, LoginForm"
 
 
 def test_watch_reports_at_start_and_on_change_only():

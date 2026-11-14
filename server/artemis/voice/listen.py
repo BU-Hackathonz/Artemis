@@ -65,7 +65,7 @@ class WhisperVoice:
         self._chunks: list[np.ndarray] = []
         self._frames = 0
         self._lock = threading.Lock()  # the audio callback runs on PortAudio's thread
-        self.prompt = ""
+        self.prompt = vocabulary_prompt([])  # wake word and demo words, even before a project opens
 
     @property
     def listening(self) -> bool:
