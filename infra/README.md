@@ -72,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets 
 
 The key lives only in the launcher's process environment: never in a file, on a command line, in a
 log or in the exe, and it ends with the launcher process (no managed string copy can be zeroed). Options: `-Agent stub|claude`, `-Voice whisper|stub`,
-`-AppPath <exe>`, `-Conversation`, `-NoPause` (scripts: never wait for Enter).
+`-AppPath <exe>`, `-NoConversation`, `-NoPause` (scripts: never wait for Enter). The launcher turns conversation mode on by default (built-in spoken phrases and one waiting follow-up, contracts.md §5.4); `start.ps1` itself still defaults to off.
 
 This is **not** one-click packaging: it still needs this repository, `uv` and the synced
 dependencies above, because the Python core is started from the repository (decisions.md #3).
