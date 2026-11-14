@@ -18,15 +18,17 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from artemis.contracts import ApprovalResponse, TaskRequest
+from artemis.runner.local import NoInterpreter
 
 from .approvals import ApprovalNotFound, ApprovalStale
-from .session import Session, TaskActive, new_id
+from .session import HEARTBEAT_S, Session, TaskActive, new_id
 
 log = logging.getLogger(__name__)
 
 VERSION = "0.1.0"
 ALLOWED_ORIGINS = ["http://tauri.localhost", "http://127.0.0.1:1420"]
 PING_S = 15
+NO_INTERPRETER_RECOVERY = "Until then I can write files but not run them."
 
 
 class ListenBody(BaseModel):
@@ -60,7 +62,18 @@ class Guard(BaseHTTPMiddleware):
 class Core:
     """Everything the routes share. Built once per process by create_app."""
 
-    def __init__(self, *, voice, make_runner, make_agent, projects_dir: Path, scan=None, log_dir=None, vocabulary=None):
+    def __init__(
+        self,
+        *,
+        voice,
+        make_runner,
+        make_agent,
+        projects_dir: Path,
+        scan=None,
+        log_dir=None,
+        vocabulary=None,
+        heartbeat_s: float = HEARTBEAT_S,
+    ):
         self.voice = voice
         self.make_runner = make_runner
         self.make_agent = make_agent
@@ -71,6 +84,10 @@ class Core:
         self.sessions: dict[str, Session] = {}
         self.listen_lock = asyncio.Lock()
         self.watch_task: asyncio.Task | None = None
+        self.heartbeat_s = heartbeat_s
+        # Interpreter pre-check: probed once per process, then reused by every session.
+        self._interpreter_probe: asyncio.Task | None = None
+        self.background: set[asyncio.Task] = set()  # per-session checks, canceled at shutdown
 
     def new_session(self) -> Session:
         sid = new_id("ses")
@@ -83,9 +100,30 @@ class Core:
             scan=self.scan,
             log_dir=self.log_dir,
             on_project=self._on_project,
+            heartbeat_s=self.heartbeat_s,
         )
         self.sessions[sid] = session
         return session
+
+    async def check_interpreter(self, session: Session) -> None:
+        """Risk 7: say up front when there is no Python for user programs, instead of the
+        gateway's generic "Something went wrong with run_program" at the first run.
+
+        Only runners with a lazy `python` property (LocalRunner) are checked; FakeRunner has none.
+        Looked up on the class, because touching the property is the probe itself.
+        """
+        if not hasattr(type(session.runner), "python"):
+            return
+        if self._interpreter_probe is None:
+            self._interpreter_probe = asyncio.create_task(_probe_python(session.runner))
+        problem = await asyncio.shield(self._interpreter_probe)
+        if problem:
+            await session.error("no_interpreter", problem, NO_INTERPRETER_RECOVERY)
+
+    def spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self.background.add(task)
+        task.add_done_callback(self.background.discard)
 
     def _on_project(self, project) -> None:
         if self.vocabulary and self.voice:
@@ -142,10 +180,15 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         yield
         if core.watch_task:
             core.watch_task.cancel()
+        for task in [*core.background, core._interpreter_probe]:
+            if task and not task.done():
+                task.cancel()
         for s in core.sessions.values():
             for t in s.tasks.values():
                 if t.job and not t.job.done():
                     t.job.cancel()
+                if t.heartbeat and not t.heartbeat.done():
+                    t.heartbeat.cancel()
 
     app = FastAPI(title="Artemis core", version=VERSION, lifespan=lifespan)
     app.state.core = core
@@ -167,6 +210,9 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         session = core.new_session()
         voice_ready, screen_reader = core.voice_status()
         await session.voice_status(voice_ready, screen_reader)  # §5.3: at session start
+        # In the background, so a slow probe never delays the client; the error event (if any)
+        # still lands after voice.status and is replayed to a late SSE subscriber.
+        core.spawn(core.check_interpreter(session))
         return {"session_id": session.session_id}
 
     @app.get("/sessions/{sid}/events")
@@ -263,6 +309,18 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         return Response(status_code=204)
 
     return app
+
+
+async def _probe_python(runner) -> str | None:
+    """None if the runner found a Python, else the spoken NoInterpreter message. Off the loop:
+    `uv python find` and friends are subprocesses."""
+    try:
+        await asyncio.to_thread(lambda: runner.python)
+    except NoInterpreter as exc:
+        return str(exc)
+    except Exception:  # an odd failure here must not block sessions; a run will report it
+        log.exception("interpreter pre-check failed")
+    return None
 
 
 def mic_message(exc: Exception) -> str:

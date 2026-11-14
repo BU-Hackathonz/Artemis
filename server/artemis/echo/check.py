@@ -12,7 +12,7 @@ import os
 import re
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from pydantic import BaseModel
 
@@ -39,10 +39,13 @@ class EchoReport(BaseModel):
     title: str
     findings: list[Finding]
     outline: list[str]  # headings, landmarks and controls with their accessible names
+    # axe "incomplete": checks axe couldn't decide (e.g. text on a gradient or image), so a
+    # person has to look. Never reported as "no problems" (Jun's review of #21).
+    needs_review: list[Finding] = []
 
     @property
     def ok(self) -> bool:
-        return not self.findings
+        return not self.findings and not self.needs_review
 
 
 def resolve_target(url_or_file: str) -> str:
@@ -54,7 +57,8 @@ def resolve_target(url_or_file: str) -> str:
             raise EchoError("Echo Check only opens pages on this computer, not on the internet.")
         return text
     if parsed.scheme == "file":
-        path = Path(parsed.path.lstrip("/") if os.name == "nt" else parsed.path)
+        raw = unquote(parsed.path)  # file:///C:/My%20Pages/x.html -> C:/My Pages/x.html
+        path = Path(raw.lstrip("/") if os.name == "nt" else raw)
     elif parsed.scheme and len(parsed.scheme) > 1:  # "C:" parses as a one-letter scheme
         raise EchoError(f"Echo Check can't open {parsed.scheme} links.")
     else:
@@ -150,9 +154,28 @@ def _plain(f: Finding) -> str:
     return text
 
 
+# What a person should check when axe couldn't decide.
+_REVIEW = {
+    "color-contrast": "whether text over a gradient or image has enough contrast",
+    "color-contrast-enhanced": "whether text over a gradient or image has enough contrast",
+}
+
+
+def _review_sentence(report: EchoReport) -> str:
+    n = len(report.needs_review)
+    if not n:
+        return ""
+    what = "; ".join(_REVIEW.get(f.rule) or f"the {f.rule} rule" for f in report.needs_review[:2])
+    noun = "thing needs" if n == 1 else "things need"
+    return f"{n} {noun} a manual check, because axe couldn't decide: {what}."
+
+
 def speak_report(report: EchoReport, top: int = 3) -> str:
     """One short spoken summary: total, counts by impact, then the worst few in plain words."""
+    review = _review_sentence(report)
     if not report.findings:
+        if review:
+            return f"Echo Check found no definite problems on {report.title or 'the page'}, but {review}"
         return f"Echo Check found no problems on {report.title or 'the page'}."
     n = len(report.findings)
     counts = {i: sum(1 for f in report.findings if f.impact == i) for i in IMPACT_ORDER}
@@ -160,7 +183,8 @@ def speak_report(report: EchoReport, top: int = 3) -> str:
     worst = "; ".join(f"{f.impact.capitalize()}: {_plain(f)}" for f in report.findings[:top])
     more = f" And {n - top} more in the log." if n > top else ""
     noun = "problem" if n == 1 else "problems"
-    return f"Echo Check found {n} {noun}: {by_impact}. {worst}.{more}"
+    tail = f" Also, {review}" if review else ""
+    return f"Echo Check found {n} {noun}: {by_impact}. {worst}.{more}{tail}"
 
 
 def compare(before: EchoReport, after: EchoReport) -> str:
@@ -168,6 +192,8 @@ def compare(before: EchoReport, after: EchoReport) -> str:
     fixed = {f.rule for f in before.findings} - {f.rule for f in after.findings}
     new = {f.rule for f in after.findings} - {f.rule for f in before.findings}
     parts = [f"Before: {len(before.findings)} problems. After: {len(after.findings)}."]
+    if after.needs_review:
+        parts.append(f"{len(after.needs_review)} still need a manual check.")
     if fixed:
         parts.append(f"Fixed: {', '.join(_PLAIN.get(r, r) for r in sorted(fixed))}.")
     if new:
@@ -176,6 +202,16 @@ def compare(before: EchoReport, after: EchoReport) -> str:
 
 
 # ----- the browser part -----
+
+
+# No DNS prefetch and no WebRTC to the network: neither goes through Playwright's request routing.
+_BROWSER_ARGS = ["--dns-prefetch-disable", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+
+
+async def _block_socket(ws) -> None:
+    """Every WebSocket is answered here and closed; it never reaches any server (Jun's review of
+    #21: an allowed http page opened a socket to [::1], which request routing doesn't see)."""
+    await ws.close()
 
 
 async def _launch(p):
@@ -187,7 +223,7 @@ async def _launch(p):
     last: Exception | None = None
     for kwargs in attempts:
         try:
-            return await p.chromium.launch(headless=True, **kwargs)
+            return await p.chromium.launch(headless=True, args=_BROWSER_ARGS, **kwargs)
         except Exception as exc:  # each missing browser raises; try the next one
             last = exc
     raise EchoError(
@@ -205,7 +241,12 @@ async def echo_check(url_or_file: str, timeout_s: float = 15) -> EchoReport:
     async with async_playwright() as p:
         browser = await _launch(p)
         try:
-            context = await browser.new_context(java_script_enabled=True, offline=url.startswith("file:"))
+            context = await browser.new_context(
+                java_script_enabled=True,
+                offline=url.startswith("file:"),
+                service_workers="block",  # a worker could fetch outside the page's routing
+            )
+            await context.route_web_socket(re.compile(".*"), _block_socket)
 
             async def only_local(route):
                 target = urlparse(route.request.url)
@@ -221,9 +262,10 @@ async def echo_check(url_or_file: str, timeout_s: float = 15) -> EchoReport:
             snapshot = await page.locator("body").aria_snapshot(timeout=timeout_s * 1000)
             await page.add_script_tag(content=AXE_JS.read_text(encoding="utf-8"))
             result = await page.evaluate(
-                "async () => { const r = await axe.run(document, {resultTypes: ['violations']});"
-                " return r.violations.map(v => ({id: v.id, impact: v.impact, help: v.help,"
-                " description: v.description, nodes: v.nodes.map(n => ({target: n.target}))})); }"
+                "async () => { const r = await axe.run(document, {resultTypes: ['violations', 'incomplete']});"
+                " const pick = v => ({id: v.id, impact: v.impact, help: v.help,"
+                " description: v.description, nodes: v.nodes.map(n => ({target: n.target}))});"
+                " return {violations: r.violations.map(pick), incomplete: r.incomplete.map(pick)}; }"
             )
         finally:
             await browser.close()
@@ -231,6 +273,7 @@ async def echo_check(url_or_file: str, timeout_s: float = 15) -> EchoReport:
     return EchoReport(
         url=url,
         title=title,
-        findings=findings_from_axe(result),
+        findings=findings_from_axe(result["violations"]),
         outline=outline_from_snapshot(snapshot),
+        needs_review=findings_from_axe(result["incomplete"]),
     )

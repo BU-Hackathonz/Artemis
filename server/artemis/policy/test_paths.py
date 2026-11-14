@@ -15,10 +15,6 @@ from artemis.policy.paths import (
 )
 
 
-# A backslash is a path separator only on Windows, which is the only place Artemis runs.
-windows_only = pytest.mark.skipif(sys.platform != "win32", reason="backslash separators are Windows-only")
-
-
 @pytest.fixture
 def root(tmp_path):
     project = tmp_path / "proj"
@@ -36,12 +32,17 @@ def test_happy_path(root):
     assert safe_resolve(root, "main.py") == root.resolve() / "main.py"
 
 
+WINDOWS_ONLY = pytest.mark.skipif(
+    sys.platform != "win32", reason="a backslash is only a path separator on Windows"
+)
+
+
 def test_nested_folders(root):
     assert safe_resolve(root, "src/pkg/mod.py") == root.resolve() / "src" / "pkg" / "mod.py"
 
 
-@windows_only
-def test_nested_folders_with_backslashes(root):
+@WINDOWS_ONLY
+def test_nested_folders_backslash(root):
     assert safe_resolve(root, "src\\pkg\\mod.py") == root.resolve() / "src" / "pkg" / "mod.py"
 
 
@@ -75,7 +76,8 @@ def test_extended_prefix(root, rel):
 
 
 @pytest.mark.parametrize(
-    "rel", ["../x.py", pytest.param("..\\x.py", marks=windows_only), "a/../../x.py", "a/b/../../../x.py"]
+    "rel",
+    ["../x.py", pytest.param("..\\x.py", marks=WINDOWS_ONLY), "a/../../x.py", "a/b/../../../x.py"],
 )
 def test_dotdot_escape(root, rel):
     assert "outside the project" in rejected(root, rel)
