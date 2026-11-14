@@ -202,3 +202,32 @@ test('manual blocked demo exposes the native-hardware test without a backend', a
   await expect(page.getByRole('log')).toContainText('No files were written and no code was run.');
   await expect(input).toBeFocused();
 });
+
+test('request entry gains focus, Enter sends and Shift+Enter adds a line', async ({page}) => {
+  await page.goto('/');
+  await expect(page.getByLabel('Core address')).toBeFocused();
+  await page.getByRole('button',{name:'Try in-memory demo',exact:true}).click();
+  const input = page.getByLabel('What would you like to build?');
+  await expect(input).toBeFocused();
+  await input.fill('hello');
+  await page.keyboard.press('Shift+Enter');
+  await page.keyboard.type('world');
+  await expect(input).toHaveValue('hello\nworld');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button',{name:'Reject',exact:true})).toBeFocused();
+  // Window activation must preserve a review dialog and intentionally focused controls.
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(dialog.getByRole('button',{name:'Reject',exact:true})).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(input).toBeFocused();
+  await input.evaluate(element => element.blur());
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(input).toBeFocused();
+  const cancel = page.getByRole('button',{name:'Disconnect and reset',exact:true});
+  await cancel.focus();
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(cancel).toBeFocused();
+});
