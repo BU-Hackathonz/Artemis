@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="no-js">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,11 +9,13 @@
 <meta name="description" content="How Artemis works with screen readers, keeps you in control of every change, and what data leaves your computer.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
+<script src="motion.js" defer></script>
 </head>
 <body>
+<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header">
-  <a class="brand" href="index.html" aria-label="artemis, home">artemis<span class="dot">.</span></a>
+<header class="site-header glass">
+  <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
   <nav class="site-nav" aria-label="Main">
     <ul>
       <li><a href="index.html">Home</a></li>
@@ -31,7 +33,7 @@
     <p class="lede">Artemis is designed around a screen reader, and around one rule: the developer decides every change.</p>
   </div>
 
-  <section class="block prose" aria-labelledby="a11y-title">
+  <section class="block panel glass prose" aria-labelledby="a11y-title">
     <h2 id="a11y-title">Built for screen readers</h2>
     <ul>
       <li><strong>Your voice, not a second one.</strong> When NVDA is running, Artemis speaks through it, in your voice and at your speed, and sends the same text to your braille display. Without NVDA it uses the Windows voice. It never uses both at once.</li>
@@ -42,7 +44,7 @@
     </ul>
   </section>
 
-  <section class="block prose" aria-labelledby="control-title">
+  <section class="block panel glass prose" aria-labelledby="control-title">
     <h2 id="control-title">You approve every change</h2>
     <ul>
       <li><strong>Exact approvals.</strong> An approval covers one exact edit or one exact run. If the files change before you decide, it is cancelled and asked again.</li>
@@ -53,7 +55,7 @@
     </ul>
   </section>
 
-  <section class="block prose" aria-labelledby="data-title">
+  <section class="block panel glass prose" aria-labelledby="data-title">
     <h2 id="data-title">Your data</h2>
     <ul>
       <li><strong>Speech stays on your computer.</strong> Recognition runs locally. Audio is held in memory only while you speak and is discarded after transcription. It is never saved or uploaded.</li>
@@ -63,7 +65,7 @@
     </ul>
   </section>
 
-  <section class="block prose" aria-labelledby="limits-title">
+  <section class="block panel glass prose" aria-labelledby="limits-title">
     <h2 id="limits-title">Known limits</h2>
     <ul>
       <li>Programs run with approval, a static scan, a time limit and a minimal environment. That is gated and limited, but it is not an operating-system sandbox.</li>
@@ -74,8 +76,9 @@
 </main>
 
 <footer class="site-footer">
-  <p>artemis<span class="dot">.</span> Built at HackUMass 2026.</p>
+  <p>artemis. Built at HackUMass 2026.</p>
   <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
 </footer>
+<button class="pause glass" type="button" aria-pressed="false">Pause motion</button>
 </body>
 </html>

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="no-js">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,11 +9,13 @@
 <meta name="description" content="Artemis is a voice-first development environment for blind developers. Speak or type a request, approve every change by keyboard, and hear the result.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
+<script src="motion.js" defer></script>
 </head>
 <body>
+<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header">
-  <a class="brand" href="index.html" aria-label="artemis, home">artemis<span class="dot">.</span></a>
+<header class="site-header glass">
+  <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
   <nav class="site-nav" aria-label="Main">
     <ul>
       <li><a href="index.html" aria-current="page">Home</a></li>
@@ -27,64 +29,71 @@
 
 <main id="main">
   <section class="hero" aria-labelledby="hero-title">
-    <h1 id="hero-title" class="wordmark">artemis<span class="dot">.</span></h1>
-    <p class="lede">A development environment you run by voice, keyboard and screen reader. Built for blind developers, so no step needs sighted help.</p>
+    <h1 id="hero-title" class="wordmark">artemis.</h1>
+    <p class="lede">Write, run and debug code with your voice and your screen reader. No sighted help needed.</p>
     <div class="actions">
-      <a class="button" href="get-started.html">Get started</a>
-      <a href="how-it-works.html">See how a request flows</a>
+      <a class="button button-solid" href="get-started.html">Get started</a>
+      <a class="button button-glass glass" href="how-it-works.html">See how a request flows</a>
+    </div>
+    <div class="marquees" aria-hidden="true">
+      <div class="track"></div>
+      <div class="track"></div>
     </div>
   </section>
 
-  <section class="block" aria-labelledby="log-title">
-    <h2 id="log-title">What a first request sounds like</h2>
-    <dl class="log">
-      <dt class="you">You say</dt>
-      <dd>Artemis, create a Python program that prints Hello World.</dd>
-      <dt>Artemis says</dt>
-      <dd>Heard: create a Python program that prints Hello World.</dd>
-      <dt>Artemis says</dt>
-      <dd>Create project hello-world with one file, main.py, 1 line. Press Enter to approve, Escape to reject.</dd>
-      <dt class="you">You press</dt>
-      <dd><span class="key">Enter</span></dd>
-      <dt>Artemis says</dt>
-      <dd>Run main.py with Python. No security findings. Enter to run.</dd>
-      <dt class="you">You press</dt>
-      <dd><span class="key">Enter</span></dd>
-      <dt>Artemis says</dt>
-      <dd>main.py ran successfully. It printed: Hello, World!</dd>
+  <section class="block" aria-labelledby="principles-title">
+    <h2 id="principles-title" class="visually-hidden">What Artemis promises</h2>
+    <dl class="bento">
+      <div class="glass">
+        <dt>Every change waits for you</dt>
+        <dd>Artemis speaks a summary built from the real edit, and the full diff is ready to step through. Enter approves. Escape rejects. A spoken "yes" never approves anything, and if the files change first, it asks again.</dd>
+      </div>
+      <div class="glass">
+        <dt>Your voice, not a second one</dt>
+        <dd>Speaks through NVDA when it runs, in your voice and speed, and sends the same line to your braille display.</dd>
+      </div>
+      <div class="glass">
+        <dt>Hear the real result</dt>
+        <dd>Runs are real. Failures say the exit code and the first error line, word for word, before any explanation.</dd>
+      </div>
     </dl>
-    <p class="log-caption">Every line is spoken in your own NVDA voice and kept in a log you can review, replay or read in braille.</p>
   </section>
 
-  <section class="block" aria-labelledby="principles-title">
-    <h2 id="principles-title">Three promises</h2>
-    <dl class="principles">
-      <div>
-        <dt>Speak or type</dt>
-        <dd>Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> and talk, or type the same request. Artemis reads back what it heard before anything starts, and you can correct it.</dd>
-      </div>
-      <div>
-        <dt>Approve every change</dt>
-        <dd>Nothing is written or run until you press Enter on the exact change. If the files change underneath, the approval is cancelled and asked again.</dd>
-      </div>
-      <div>
-        <dt>Hear the real result</dt>
-        <dd>Runs are real. Failures are spoken first, with the exit code and the first error line word for word, before any explanation.</dd>
-      </div>
-    </dl>
+  <section class="block" aria-labelledby="log-title">
+    <div class="panel glass">
+      <h2 id="log-title">What a first request sounds like</h2>
+      <dl class="log spaced">
+        <dt class="you">You say</dt>
+        <dd>Artemis, create a Python program that prints Hello World.</dd>
+        <dt>Artemis says</dt>
+        <dd>Heard: create a Python program that prints Hello World.</dd>
+        <dt>Artemis says</dt>
+        <dd>Create project hello-world with one file, main.py, 1 line. Press Enter to approve, Escape to reject.</dd>
+        <dt class="you">You press</dt>
+        <dd>Enter</dd>
+        <dt>Artemis says</dt>
+        <dd>Run main.py with Python. No security findings. Enter to run.</dd>
+        <dt class="you">You press</dt>
+        <dd>Enter</dd>
+        <dt>Artemis says</dt>
+        <dd>main.py ran successfully. It printed: Hello, World!</dd>
+      </dl>
+      <p class="log-caption">Every line is spoken and kept in a log you can review, replay or read in braille.</p>
+    </div>
   </section>
 
   <section class="block" aria-labelledby="status-title">
-    <h2 id="status-title">Where Artemis is today</h2>
-    <div class="status prose">
-      <p>Artemis is being built at HackUMass 2026. Voice input and spoken output, the approval rules, the coding agent and the desktop app each work on their own. The core that joins them into one live run is in progress, so the desktop app's demo mode is simulated for now and says so.</p>
+    <div class="panel glass prose">
+      <h2 id="status-title">Where Artemis is today</h2>
+      <p class="status spaced">Artemis is being built at HackUMass 2026. Voice input and spoken output, the approval rules, the coding agent and the desktop app each work on their own. The core that joins them into one live run is in progress, so the desktop app's demo mode is simulated for now and says so.</p>
     </div>
   </section>
 </main>
 
 <footer class="site-footer">
-  <p>artemis<span class="dot">.</span> Built at HackUMass 2026.</p>
+  <p>artemis. Built at HackUMass 2026.</p>
   <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
 </footer>
+<button class="pause glass" type="button" aria-pressed="false">Pause motion</button>
 </body>
 </html>

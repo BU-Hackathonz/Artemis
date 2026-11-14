@@ -1,4 +1,5 @@
-/* artemis. landing site. Static, no scripts, no tracking. */
+/* artemis. landing site, "Velocity" design: black, a slow purple gradient, liquid glass panels.
+   One small script (motion.js) runs the home marquee and the Pause motion button. No tracking. */
 
 @font-face {
   font-family: "Atkinson Next";
@@ -16,9 +17,8 @@
 :root {
   --black: #000000;
   --ink: #f3f0fa;      /* 18.7:1 on black */
-  --muted: #aba3bc;    /* 8.7:1 on black */
-  --iris: #b794ff;     /* 8.7:1 on black: links, focus, the brand period */
-  --rule: #2b2340;
+  --muted: #c9c2d6;    /* over the gradient and glass it stays above 7:1 */
+  --iris: #b794ff;     /* the artemis. colour: logo, links, focus */
   --measure: 66ch;
   --gutter: clamp(1.25rem, 5vw, 4rem);
   --sans: "Atkinson Next", system-ui, sans-serif;
@@ -28,16 +28,15 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Black lives on the root only, so the gradient layer (z-index -1) shows through the body. */
 html { background: var(--black); }
 body {
   margin: 0;
-  background: var(--black);
   color: var(--ink);
   font: 400 1.125rem/1.6 var(--sans);
   -webkit-text-size-adjust: 100%;
 }
 
-/* Type scale, ratio 4:3 from 18px */
 h1, h2, h3 { font-weight: 800; line-height: 1.15; margin: 0; text-wrap: balance; }
 h1 { font-size: clamp(2.25rem, 5vw, 3.5rem); letter-spacing: -0.02em; }
 h2 { font-size: clamp(1.75rem, 3.4vw, 2.375rem); letter-spacing: -0.01em; }
@@ -48,188 +47,154 @@ strong { font-weight: 700; }
 
 a { color: var(--iris); text-underline-offset: 0.18em; text-decoration-thickness: 0.08em; }
 a:hover { text-decoration-thickness: 0.16em; }
-
-:focus-visible {
-  outline: 3px solid var(--iris);
-  outline-offset: 4px;
-  border-radius: 2px;
-}
+:focus-visible { outline: 3px solid var(--iris); outline-offset: 4px; border-radius: 4px; }
 
 code, pre, kbd { font-family: var(--mono); font-size: 0.95em; }
-kbd {
-  border: 1px solid var(--muted);
-  border-radius: 4px;
-  padding: 0 0.3em;
-  white-space: nowrap;
-}
+kbd { border: 1px solid var(--muted); border-radius: 6px; padding: 0 0.3em; white-space: nowrap; }
 
-.visually-hidden {
-  position: absolute; width: 1px; height: 1px; overflow: hidden;
-  clip-path: inset(50%); white-space: nowrap;
-}
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-.skip {
-  position: absolute;
-  left: var(--gutter);
-  top: -4rem;
-  background: var(--iris);
-  color: var(--black);
-  padding: 0.5rem 1rem;
-  font-weight: 700;
-  z-index: 10;
-}
+.skip { position: absolute; left: var(--gutter); top: -4rem; background: var(--iris); color: var(--black); padding: 0.5rem 1rem; font-weight: 700; z-index: 20; border-radius: 999px; }
 .skip:focus { top: 1rem; }
+
+/* Animated gradient: three slow, blurred purple fields. Decorative. */
+.bg { position: fixed; inset: 0; overflow: hidden; z-index: -1; pointer-events: none; }
+.bg i { position: absolute; width: 60vmax; height: 60vmax; border-radius: 50%; filter: blur(60px); }
+.bg i:nth-child(1) { background: #6d28d9; opacity: .5; left: -18vmax; top: -22vmax; animation: drift-a 22s ease-in-out infinite alternate; }
+.bg i:nth-child(2) { background: #a78bfa; opacity: .22; right: -26vmax; top: 12vmax; animation: drift-b 28s ease-in-out infinite alternate; }
+.bg i:nth-child(3) { background: #312e81; opacity: .55; left: 18vmax; bottom: -36vmax; animation: drift-a 34s ease-in-out infinite alternate-reverse; }
+@keyframes drift-a { to { transform: translate(18vmax, 12vmax) scale(1.15); } }
+@keyframes drift-b { to { transform: translate(-14vmax, 16vmax) scale(.9); } }
+.motion-paused .bg i { animation-play-state: paused; }
+
+/* Liquid glass */
+.glass {
+  background: linear-gradient(150deg, rgba(255,255,255,.12), rgba(255,255,255,.03));
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  border: 1px solid rgba(255,255,255,.2);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.4), inset 0 0 30px rgba(183,148,255,.08), 0 30px 80px rgba(0,0,0,.5);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass { background: rgba(28, 20, 48, .92); }
+}
 
 /* Header */
 .site-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem 2rem;
-  padding: 1.5rem var(--gutter);
-  border-bottom: 1px solid var(--rule);
+  position: sticky; top: 0; z-index: 10;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 0.75rem 2rem;
+  padding: 1rem var(--gutter);
+  border-width: 0 0 1px; border-radius: 0;
 }
-.brand {
-  color: var(--ink);
-  text-decoration: none;
-  font-weight: 800;
-  font-size: 1.5rem;
-  letter-spacing: -0.03em;
-}
-.dot { color: var(--iris); }
-.site-nav ul {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 1.5rem;
-}
+.brand { color: var(--iris); text-decoration: none; font-weight: 800; font-size: 1.5rem; letter-spacing: -0.03em; }
+.dot { color: inherit; }
+.site-nav ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.25rem 1.5rem; }
 .site-nav a { color: var(--ink); text-decoration: none; padding: 0.25rem 0; }
 .site-nav a:hover { color: var(--iris); }
-.site-nav a[aria-current="page"] {
-  color: var(--iris);
-  text-decoration: underline;
-  text-decoration-thickness: 0.12em;
-}
+.site-nav a[aria-current="page"] { color: var(--iris); text-decoration: underline; text-decoration-thickness: 0.12em; }
 
 /* Page body */
 main { padding: 0 var(--gutter); }
 .page-head { padding: clamp(3rem, 8vw, 6rem) 0 2.5rem; max-width: var(--measure); }
-.lede { font-size: 1.333rem; color: var(--ink); margin-top: 1.25rem; }
-.block { padding: 3rem 0; border-top: 1px solid var(--rule); }
-.block > h2 { margin-bottom: 1.25rem; }
+.lede { font-size: 1.333rem; margin-top: 1.25rem; }
+.block { padding: 3rem 0; }
+.block > h2 { margin-bottom: 1.5rem; }
+.panel { border-radius: 32px; padding: clamp(1.5rem, 4vw, 2.5rem); max-width: 60rem; }
 .prose { max-width: var(--measure); }
+.panel.prose { max-width: calc(var(--measure) + 5rem); }
 .prose h3 { margin: 2rem 0 0.5rem; }
 .prose ul, .prose ol { padding-left: 1.25em; }
-.prose li + li { margin-top: 0.5em; }
+.prose li + li { margin-top: 0.6em; }
 .muted { color: var(--muted); }
 
-/* Home hero: the wordmark is the headline */
-.hero { padding: clamp(3rem, 9vw, 7rem) 0 3rem; }
-.wordmark {
-  font-size: clamp(4.5rem, 17vw, 12.5rem);
-  line-height: 0.9;
-  letter-spacing: -0.055em;
-  font-weight: 800;
-  margin-left: -0.04em;
-}
-.hero .lede { max-width: 34ch; font-size: clamp(1.333rem, 2.6vw, 1.777rem); line-height: 1.4; margin-top: 2rem; }
-.actions { display: flex; flex-wrap: wrap; gap: 1rem 1.5rem; align-items: center; margin-top: 2.5rem; }
-.button {
-  display: inline-block;
-  background: var(--iris);
-  color: var(--black);
-  font-weight: 700;
-  text-decoration: none;
-  padding: 0.75rem 1.4rem;
-  border-radius: 999px;
-}
-.button:hover { background: var(--ink); }
+/* Home hero */
+.hero { padding: clamp(4rem, 10vw, 8rem) 0 2.5rem; }
+.wordmark { color: var(--iris); font-size: clamp(4.5rem, 16vw, 11.5rem); line-height: 0.88; letter-spacing: -0.055em; font-weight: 800; margin-left: -0.04em; }
+.hero .lede { max-width: 34ch; font-size: clamp(1.333rem, 2.6vw, 1.7rem); line-height: 1.4; margin-top: 1.75rem; }
+.actions { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 2.25rem; }
+.button { display: inline-block; border-radius: 999px; padding: 0.8rem 1.5rem; font-weight: 700; text-decoration: none; }
+.button-solid { background: var(--iris); color: var(--black); }
+.button-solid:hover { background: var(--ink); }
+.button-glass { color: var(--ink); }
 
-/* The spoken log: Artemis's own event log, set like a caption track */
-.log {
-  font-family: var(--mono);
-  font-size: 1rem;
-  line-height: 1.55;
-  max-width: 62rem;
-  margin: 0;
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0.9rem 2rem;
-}
+/* Scroll-speed marquee of spoken lines (decorative copy of the log below it) */
+.marquees { margin: 1rem calc(var(--gutter) * -1) 0; padding: 1.5rem 0; display: grid; gap: 1rem; overflow: hidden; }
+.track { display: flex; gap: 1rem; width: max-content; will-change: transform; }
+.chip { border-radius: 999px; padding: 0.7rem 1.4rem; font-family: var(--mono); font-size: 1rem; white-space: nowrap; }
+.chip b { color: var(--iris); font-weight: 600; }
+.no-js .marquees { display: none; }
+
+/* The spoken log, as real text */
+.log { font-family: var(--mono); font-size: 1rem; line-height: 1.55; display: grid; grid-template-columns: max-content 1fr; gap: 0.9rem 2rem; }
 .log dt { color: var(--muted); }
 .log dt.you { color: var(--iris); }
 .log dd { margin: 0; }
-.log .key { color: var(--muted); }
 .log-caption { color: var(--muted); margin-top: 1.5rem; max-width: var(--measure); }
 
-@media (prefers-reduced-motion: no-preference) {
-  .log > * { animation: speak 0.5s ease-out both; }
-  .log > :nth-child(1), .log > :nth-child(2) { animation-delay: 0.2s; }
-  .log > :nth-child(3), .log > :nth-child(4) { animation-delay: 0.9s; }
-  .log > :nth-child(5), .log > :nth-child(6) { animation-delay: 1.6s; }
-  .log > :nth-child(7), .log > :nth-child(8) { animation-delay: 2.3s; }
-  .log > :nth-child(9), .log > :nth-child(10) { animation-delay: 3s; }
-  .log > :nth-child(11), .log > :nth-child(12) { animation-delay: 3.7s; }
-  .log > :nth-child(13), .log > :nth-child(14) { animation-delay: 4.4s; }
-}
-@keyframes speak { from { opacity: 0; } to { opacity: 1; } }
-
-/* Three short principles on the home page, as a plain definition list */
-.principles { display: grid; gap: 2rem 3rem; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); max-width: 72rem; }
-.principles dt { font-weight: 800; font-size: 1.333rem; }
-.principles dd { margin: 0.5rem 0 0; color: var(--muted); }
+/* Home principles: a bento of glass panels */
+.bento { display: grid; gap: 1.25rem; grid-template-columns: 1.4fr 1fr; max-width: 74rem; }
+.bento > div { border-radius: 32px; padding: 2rem; }
+.bento > div:first-child { grid-row: span 2; }
+.bento dt { font-weight: 800; font-size: 1.6rem; }
+.bento > div:first-child dt { font-size: 2.1rem; }
+.bento dd { margin: 0.6rem 0 0; color: var(--muted); }
 
 /* How it works: a real sequence, so it is numbered */
-.steps { list-style: none; padding: 0; counter-reset: step; max-width: var(--measure); }
-.steps li { counter-increment: step; display: grid; grid-template-columns: 2.5rem 1fr; gap: 0 1rem; padding: 1.25rem 0; border-top: 1px solid var(--rule); }
-.steps li:first-child { border-top: 0; }
-.steps li::before { content: counter(step); font-weight: 800; font-size: 1.333rem; color: var(--iris); line-height: 1.3; }
+.steps { list-style: none; padding: 0; counter-reset: step; display: grid; gap: 1rem; max-width: 52rem; }
+.steps li { counter-increment: step; display: grid; grid-template-columns: 2.75rem 1fr; gap: 0 1rem; padding: 1.25rem 1.5rem; border-radius: 24px; }
+.steps li::before { content: counter(step); font-weight: 800; font-size: 1.5rem; color: var(--iris); line-height: 1.25; }
 .steps strong { display: block; font-size: 1.15rem; }
 
-.parts { display: grid; grid-template-columns: max-content 1fr; gap: 1rem 2rem; max-width: 60rem; }
+.parts { display: grid; grid-template-columns: max-content 1fr; gap: 1rem 2rem; }
 .parts dt { font-weight: 700; }
 .parts dd { margin: 0; color: var(--muted); }
 
 pre {
-  background: #000;
-  border: 1px solid var(--rule);
+  background: rgba(0,0,0,.55);
+  border: 1px solid rgba(255,255,255,.18);
   border-left: 3px solid var(--iris);
+  border-radius: 14px;
   padding: 1rem 1.25rem;
   overflow-x: auto;
   line-height: 1.5;
   margin: 0.75rem 0 1.5rem;
-  max-width: var(--measure);
 }
 
-.status {
-  border-left: 3px solid var(--iris);
-  padding: 0.25rem 0 0.25rem 1.25rem;
-  max-width: var(--measure);
-}
+.status { border-left: 3px solid var(--iris); padding: 0.25rem 0 0.25rem 1.25rem; }
 
-.team { list-style: none; padding: 0; display: grid; gap: 2rem 3rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); max-width: 64rem; }
-.team h3 { font-size: 1.5rem; }
+/* Team */
+.team { list-style: none; padding: 0; display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); max-width: 72rem; }
+.team li { border-radius: 32px; padding: 2rem 1.5rem; text-align: center; }
+.team img, .team .initial { width: 8rem; height: 8rem; border-radius: 50%; object-fit: cover; border: 2px solid rgba(183,148,255,.65); display: block; margin: 0 auto 1rem; }
+.team .initial { display: grid; place-items: center; font-size: 3rem; font-weight: 800; color: var(--iris); background: rgba(183,148,255,.1); }
+.team h3 { font-size: 1.45rem; }
 .team p { color: var(--muted); margin-top: 0.4rem; }
 
-.site-footer {
-  margin-top: 4rem;
-  padding: 2rem var(--gutter) 3rem;
-  border-top: 1px solid var(--rule);
-  color: var(--muted);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 2rem;
-  justify-content: space-between;
-}
+/* Pause motion button and footer */
+.pause { position: fixed; right: 1rem; bottom: 1rem; z-index: 15; border-radius: 999px; padding: 0.6rem 1.15rem; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
+.no-js .pause { display: none; }
+.site-footer { margin-top: 4rem; padding: 2rem var(--gutter) 5rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; justify-content: space-between; }
 
+@media (max-width: 48rem) {
+  .bento { grid-template-columns: 1fr; }
+  .bento > div:first-child { grid-row: auto; }
+}
 @media (max-width: 40rem) {
   .log, .parts { grid-template-columns: 1fr; gap: 0.15rem; }
   .log dd, .parts dd { margin-bottom: 0.9rem; }
 }
-
-@media (forced-colors: active) {
-  .button { border: 2px solid ButtonText; }
-  .dot { color: LinkText; }
+@media (prefers-reduced-motion: reduce) {
+  .bg i { animation: none; }
 }
+@media (forced-colors: active) {
+  .glass { border: 1px solid CanvasText; }
+  .button-solid { border: 2px solid ButtonText; }
+}
+
+.spaced { margin-top: 1.5rem; }
+.block.panel { margin: 0 0 1.5rem; }
+.parts.panel { max-width: 60rem; }
+/* Darker glass behind the header so the purple logo keeps contrast over the gradient */
+.site-header.glass { background: linear-gradient(150deg, rgba(12,8,24,.78), rgba(12,8,24,.62)); }
+@media (max-width: 40rem) { .site-header { position: static; } }
