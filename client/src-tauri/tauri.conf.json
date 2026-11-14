@@ -22,9 +22,9 @@
       {
         "label": "agent",
         "url": "index.html#agent",
-        "title": "Artemis agent",
-        "width": 168,
-        "height": 168,
+        "title": "Artemis island",
+        "width": 208,
+        "height": 56,
         "resizable": false,
         "decorations": false,
         "transparent": true,

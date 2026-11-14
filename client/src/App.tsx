@@ -188,7 +188,7 @@ export function App() {
         </>}
         {platform.native && <div className="agent-settings">
           <label className="check"><input type="checkbox" checked={showAgent} onChange={e => setShowAgent(e.target.checked)}/> Show the Artemis agent on the desktop</label>
-          <button type="button" disabled={!showAgent} onClick={() => void platform.agent.resetPosition().catch(() => {})}>Move the agent back to the corner</button>
+          <button type="button" disabled={!showAgent} onClick={() => void platform.agent.resetPosition().catch(() => {})}>Move the agent back to the top</button>
         </div>}
       </section>
       {error && <p role="alert">{error}</p>}
