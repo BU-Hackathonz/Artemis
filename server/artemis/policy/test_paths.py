@@ -32,8 +32,17 @@ def test_happy_path(root):
     assert safe_resolve(root, "main.py") == root.resolve() / "main.py"
 
 
+WINDOWS_ONLY = pytest.mark.skipif(
+    sys.platform != "win32", reason="a backslash is only a path separator on Windows"
+)
+
+
 def test_nested_folders(root):
     assert safe_resolve(root, "src/pkg/mod.py") == root.resolve() / "src" / "pkg" / "mod.py"
+
+
+@WINDOWS_ONLY
+def test_nested_folders_backslash(root):
     assert safe_resolve(root, "src\\pkg\\mod.py") == root.resolve() / "src" / "pkg" / "mod.py"
 
 
@@ -66,7 +75,10 @@ def test_extended_prefix(root, rel):
     assert "prefix" in rejected(root, rel)
 
 
-@pytest.mark.parametrize("rel", ["../x.py", "..\\x.py", "a/../../x.py", "a/b/../../../x.py"])
+@pytest.mark.parametrize(
+    "rel",
+    ["../x.py", pytest.param("..\\x.py", marks=WINDOWS_ONLY), "a/../../x.py", "a/b/../../../x.py"],
+)
 def test_dotdot_escape(root, rel):
     assert "outside the project" in rejected(root, rel)
 
