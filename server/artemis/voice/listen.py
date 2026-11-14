@@ -14,6 +14,8 @@ Settings (environment):
   after release (people let go of the key while still saying the last word), closes, and only then plays
   "stopped", so that beep is never transcribed either.
 - ARTEMIS_WHISPER_PROMPT: unset (default) is the word-list prompt; natural is the spoken-style lead (text.py).
+- ARTEMIS_WORKING_CUE: unset (default) keeps the core's spoken "Still working."; earcon plays a soft
+  "working" tick instead (working_cue, contracts.md 3.3), only when a voice can speak and never into the mic.
 A beam above 1, a post-roll and the natural prompt are opt-in: switch them on for the stage only after
 docs/demo.md row 3 (the demo sentence, word for word) passes with them on, on the demo laptop.
 
@@ -90,6 +92,11 @@ def whisper_natural_prompt() -> bool:
     return os.environ.get("ARTEMIS_WHISPER_PROMPT", "").strip().lower() == "natural"
 
 
+def working_earcon_on() -> bool:
+    """ARTEMIS_WORKING_CUE=earcon swaps the spoken "Still working." for a soft tick; anything else keeps the line."""
+    return os.environ.get("ARTEMIS_WORKING_CUE", "").strip().lower() == "earcon"
+
+
 def loudest_rms(audio: np.ndarray) -> float:
     """RMS of the loudest 100 ms window."""
     n = len(audio) // WINDOW
@@ -119,12 +126,13 @@ def _input_stream(callback):
 class WhisperVoice:
     def __init__(self, announcer: Announcer | None = None, model_name: str | None = None, model=None, stream_factory=None,
                  earcon=earcons.play, beam_size: int | None = None, post_roll: float | None = None,
-                 natural_prompt: bool | None = None) -> None:
+                 natural_prompt: bool | None = None, working_earcon: bool | None = None) -> None:
         self.announcer = announcer or Announcer()
         self.model_name = model_name or whisper_model()
         self.beam_size = beam_size or whisper_beam()
         self.post_roll = ptt_post_roll() if post_roll is None else post_roll
         self.natural_prompt = whisper_natural_prompt() if natural_prompt is None else natural_prompt
+        self.working_earcon = working_earcon_on() if working_earcon is None else working_earcon
         self._model = model
         self._stream_factory = stream_factory or _input_stream
         self._earcon = earcon
@@ -140,6 +148,24 @@ class WhisperVoice:
     @property
     def listening(self) -> bool:
         return self._stream is not None
+
+    @property
+    def working_cue(self):
+        """contracts.md 3.3: the core plays this instead of saying "Still working." while a task runs.
+
+        None (the default, or when no voice can speak) makes the core keep its spoken line, so a user
+        whose speech goes through the client's live region still gets the words, not a silent tick.
+        """
+        if not self.working_earcon or not self.announcer.voice_ready:
+            return None
+        return self._tick
+
+    def _tick(self) -> None:
+        if self._wanted or self._stream is not None or self._tail is not None:
+            return  # push-to-talk is under way: a tick now would be recorded into the request
+        if self.announcer.current().busy():
+            return  # never over speech; the next heartbeat tries again
+        self._earcon("working")
 
     def warm(self) -> None:
         """Load the model now (about 3 s, longer on first download) instead of on the first request."""
