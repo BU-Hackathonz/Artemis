@@ -46,7 +46,7 @@ a { color: var(--iris); text-underline-offset: 0.18em; text-decoration-thickness
 a:hover { text-decoration-thickness: 0.16em; }
 :focus-visible { outline: 3px solid var(--iris); outline-offset: 4px; border-radius: 6px; }
 code, pre, kbd { font-family: var(--mono); font-size: 0.95em; }
-kbd { border: 1px solid var(--muted); border-radius: 6px; padding: 0 0.3em; white-space: nowrap; }
+kbd { border: 1px solid var(--muted); border-radius: 6px; padding: 0.05em 0.5em; white-space: nowrap; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .skip { position: absolute; left: var(--gutter); top: -4rem; background: var(--ink); color: var(--black); padding: 0.5rem 1rem; font-weight: 700; z-index: 30; border-radius: 999px; }
 .skip:focus { top: 1rem; }
