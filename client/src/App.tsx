@@ -154,7 +154,7 @@ export function App() {
       {error && <p role="alert">{error}</p>}
       <div className="workspace">
         <section aria-labelledby="request-heading"><h2 id="request-heading">Your request</h2>
-          <p>Task: {state.taskState.replaceAll('_', ' ')}</p>
+          <p>Task: {state.taskId ? state.taskState.replaceAll('_', ' ') : pendingTaskId ? 'queued' : 'idle'}</p>
           <form onSubmit={e => void submit(e)}>
             <label htmlFor="request">{state.taskState === 'awaiting_reply' ? 'Answer the clarification question' : 'What would you like to build?'}</label>
             <p id="request-keys">Enter sends your request. Shift+Enter adds a new line.</p>
