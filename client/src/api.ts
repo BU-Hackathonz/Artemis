@@ -34,6 +34,7 @@ export function createHttpCore(address: string, token: string): Core {
     reply: (tid, text) => request(`/tasks/${encodeURIComponent(tid)}/reply`, {text, source:'keyboard'}),
     speech: action => request('/speech', {action}),
     listen: action => request('/voice/listen', {action}),
+    announceReady: (sid, shortcut) => request(`/sessions/${encodeURIComponent(sid)}/ready`, shortcut ? {shortcut} : {}),
     reportShortcutFailure: (sid, shortcut) => request(`/sessions/${encodeURIComponent(sid)}/diagnostics`, {code:'shortcut_registration_failed',shortcut}),
     subscribe(sid, receive, status) {
       const controller = new AbortController();
