@@ -2,10 +2,11 @@
 
 import asyncio
 
-import numpy as np
 import pytest
 
-from artemis.voice.listen import MAX_SECONDS, RATE, VoiceError, WhisperVoice
+np = pytest.importorskip("numpy")  # skip, don't fail collection, without the voice group
+
+from artemis.voice.listen import MAX_SECONDS, RATE, VoiceError, WhisperVoice  # noqa: E402
 
 
 class FakeStream:
@@ -85,6 +86,19 @@ def test_recording_is_capped():
     asyncio.run(v.start_listening())
     asyncio.run(v.stop_listening("cr_1"))
     assert model.calls[0][0] == MAX_SECONDS * RATE
+
+
+def test_mic_unplugged_mid_recording_raises_voice_error():
+    v, model, streams = make(1)
+    asyncio.run(v.start_listening())
+
+    def gone():
+        raise OSError("Unanticipated host error")
+
+    streams[0].stop = gone
+    with pytest.raises(VoiceError, match="stopped unexpectedly"):
+        asyncio.run(v.stop_listening("cr_1"))
+    assert not v.listening and v._chunks == [] and model.calls == []
 
 
 def test_missing_microphone_raises_voice_error():

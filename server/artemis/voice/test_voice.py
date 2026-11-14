@@ -39,19 +39,30 @@ def test_vocabulary_prompt_dedupes_and_caps():
     assert len(p) <= 50 and p.startswith("word0, word1")
 
 
-def test_never_both_voices_first_available_wins():
-    nvda, sapi = FakeSpeaker("nvda", up=False), FakeSpeaker("sapi")
-    a = Announcer([nvda, sapi])
+def router(nvda_up=True, sapi_up=True, running=False, busy=False):
+    nvda, sapi = FakeSpeaker("nvda", up=nvda_up), FakeSpeaker("sapi", up=sapi_up, busy=busy)
+    state = {"running": running}
+    return Announcer(nvda, sapi, is_nvda_running=lambda: state["running"]), nvda, sapi, state
+
+
+def test_never_both_voices_nvda_started_later():
+    a, nvda, sapi, state = router()
     asyncio.run(a.announce("one", "normal"))
-    nvda.up = True  # NVDA started after the core
+    state["running"] = True  # NVDA started after the core
     asyncio.run(a.announce("two", "normal"))
     assert sapi.said == [("one", False)] and nvda.said == [("two", False)]
     assert a.screen_reader == "nvda" and a.voice_ready
 
 
+def test_nvda_running_without_dll_stays_silent_not_sapi():
+    a, nvda, sapi, _ = router(nvda_up=False, running=True)
+    asyncio.run(a.announce("result", "high"))
+    assert sapi.said == [] and nvda.said == []
+    assert not a.voice_ready  # client's live region speaks through NVDA instead
+
+
 def test_priority_rules():
-    s = FakeSpeaker(busy=True)
-    a = Announcer([s])
+    a, _, s, _ = router(busy=True)
     asyncio.run(a.announce("progress", "low"))  # dropped while busy
     asyncio.run(a.announce("Run failed, exit code 1", "high"))
     asyncio.run(a.announce("   ", "high"))  # empty is ignored
@@ -62,14 +73,14 @@ def test_priority_rules():
 
 
 def test_no_speaker_reports_not_ready():
-    a = Announcer([FakeSpeaker(up=False)])
+    a, *_ = router(sapi_up=False)
     assert not a.voice_ready and a.screen_reader is None
     asyncio.run(a.announce("still logged", "normal"))  # falls back to NullSpeaker, no crash
 
 
 def test_stub_voice_returns_mvp_request():
-    s = FakeSpeaker()
-    v = StubVoice(announcer=Announcer([s]))
+    a, _, s, _ = router()
+    v = StubVoice(announcer=a)
     asyncio.run(v.start_listening())
     assert v.listening
     text = asyncio.run(v.stop_listening("cr_1"))

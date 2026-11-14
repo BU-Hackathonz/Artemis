@@ -77,8 +77,13 @@ class WhisperVoice:
         if self._stream is None:
             return ""
         stream, self._stream = self._stream, None
-        stream.stop()
-        stream.close()
+        try:
+            stream.stop()
+            stream.close()
+        except Exception as e:  # mic unplugged mid-recording
+            with self._lock:
+                self._chunks, self._frames = [], 0
+            raise VoiceError(f"Microphone stopped unexpectedly: {e}") from e
         with self._lock:
             audio = np.concatenate(self._chunks)[: RATE * MAX_SECONDS] if self._chunks else np.zeros(0, np.float32)
             self._chunks, self._frames = [], 0
