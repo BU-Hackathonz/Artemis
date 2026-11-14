@@ -9,6 +9,7 @@ from artemis.echo.check import (
     EchoReport,
     Finding,
     compare,
+    echo_check,
     findings_from_axe,
     outline_from_snapshot,
     resolve_target,
@@ -117,3 +118,89 @@ async def test_fixture_before_and_after_in_a_real_browser():
     after = await echo_check(str(FIXTURE / "after.html"))
     assert after.findings == []
     assert '    button "Sign up"' in after.outline
+
+
+# ----- Jun's review of #21 -----
+
+
+def test_spaced_file_uri_resolves(tmp_path):
+    page = tmp_path / "My Pages" / "index.html"
+    page.parent.mkdir()
+    page.write_text("<html></html>")
+    assert resolve_target(page.as_uri()) == page.resolve().as_uri()
+
+
+def test_undecided_checks_are_never_reported_as_no_problems():
+    review = [Finding(rule="color-contrast", impact="serious", target="h1", message="Elements must meet contrast")]
+    report = EchoReport(url="file:///x", title="Join", findings=[], outline=[], needs_review=review)
+    assert not report.ok
+    spoken = speak_report(report)
+    assert "no definite problems" in spoken and "manual check" in spoken and "no problems" not in spoken.replace("no definite problems", "")
+    worse = report.model_copy(update={"findings": review})
+    assert speak_report(worse).endswith("Also, 1 thing needs a manual check, because axe couldn't decide: whether text over a gradient or image has enough contrast.")
+
+
+@pytest.mark.skipif(not _browser_available(), reason="needs the echo group and a Chromium/Chrome/Edge")
+async def test_gradient_contrast_needs_review_in_a_real_browser(tmp_path):
+    page = tmp_path / "gradient.html"
+    page.write_text(
+        '<!doctype html><html lang="en"><head><title>Gradient</title></head><body><main>'
+        '<h1 style="background: linear-gradient(90deg, #777, #999); color: #888">Welcome</h1>'
+        "</main></body></html>"
+    )
+    report = await echo_check(str(page))
+    assert any(f.rule == "color-contrast" for f in report.needs_review), report
+    assert not report.ok and "manual check" in speak_report(report)
+
+
+@pytest.mark.skipif(not _browser_available(), reason="needs the echo group and a Chromium/Chrome/Edge")
+async def test_websockets_never_reach_a_server(tmp_path):
+    """An allowed http://127.0.0.1 page tries WebSockets to 127.0.0.1 and [::1]; no server sees one."""
+    import asyncio
+    import functools
+    import http.server
+    import socket
+    import threading
+
+    hits: list[str] = []
+
+    def listener(family, host):
+        try:
+            s = socket.socket(family, socket.SOCK_STREAM)
+            s.bind((host, 0))
+        except OSError:
+            return None
+        s.listen()
+        s.settimeout(0.2)
+
+        def accept():
+            end = threading.Event()
+            for _ in range(60):
+                try:
+                    conn, _ = s.accept()
+                    hits.append(host)
+                    conn.close()
+                except OSError:
+                    pass
+            end.set()
+
+        threading.Thread(target=accept, daemon=True).start()
+        return s.getsockname()[1]
+
+    v4 = listener(socket.AF_INET, "127.0.0.1")
+    v6 = listener(socket.AF_INET6, "::1")
+    targets = [f"ws://127.0.0.1:{v4}/"] + ([f"ws://[::1]:{v6}/"] if v6 else [])
+    script = "".join(f"try {{ new WebSocket({t!r}); }} catch (e) {{}}" for t in targets)
+    (tmp_path / "index.html").write_text(
+        f'<!doctype html><html lang="en"><head><title>WS</title></head><body><main><h1>Hi</h1></main>'
+        f"<script>{script}</script></body></html>"
+    )
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        await echo_check(f"http://127.0.0.1:{httpd.server_address[1]}/index.html")
+        await asyncio.sleep(1.0)
+    finally:
+        httpd.shutdown()
+    assert hits == [], f"WebSocket reached {hits}"
