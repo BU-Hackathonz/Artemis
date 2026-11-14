@@ -28,6 +28,7 @@ function eventText(event: CoreEvent) {
 export function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [status, setStatus] = useState('Not connected');
+  const [companionError, setCompanionError] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [address, setAddress] = useState('http://127.0.0.1:8000');
@@ -46,6 +47,16 @@ export function App() {
   const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
   const ready = status === 'Connected' || status === 'Demo connected';
   const voiceInput = useVoiceInput(connection && !connection.demo ? connection.core : null, connection?.sid ?? null, ready, voiceReady);
+  useEffect(() => {
+    if (!platform.native) return;
+    void platform.updateCompanionStatus({
+      connection: ready ? 'ready' : ((!connection && status !== 'Launch failed') || status.startsWith('Connecting')) ? 'starting' : 'disconnected',
+      task: pendingTaskId ? 'queued' : state.taskId ? state.taskState : 'idle',
+      microphone: voiceInput.status.state,
+      approval: state.approvals.length > 0,
+      speech_ready: voiceReady,
+    }).catch(() => setCompanionError('Desktop status is unavailable. Full controls remain available here.'));
+  }, [ready, status, connection, state.taskId, state.taskState, pendingTaskId, state.approvals.length, voiceInput.status.state, voiceReady]);
   useEffect(() => {
     if (!platform.native) return;
     let active = true;
@@ -151,6 +162,10 @@ export function App() {
           {!ready && <button onClick={() => setConnection({...connection})}>Reconnect event stream</button>}
         </>}
       </section>
+      {platform.native && <button disabled={state.approvals.length > 0} onClick={() => {
+        void platform.enterCompact().catch(() => setCompanionError('Could not open compact status. Full controls remain available here.'));
+      }}>Use compact status</button>}
+      {companionError && <p role="alert">{companionError}</p>}
       {error && <p role="alert">{error}</p>}
       <div className="workspace">
         <section aria-labelledby="request-heading"><h2 id="request-heading">Your request</h2>

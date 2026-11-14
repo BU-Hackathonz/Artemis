@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use tauri::Manager;
+mod companion;
 
 #[derive(Clone, Serialize)]
 struct CoreConfig {
@@ -55,7 +57,27 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![get_core_config])
+        .manage(companion::CompanionState::default())
+        .setup(|app| {
+            let compact_shown = companion::place(app.handle()).is_ok()
+                && app
+                    .get_webview_window("companion")
+                    .is_some_and(|status| status.show().is_ok());
+            if !compact_shown {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.show();
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(companion::window_event)
+        .invoke_handler(tauri::generate_handler![
+            get_core_config,
+            companion::get_companion_status,
+            companion::update_companion_status,
+            companion::show_main,
+            companion::enter_compact
+        ])
         .run(tauri::generate_context!())
         .expect("Could not start Artemis desktop client");
 }

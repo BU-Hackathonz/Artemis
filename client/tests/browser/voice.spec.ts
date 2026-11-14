@@ -11,6 +11,7 @@ async function bridge(page:Page, url:string, failFirst:boolean|'always'=false) {
     Object.defineProperty(window,'voiceBridge',{value:{commands,send:(state:string)=>handler?.onmessage({state,shortcut:current,id:1})}});
     Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args?:{shortcuts?:string[];shortcut?:string;handler?:{onmessage:(event:unknown)=>void}})=>{
       commands.push({command,shortcut:args?.shortcuts?.[0]??args?.shortcut});
+      if(command==='update_companion_status' || command==='enter_compact')return;
       if(command==='get_core_config')return{core_url:url,token:'voice-test-token'};
       if(command==='plugin:global-shortcut|is_registered')return false;
       if(command==='plugin:global-shortcut|register'){

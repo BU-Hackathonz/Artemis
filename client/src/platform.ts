@@ -1,3 +1,4 @@
+import type {CompanionStatus} from './desktopStatus';
 import { invoke } from '@tauri-apps/api/core';
 
 export interface NativeCoreConfig { core_url: string; token: string }
@@ -31,6 +32,10 @@ export const platform = {
       await unregister(shortcut);
     });
   },
+  updateCompanionStatus(status: CompanionStatus): Promise<void> {return native ? invoke('update_companion_status', {status}) : Promise.resolve();},
+  getCompanionStatus(): Promise<CompanionStatus> {return invoke('get_companion_status');},
+  enterCompact(): Promise<void> {return invoke('enter_compact');},
+  showMain(): Promise<void> {return invoke('show_main');},
   getCoreConfig(): Promise<NativeCoreConfig> {
     if (!native) return Promise.reject(new Error(launchError));
     // The native state reads env once; also invoke only once per page load.

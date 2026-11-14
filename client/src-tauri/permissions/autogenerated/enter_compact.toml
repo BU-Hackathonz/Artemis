@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-enter-compact"
+description = "Enables the enter_compact command without any pre-configured scope."
+commands.allow = ["enter_compact"]
+
+[[permission]]
+identifier = "deny-enter-compact"
+description = "Denies the enter_compact command without any pre-configured scope."
+commands.deny = ["enter_compact"]
