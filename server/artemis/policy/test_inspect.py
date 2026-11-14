@@ -94,3 +94,14 @@ def test_echo_errors_are_reported_not_raised(tmp_path, monkeypatch):
     result = asyncio.run(w.inspect())
     assert not result.ok and result.error == "echo_unavailable"
     assert "No browser" in result.message
+
+
+def test_no_browser_is_spoken_by_the_gateway_not_left_to_the_model(tmp_path, monkeypatch):
+    """docs/demo.md: failures are spoken first and verbatim, before the model talks."""
+    message = "Echo Check needs a browser. Run: uv run --group echo python -m playwright install chromium"
+    w = World(tmp_path, monkeypatch, [EchoError(message)])
+    result = asyncio.run(w.inspect())
+    assert result.error == "echo_unavailable" and result.message == message  # the model gets the command
+    errors = w.log.of("error")
+    assert [e.announce.text for e in errors] == ["Echo Check needs a browser. Nothing was checked."]
+    assert errors[0].announce.priority == "high" and errors[0].data["code"] == "echo_unavailable"

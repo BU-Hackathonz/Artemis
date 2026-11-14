@@ -141,6 +141,12 @@ def run_announcement(entry: str, result: RunResult, timeout_s: int) -> str:
         output = " ".join(result.stdout_tail.split())
         if not output:
             return f"{entry} ran successfully. It printed nothing."
+        if result.truncated and len(output) > SPOKEN_OUTPUT_CHARS:
+            # The runner kept only the end, cut mid-line, so the start of what we have is not
+            # the start of the output: say how it ended, from a whole word.
+            end = output[-SPOKEN_OUTPUT_CHARS:]
+            end = end.split(" ", 1)[1] if " " in end else end
+            return f"{entry} ran successfully. It printed a lot, ending with: {end}"
         if len(output) > SPOKEN_OUTPUT_CHARS:
             output = output[:SPOKEN_OUTPUT_CHARS].rstrip() + ", and more"
         return f"{entry} ran successfully. It printed: {output}"
@@ -371,7 +377,11 @@ class ToolGateway:
         try:
             report = await echo.echo_check(str(target))
         except echo.EchoError as exc:
-            raise _ToolError("echo_unavailable", str(exc)) from None
+            # Spoken first, like the security scan's own failure, so it doesn't depend on the
+            # model; the setup command ("Run: ...") goes to the model and the log, not the speech.
+            message = str(exc)
+            await self._error(task_id, "echo_unavailable", message.split(" Run: ")[0], "Nothing was checked.")
+            raise _ToolError("echo_unavailable", message) from None
         spoken = echo.speak_report(report)
         previous = self._echo_reports.get(a.path)
         if previous is not None:

@@ -8,7 +8,7 @@ import pytest
 
 from artemis.agent.stub import StubAgent
 from artemis.conversation.controller import NVDA_RATE_LINE
-from artemis.contracts import Approval, Decision, EventDraft, Failed
+from artemis.contracts import Approval, Decision, EventDraft, Failed, TaskRequest
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
@@ -220,6 +220,63 @@ async def test_cancel_while_awaiting_approval(client, core):
     resolved = [e for e in session.bus.history if e.type == "approval.resolved"]
     assert resolved and resolved[-1].data["by"] == "invalidated"
     assert session.approvals.pending() == []
+
+
+async def test_cancel_report_is_not_cut_off_by_a_second_canceled(client, core, voice):
+    """High priority interrupts: a "Canceled." right after the gateway's "Canceled. Nothing was
+    written." left only "Canceled." audible, losing what was (not) applied (contracts.md §1)."""
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "hello"})).json()["task_id"]
+    await wait_for(session, lambda s: pending(s) is not None)
+    await client.post(f"/tasks/{tid}/cancel", headers=AUTH)
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    assert voice.spoken[-1] == ("high", "Canceled. Nothing was written.")
+    assert ("high", "Canceled.") not in voice.spoken
+    final = [e for e in session.bus.history if e.type == "task.state"][-1]
+    assert final.data["state"] == "canceled" and final.announce is None
+
+
+async def test_cancel_with_nothing_to_report_says_canceled(client, core, voice):
+    agent = SlowAgent()
+    core.make_agent = lambda: agent
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "x"})).json()["task_id"]
+    await wait_for(session, lambda s: s.tasks[tid].state == "working")
+    await client.post(f"/tasks/{tid}/cancel", headers=AUTH)
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    assert voice.spoken[-1] == ("high", "Canceled.")
+    # The next request is accepted.
+    second = await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                               json={"client_request_id": "cr_2", "source": "keyboard", "text": "y"})
+    assert second.status_code == 200
+    agent.release.set()
+    await wait_for(session, lambda s: s.active_task is None)
+
+
+async def test_cancel_before_the_task_starts_says_canceled_and_ends_clean(client, core, voice):
+    """A cancel that lands before the job's first step: _run never runs, so nothing said
+    "Canceled." and the task stayed queued, refusing every later request (failure-paths review)."""
+    agent = SlowAgent()
+    core.make_agent = lambda: agent
+    sid, session = await start(client, core)
+    task = await session.submit(TaskRequest(client_request_id="cr_1", source="keyboard", text="x"))
+    assert await session.cancel(task.task_id)  # no await in between: the job has not started
+    assert task.state == "canceled" and session.active_task is None
+    assert voice.spoken[-2:] == [("normal", "Working on: x"), ("high", "Canceled.")]
+    assert [e.data["state"] for e in session.bus.history if e.type == "task.state"] == ["queued", "canceled"]
+    assert session.history[-1].outcome == "canceled"
+    assert await session.cancel(task.task_id) is False  # already over: nothing more is said
+    await asyncio.sleep(0)
+    assert task.heartbeat.cancelled()
+    # The next request is accepted and runs.
+    second = await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                               json={"client_request_id": "cr_2", "source": "keyboard", "text": "y"})
+    assert second.status_code == 200
+    agent.release.set()
+    await wait_for(session, lambda s: s.active_task is None)
+    assert session.tasks[second.json()["task_id"]].state == "succeeded"
 
 
 async def test_agent_crash_is_spoken_not_silent(client, core, voice):
