@@ -15,7 +15,7 @@ input, textarea { display: block; width: 100%; color: #fff; background: #101d31;
 input { max-width: 32rem; }
 textarea { resize: vertical; }
 button, .react-aria-Button { font: inherit; font-weight: 650; color: #071321; background: #91e4db; border: 2px solid transparent; border-radius: .35rem; padding: .6rem 1rem; min-height: 44px; cursor: pointer; margin: .25rem .4rem .25rem 0; }
-button:disabled, [data-disabled] { color: #b7c3d3; background: #28374c; cursor: default; }
+button:disabled, [aria-disabled="true"], [data-disabled] { color: #b7c3d3; background: #28374c; cursor: default; }
 :focus-visible, [data-focus-visible] { outline: 3px solid #ffdb70; outline-offset: 4px; }
 .actions { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .7rem; }
 .workspace { display: grid; grid-template-columns: 1fr 1fr; gap: 1.3rem; }

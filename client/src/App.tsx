@@ -41,6 +41,7 @@ export function App() {
   const input = useRef<HTMLTextAreaElement>(null);
   const hadApproval = useRef(false);
   const focusedSession = useRef<string | null>(null);
+  const reconnectFocus = useRef(false);
   const [responseTaskId, setResponseTaskId] = useState<string | null>(null);
   // SSE may already have finished this request and moved to a different task.
   const pendingTaskId = responseTaskId && !observedTaskIds.current.has(responseTaskId) ? responseTaskId : null;
@@ -89,16 +90,14 @@ export function App() {
   }, [connection]);
   useEffect(() => {
     if (!connection || !ready) return;
-    const firstFocus = focusedSession.current !== connection.sid;
+    if (focusedSession.current === connection.sid && !reconnectFocus.current) return;
     const frame = requestAnimationFrame(() => {
+      // A dialog owns initial focus too; closing it has its own focus restoration.
+      focusedSession.current = connection.sid;
+      reconnectFocus.current = false;
       if (document.querySelector('[role="dialog"]')) return;
       const active = document.activeElement;
-      // Disabling the field during reconnect can leave focus on the document.
-      // Restore that empty focus, while preserving a chosen control or the log.
-      if (firstFocus || !active || active === document.body || active === document.documentElement) {
-        input.current?.focus();
-        if (document.activeElement === input.current) focusedSession.current = connection.sid;
-      }
+      if (!active || active === document.body || active === document.documentElement) input.current?.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [connection, ready]);
@@ -134,6 +133,7 @@ export function App() {
     finally {if (attempt === generation.current) setBusy(false);}
   }
   async function command(action: () => Promise<unknown>) {
+    if (!ready) return;
     setError('');
     try { await action(); } catch (e) { setError(message(e)); }
   }
@@ -166,7 +166,7 @@ export function App() {
         </form><p>Launch the core first. Your token stays in memory for this connection.</p><button disabled={busy} onClick={() => void connect(true)}>Try in-memory demo</button> <button disabled={busy} onClick={() => void connect(true, true)}>Try blocked-action demo</button><p>The blocked-action demo adds a synthetic security finding for testing the approval shortcut. Both demos stay in memory.</p></> : <>
           <p>{connection.demo ? 'Demo only: synthetic Hello World proposals. No files, code execution or microphone access.' : `Core ${connection.health.version}. ${voiceReady ? 'Core handles spoken announcements.' : 'Screen reader live announcements enabled.'}`}</p>
           <button onClick={() => window.location.reload()}>Disconnect and reset</button>
-          {!ready && <button onClick={() => setConnection({...connection})}>Reconnect event stream</button>}
+          {!ready && <button onClick={() => {reconnectFocus.current = true; setConnection({...connection});}}>Reconnect event stream</button>}
         </>}
       </section>
       {platform.native && <button disabled={state.approvals.length > 0} onClick={() => {
@@ -184,12 +184,12 @@ export function App() {
               if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
                 event.preventDefault(); event.currentTarget.form?.requestSubmit();
               }
-            }} rows={4} value={text} onChange={e => setText(e.target.value)} placeholder="Create a Python program that prints Hello World" disabled={!connection || !ready} required/>
+            }} rows={4} value={text} onChange={e => setText(e.target.value)} placeholder="Create a Python program that prints Hello World" disabled={!connection} readOnly={!ready} aria-disabled={!ready} required/>
             <button disabled={!connection || !ready || busy || !text.trim() || ((pendingTaskId !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')}>{state.taskState === 'awaiting_reply' ? 'Send reply' : 'Send request'}</button>
           </form>
-          <div className="actions"><button disabled={!ready || !(pendingTaskId ?? state.taskId) || (!pendingTaskId && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((pendingTaskId ?? state.taskId)!))}>Cancel task</button>
-            <button disabled={!ready || connection?.demo} onClick={() => void command(() => connection!.core.speech('repeat'))}>Repeat last speech</button>
-            <button disabled={!ready || connection?.demo} onClick={() => void command(() => connection!.core.speech('stop'))}>Stop speech</button></div>
+          <div className="actions"><button aria-disabled={!ready} disabled={!(pendingTaskId ?? state.taskId) || (!pendingTaskId && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((pendingTaskId ?? state.taskId)!))}>Cancel task</button>
+            <button aria-disabled={!ready} disabled={connection?.demo} onClick={() => void command(() => connection!.core.speech('repeat'))}>Repeat last speech</button>
+            <button aria-disabled={!ready} disabled={connection?.demo} onClick={() => void command(() => connection!.core.speech('stop'))}>Stop speech</button></div>
         </section>
         <section aria-labelledby="log-heading"><h2 id="log-heading">Activity log</h2><p>Latest 500 events. Tab into the log and use arrow keys to scroll.</p>
           <div role="log" aria-label="Activity log" aria-live={voiceReady ? 'off' : 'polite'} aria-relevant="additions" tabIndex={0} className="log">
