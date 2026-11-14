@@ -1,9 +1,8 @@
-# Artemis contracts (proposal for kickoff)
+# Artemis contracts
 
-Status: **proposed**. Avery owns the contract; David accepts changes until Avery is on site. Once agreed, these become Pydantic models in
-`server/artemis/contracts/`, the TS types are generated from FastAPI's OpenAPI, and the samples
-below become JSON fixtures that every stub is tested against. Change the contract first, then the
-code.
+Status: **agreed and implemented** as Pydantic models in `server/artemis/contracts/`, with the
+samples below as JSON fixtures that every stub is tested against. Avery owns the contract.
+Change the contract first, then the code.
 
 Conventions: JSON, `snake_case`, ids are strings (`ses_…`, `tsk_…`, `apr_…`, `op_…`), times are
 ISO 8601 UTC, and workspace paths are always **relative** to the project root.
@@ -19,7 +18,7 @@ and passes it to both processes (§6).
 | POST | `/sessions` | `{}` → `{session_id}` | One session per app launch |
 | GET | `/sessions/{sid}/events` | SSE stream of `Event` (§2) | Resumes from `Last-Event-ID` |
 | POST | `/sessions/{sid}/tasks` | `{client_request_id, source: "voice"\|"keyboard", text}` → `{task_id}`, or `409 {error: "task_active", task_id}` | Idempotent per `client_request_id`; one active task per session (§5.2) |
-| POST | `/tasks/{tid}/reply` | `{text, source}` → `204` | **Reserved, unused in the MVP.** The agent asks a question by ending its turn; the user's next request is the answer |
+| POST | `/tasks/{tid}/reply` | `{text, source}` → `501 {error: "not_supported"}` | **Reserved, unused in the MVP.** The agent asks a question by ending its turn; the user's next request is the answer |
 | POST | `/approvals/{aid}` | `{decision: "approve"\|"reject", approval_hash}` → `204`, `409` if stale | The hash must match the one that was offered |
 | POST | `/tasks/{tid}/cancel` | `{}` → `204` | Stops active work; the event reports what was already applied |
 | POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events |
@@ -169,12 +168,15 @@ class Runner(Protocol):
 ```
 
 `run()`:
-- finds the interpreter once at startup (`uv python find`, then `py -3`, else fail with a spoken
-  message); never the core's own Python (`sys.executable`);
+- finds the interpreter once at startup: `ARTEMIS_RUN_PYTHON` if set, else `uv python find --system`
+  or `--no-project`, else `py -3` on Windows, else `python3` or `python` on PATH; never the core's
+  own Python (`sys.executable`); if none is found, fails with a spoken message;
 - uses a fixed argv `[python_exe, "-I", "-X", "utf8", entry, *args]`, `shell=False`,
   `cwd=project.root`, `stdin=DEVNULL` (an `input()` call gets end-of-file instead of hanging);
-- passes an explicit env: only `SYSTEMROOT`, `TEMP`, `TMP`, `PATH` (interpreter dir + System32) and
-  `PYTHONIOENCODING=utf-8`; no API keys;
+- passes an explicit env, never `os.environ`: `PYTHONIOENCODING=utf-8` and `PATH` (interpreter dir,
+  then System32 on Windows or `/usr/bin` and `/bin` elsewhere); on Windows also `SYSTEMROOT`, and
+  `USERPROFILE`, `LOCALAPPDATA`, `APPDATA`, `TEMP`, `TMP` when set; elsewhere `HOME` and `TMPDIR`
+  when set; no API keys;
 - has a 10 s timeout, kills the whole process tree, and caps captured output at 64 KB;
 - runs `subprocess.run` inside `asyncio.to_thread`, not `asyncio.create_subprocess_exec` (on
   Windows, uvicorn's `--reload` event loop can't start subprocesses).

@@ -60,8 +60,9 @@ so a misheard "yes" never writes or runs anything.
 Do this at least 30 minutes before judging. The first `npm run tauri dev` build takes minutes.
 
 1. **Code.** `git pull` on `main` (everything the demo uses is merged).
-2. **Dependencies, all groups in one command.** `uv sync` removes groups you don't list, and
-   `start.ps1` doesn't add the `echo` group, so the last sync must include all of them:
+2. **Dependencies, all groups in one command.** `uv sync` removes groups you don't list, so the last
+   sync must include all of them. (`start.ps1 -Agent claude` adds `agent`, `security` and `echo`
+   itself.)
    ```powershell
    uv sync --project server --group voice --group agent --group security --group echo --group dev
    cd server; uv run --group voice python -m artemis.voice.setup; cd ..   # NVDA DLL + speech model
