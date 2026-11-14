@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from artemis.contracts.events import Priority
+from artemis.policy.redact import redact
 
 log = logging.getLogger(__name__)
 
@@ -436,8 +437,10 @@ class ElevenLabsSpeaker:
             self._cache[key] = played
 
     def _fetch(self, text: str):
+        # The only place text leaves the computer: redact here, so answers, "Heard:" transcripts and
+        # error lines that never passed the gateway are scrubbed too. The fallback speakers are local.
         body = json.dumps({
-            "text": text,
+            "text": redact(text),
             "model_id": self.model,
             "voice_settings": {"stability": self.stability, "similarity_boost": 0.75,
                                "use_speaker_boost": True, "speed": self.speed},
@@ -514,6 +517,8 @@ class ElevenLabsSpeaker:
             log.warning("ElevenLabs failed %d times in a row; using the Windows voice for this session", self._failures)
             if self.on_give_up is not None:
                 self._on_loop(self.on_give_up, FALLBACK_NOTICE)
+            else:
+                log.warning("Not spoken yet (the core doesn't wire it): %s", FALLBACK_NOTICE)
         if self.fallback is not None and self.fallback.available():
             self._on_loop(self.fallback.speak, text, False)
 

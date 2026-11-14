@@ -121,19 +121,24 @@ and NVDA's reading can overlap, and Artemis can't tell when NVDA is talking.
   earcon, as it does for SAPI.
 - If a line can't start within `ARTEMIS_ELEVEN_TIMEOUT_S` (no key, a failed request, a slow first
   chunk), that same line is spoken by NVDA when it runs, else SAPI, and one warning is logged. After
-  3 failures in a row, that fallback is used for the rest of the session. The notice "My natural voice isn't reachable, so I'm
-  using the Windows voice." is handed to the core through a hook; until the core wires it to the
-  event bus, it is logged only.
+  3 failures in a row, that fallback is used for the rest of the session. Each of the first 3
+  failing lines can wait up to the timeout (1.5 s by default) before the fallback speaks it. The
+  notice "My natural voice isn't reachable, so I'm using the Windows voice." is handed to the core
+  through a hook; until the core wires it to the event bus, it is logged only.
 - "Faster" and "slower" change the ElevenLabs speed by 0.1 within 0.7 to 1.2, for the session.
 - A few short fixed lines (the ready lines, "Canceled.", the rate lines, "Still working.") are kept
   as audio in memory, per voice and speed, so they play at once. Transcripts, code, file contents and
   the agent's answers are never cached.
 
 **Privacy.** With ElevenLabs on, the text Artemis speaks is sent to ElevenLabs to be turned into
-audio. That includes file names, error lines and the agent's answers. Speech recognition stays
-local: your voice never leaves the computer, with or without ElevenLabs. The API key is read only
-from `ELEVENLABS_API_KEY`, sent only in the request header, and never logged, spoken, put in an
-event or committed (`.env.example` holds an empty placeholder).
+audio. That includes file names, error lines, the agent's answers and the read-back of what you
+said ("Heard: …"), so the text of your request leaves the computer even though the audio does not.
+Speech recognition stays local: your recorded voice never leaves the computer, with or without
+ElevenLabs. Every line is run through `redact()` just before it is sent, so secrets in answers,
+transcripts and error lines are replaced with `[redacted]` first. The API key is read only from
+the `ELEVENLABS_API_KEY` environment variable (Artemis does not read a `.env` file), sent only in
+the request header, and never logged, spoken, put in an event or committed (`.env.example` holds
+an empty placeholder).
 
 **Settings.**
 

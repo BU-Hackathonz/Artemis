@@ -383,3 +383,34 @@ def test_the_key_never_reaches_logs(caplog):
         assert e.wait_idle(2)
     assert e.gave_up and KEY not in caplog.text
     assert "HTTP 401" in caplog.text and KEY not in repr(e) and KEY not in FALLBACK_NOTICE
+
+
+# ----- privacy -----
+
+
+def test_text_sent_to_elevenlabs_is_redacted_but_the_fallback_hears_it_whole(monkeypatch):
+    # Answers, "Heard:" transcripts and error lines reach the speaker without passing the gateway.
+    monkeypatch.setenv("ELEVENLABS_API_KEY", KEY)
+    leaked = "sk-ant-api03-" + "x" * 40
+    opener = ok_opener()
+    e = eleven(opener)
+    e.speak(f"Heard: my key is {KEY} and the token={leaked}.", interrupt=False)
+    assert e.wait_idle(2)
+    sent = opener.requests[0].data.decode("utf-8")
+    assert KEY not in sent and leaked not in sent
+    assert "[redacted]" in sent and "Heard: my key is" in sent
+
+    sapi = FakeSpeaker("sapi")
+    failing = eleven(Opener(lambda: urllib.error.URLError("offline")), sapi=sapi)
+    failing.speak(f"The task failed. {KEY}", interrupt=False)
+    assert failing.wait_idle(2)
+    assert [t for t, _ in sapi.said] == [f"The task failed. {KEY}"]  # local speakers get the line as it was
+
+
+def test_give_up_notice_is_logged_when_the_core_has_no_hook(caplog):
+    e = eleven(Opener(lambda: urllib.error.HTTPError("u", 503, "busy", {}, None)))
+    with caplog.at_level(logging.WARNING):
+        for n in range(3):
+            e.speak(f"line {n}", interrupt=False)
+            assert e.wait_idle(2)
+    assert e.gave_up and FALLBACK_NOTICE in caplog.text
