@@ -53,6 +53,7 @@ fn get_core_config(state: tauri::State<'_, LaunchState>) -> Result<CoreConfig, S
 fn main() {
     let state = LaunchState(CoreConfig::from_env());
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .invoke_handler(tauri::generate_handler![get_core_config])
         .run(tauri::generate_context!())

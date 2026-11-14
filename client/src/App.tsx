@@ -6,6 +6,8 @@ import { ApprovalDialog } from './ApprovalDialog';
 import { initialState, reduceEvent } from './state';
 import { terminal } from './contracts';
 import type { Core, CoreEvent, Health } from './contracts';
+import {useVoiceInput} from './useVoiceInput';
+import {VoiceInput} from './VoiceInput';
 import { platform } from './platform';
 
 interface Connection {core: Core; sid: string; health: Health; demo: boolean}
@@ -40,6 +42,7 @@ export function App() {
   const generation = useRef(0);
   const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
   const ready = status === 'Connected' || status === 'Demo connected';
+  const voiceInput = useVoiceInput(connection && !connection.demo ? connection.core : null, ready);
   useEffect(() => {
     if (!platform.native) return;
     let active = true;
@@ -57,7 +60,10 @@ export function App() {
   }, []);
   useEffect(() => {
     if (!connection) return;
-    return connection.core.subscribe(connection.sid, dispatch, setStatus);
+    return connection.core.subscribe(connection.sid, event => {
+      dispatch(event);
+      if (event.type === 'error' && event.data.code === 'mic_error') voiceInput.fail('Microphone unavailable. Check the device, or type your request.');
+    }, setStatus);
   }, [connection]);
   useEffect(() => {
     if (!connection || !ready || focusedSession.current === connection.sid) return;
@@ -136,6 +142,7 @@ export function App() {
         </>}
       </section>
       {error && <p role="alert">{error}</p>}
+      {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
       <div className="workspace">
         <section aria-labelledby="request-heading"><h2 id="request-heading">Your request</h2>
           <p>Task: {state.taskState.replaceAll('_', ' ')}</p>

@@ -19,6 +19,15 @@ describe('core HTTP boundary', () => {
     expect(JSON.parse(options.body)).toEqual({decision:'approve',approval_hash:'sha256:exact'});
     expect(options.redirect).toBe('error');
   });
+  it('uses authenticated voice actions and keeps release alive during page teardown', async () => {
+    const fetchMock=vi.fn().mockImplementation(async()=>new Response(null,{status:204}));
+    vi.stubGlobal('fetch',fetchMock);
+    const core=createHttpCore('http://127.0.0.1:8000','secret');
+    await core.listen('start'); await core.listen('stop');
+    expect(fetchMock.mock.calls.map(call=>JSON.parse(call[1].body))).toEqual([{action:'start'},{action:'stop'}]);
+    expect(fetchMock.mock.calls.map(call=>call[1].keepalive)).toEqual([false,true]);
+    expect(fetchMock.mock.calls.every(call=>call[1].headers.Authorization==='Bearer secret')).toBe(true);
+  });
   it('preserves a client request id across a failed submission retry', async () => {
     const fetchMock = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(Response.json({task_id:'tsk_1'}));
     vi.stubGlobal('fetch',fetchMock);
