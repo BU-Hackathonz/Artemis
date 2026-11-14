@@ -472,6 +472,9 @@ def test_strict_schema_keeps_a_property_named_like_a_keyword():
 def test_system_prompt_is_frozen_and_covers_the_rules():
     for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network"]:
         assert phrase in SYSTEM_PROMPT
+    # Spoken input: self-corrections, and what must never be lost from a transcript.
+    for phrase in ["actually green", "last version only", "negation", "misheard"]:
+        assert phrase in SYSTEM_PROMPT
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
