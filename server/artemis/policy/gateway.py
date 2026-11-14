@@ -518,9 +518,12 @@ class ToolGateway:
                 "Escape to reject, or use the override key to approve anyway.",
                 True,
             )
-        # Only claim "no findings" when a scan actually ran.
-        scanned = f" {findings_sentence(findings)}" if self._scan else ""
-        return f"{action}{scanned} Enter to {verb}, Escape to reject.", False
+        # Only claim "no findings" when a scan actually ran; otherwise say it did not.
+        if self._scan:
+            scanned = findings_sentence(findings)
+        else:
+            scanned = "Not scanned: the security scanner isn't installed."
+        return f"{action} {scanned} Enter to {verb}, Escape to reject.", False
 
     async def _run_scan(self, task_id: str, folder: Path, nothing_done: str) -> list[Finding]:
         if self._scan is None:
