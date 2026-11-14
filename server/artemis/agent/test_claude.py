@@ -456,7 +456,7 @@ def test_tool_schemas_are_strict(tmp_path):
     names = [t["name"] for t in tools]
     assert names == [
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
-        "inspect_page",
+        "inspect_page", "scan_project",
     ]
     assert not {"shell", "delete_file", "ask_user", "scan", "install"} & set(names)
 

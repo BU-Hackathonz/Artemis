@@ -16,6 +16,7 @@ from artemis.contracts import (
     OpenProjectArgs,
     ReadFileArgs,
     RunProgramArgs,
+    ScanProjectArgs,
     WriteFilesArgs,
 )
 
@@ -43,4 +44,6 @@ RULES: dict[str, Rule] = {
     "edit_file": Rule(EditFileArgs, approval_kind="write_files", scan_before=True),
     # Echo Check on a page in the project: read-only, so no approval. Results are untrusted.
     "inspect_page": Rule(InspectPageArgs),
+    # The same Bandit scan, when the developer asks for it. Read-only, so no approval.
+    "scan_project": Rule(ScanProjectArgs),
 }
