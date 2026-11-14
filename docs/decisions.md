@@ -15,7 +15,7 @@ agrees on the board; record any change here.
 | 1 | Platform | Tauri 2 desktop + Python FastAPI headless core, Windows only | Decided | all |
 | 2 | Screen reader for testing | NVDA (free) on Windows 11; Narrator smoke test | Proposed | all |
 | 3 | How Tauri runs the core | Separate process on `127.0.0.1` during the hackathon; Tauri sidecar bundling is a stretch | Proposed | Avery + Jun |
-| 4 | Contracts | Pydantic models are the source; FastAPI's OpenAPI generates the TS types | Proposed | Avery |
+| 4 | Contracts | Pydantic models are the source; FastAPI's OpenAPI is to generate the TS types (not set up yet) | Proposed | Avery |
 | 5 | Spoken output | Core `announce()`: speak through NVDA's controller API when NVDA runs, Windows SAPI otherwise; never both | Proposed (refines team's SAPI pick) | Yaovi |
 | 6 | Audio capture + STT | Global push-to-talk in Tauri; the core records the mic and runs faster-whisper with a vocabulary prompt | Proposed | Yaovi |
 | 7 | Agent loop | Anthropic Python SDK, our own tools, approval pause owned by the orchestrator | Proposed | David |
@@ -71,8 +71,11 @@ the agent. Sidecar bundling is a stretch for after the demo works.
 **Pydantic as the single source (pick).** Every message (transcript submission, tool request,
 approval/rejection, task event) is a Pydantic model in `server/artemis/contracts/`. FastAPI
 publishes OpenAPI, and `openapi-typescript` generates `client/src/generated/api.ts`. The same
-models validate tool arguments in the policy gate. Next to them sit the four sample payloads the
-handoff names (submission, approve/reject, failed check, successful Echo Check) as JSON fixtures.
+models validate tool arguments in the policy gate. Generation is not set up yet: the client keeps
+hand-written types in `client/src/contracts.ts` (there is no `client/src/generated/` so far). Next to
+the models sit six sample payloads as JSON fixtures (`contracts/samples/`: typed request, write
+approval, rejection, failed run, successful run, security block; contracts.md §4). There is no Echo
+Check sample yet.
 Everyone stubs against those samples first. David accepts contract changes until Avery is on site; then Avery owns them.
 
 ## 5. Spoken output: SAPI, live regions, or NVDA itself?
@@ -89,20 +92,23 @@ through NVDA's Controller Client (`nvdaControllerClient.dll`: `speakText`, `canc
 is focused. If NVDA isn't running, use Windows SAPI (`win32com` `SAPI.SpVoice`, interruptible).
 Never both. The same text always goes to the app's `role="log"` region, so it can be reviewed and
 replayed. `high` priority (approvals, failures) interrupts current speech, and failures always say
-the exit code and the first error line verbatim before any explanation. Earcons (listening on/off,
-waiting for approval, success, failure, a "still working" heartbeat) are Yaovi's and don't collide
-with speech.
+the exit code and the last line of the error output (the exception) verbatim before any
+explanation. Earcons are Yaovi's and don't collide with speech; built so far: listening on and off.
+The "still working" heartbeat is a low-priority spoken line from the core, not an earcon.
 
 ## 6. Audio capture and speech-to-text
 
 **Where to record.** Recording in the WebView means `getUserMedia` and WebView2's permission
 prompt, and it only works while the window is focused. **Pick:** Tauri registers the global
 push-to-talk shortcut and tells the core "start" and "stop". The core records with `sounddevice`
-and transcribes locally with **faster-whisper** (`small.en` or `distil-small.en` on CPU: about 1 to
-2 s per sentence). Push-to-talk also keeps the mic from transcribing NVDA's own speech.
+and transcribes locally with **faster-whisper** on CPU (`small.en` by default, about 1 to 2 s per
+sentence; `ARTEMIS_WHISPER_MODEL=medium.en` is more accurate and slower; beam 1 unless
+`ARTEMIS_WHISPER_BEAM` is set). Push-to-talk also keeps the mic from transcribing NVDA's own speech.
 
-**Accuracy on code words.** Pass Whisper an `initial_prompt` built from the workspace's file names
-and symbols (`LoginForm`, `aria-label`, `index.html`). The transcript is read back ("Heard: …") and
+**Accuracy on code words.** Pass Whisper an `initial_prompt` that always starts with the wake word
+and demo words ("Hey Artemis, Artemis, Python, main.py"), then the open project's file names and
+symbols (`LoginForm`, `aria-label`, `index.html`). `ARTEMIS_WHISPER_PROMPT=natural` swaps the word
+list for a spoken-style lead (opt-in). The transcript is read back ("Heard: …") and
 stays in an editable field, so the user can correct it and resend. Writes and runs still need
 approval, so a misheard request can't change anything on its own. A hosted STT can sit
 behind the same `voice/` interface as a fallback.
@@ -127,8 +133,8 @@ otherwise a manual loop where the orchestrator owns the pause across user turns.
 
 ## 8. Model
 
-`claude-opus-5-5`, effort `medium` set explicitly. Thinking is always on for this model. Stream, so
-the event stream can announce progress. Handle `stop_reason: "refusal"` and enable the server-side
+`claude-opus-5-5`, effort `medium` set explicitly (`ARTEMIS_MODEL`, `ARTEMIS_EFFORT`). Thinking is
+always on for this model. The loop does not stream: progress is announced around each tool call. Handle `stop_reason: "refusal"` and enable the server-side
 `fallbacks: "default"` option. If voice round-trip latency hurts the demo, measure lower effort
 before switching models. The API key comes from the environment: `ANTHROPIC_API_KEY`, set in the
 launching window or typed into the launcher's hidden prompt (optionally saved in Windows Credential
@@ -137,17 +143,19 @@ Manager). It never appears in prompts, logs or speech, and is never written to a
 ## 9. Patch format and approval
 
 Whole-file rewrites can't be reviewed by ear. Model-written unified diffs are malformed often
-enough to break a live demo. **Pick:** the agent sends `{path, old, new}` edits. The core checks
-that each `old` matches exactly once and builds the real unified diff. Approval binds to
-`sha256(diff + base file hashes + workspace id)`, which gives "invalidate approval if the proposal
-or base files change" for free. The spoken summary comes from the structured edit ("1 file,
-`src/login.html`: adds `aria-label="Email"` to the email input, line 12"). The diff can be stepped
-through by hunk and by line from the keyboard.
+enough to break a live demo. **Pick:** the agent sends `edit_file {path, edits: [{old, new}]}`. The
+core checks that each `old` matches exactly once and builds the real unified diff. Approval binds to
+a SHA-256 over the project slug and, per file, the path, the hash of the bytes on disk and the hash
+of the new content (contracts.md §2), which gives "invalidate approval if the proposal or base files
+change" for free. The spoken summary is written by the gateway from the files and line counts
+("Change 1 file in signup-form: modify index.html, 1 line added, 1 removed."), not by the model.
+The client shows the diff as one focusable block, read line by line with the screen reader; there
+is no hunk-by-hunk navigation yet.
 
 ## 10. Runner isolation
 
 Docker Desktop on Windows is a classic demo-day failure. **Pick:** `run_program` takes an entry
-file, never a command string. The file type picks a fixed argv (`.py` → `[python, "-I", entry]`) run
+file, never a command string. The file type picks a fixed argv (`.py` → `[python, "-I", "-X", "utf8", entry, *args]`) run
 with `shell=False`, the project folder as cwd, an explicit minimal environment (so a generated
 program can't read `ANTHROPIC_API_KEY`), a timeout, an output cap, and a kill of the whole process
 tree. Every run needs approval, and the code is scanned first (§14). Use a separate Python
