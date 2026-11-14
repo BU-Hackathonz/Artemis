@@ -10,7 +10,7 @@ _WAKE = re.compile(r"^\s*(?:(?:hey|ok|okay)\s+)?ar[td]h?[aei]m[iu]s+\b[\s,.:;!?-
 PROMPT_MAX_CHARS = 600
 
 # Always first in the Whisper prompt, so the wake word and common demo words are primed even before a project opens.
-PROMPT_LEAD = ["Artemis", "Python", "main.py"]
+PROMPT_LEAD = ["Hey Artemis", "Artemis", "Python", "main.py"]
 
 
 def strip_wake_word(text: str) -> str:

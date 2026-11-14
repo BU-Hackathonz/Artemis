@@ -31,6 +31,7 @@ class FakeSpeaker:
 def test_strip_wake_word():
     assert strip_wake_word("Artemis, create a file") == "create a file"
     assert strip_wake_word("hey artemis. run it") == "run it"
+    assert strip_wake_word("Hey Artemus, create a Python program") == "create a Python program"  # "Hey Artemis" misheard
     assert strip_wake_word("  ARTEMIS run it") == "run it"
     assert strip_wake_word("run artemis.py") == "run artemis.py"  # only a leading wake word
     assert strip_wake_word("Artemisia is a plant") == "Artemisia is a plant"
@@ -52,11 +53,11 @@ def test_strip_wake_word_leaves_other_words_alone():
 
 
 def test_vocabulary_prompt_dedupes_and_caps():
-    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm"]) == "Artemis, Python, main.py, LoginForm"
-    assert vocabulary_prompt(["artemis", "PYTHON"]) == "Artemis, Python, main.py"
-    assert vocabulary_prompt([]) == "Artemis, Python, main.py"
+    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm"]) == "Hey Artemis, Artemis, Python, main.py, LoginForm"
+    assert vocabulary_prompt(["artemis", "PYTHON"]) == "Hey Artemis, Artemis, Python, main.py"
+    assert vocabulary_prompt([]) == "Hey Artemis, Artemis, Python, main.py"
     p = vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=50)
-    assert len(p) <= 50 and p.startswith("Artemis, Python, main.py, word0, word1")
+    assert len(p) <= 50 and p.startswith("Hey Artemis, Artemis, Python, main.py, word0")
 
 
 def router(nvda_up=True, sapi_up=True, running=False, busy=False):
@@ -108,7 +109,7 @@ def test_stub_voice_returns_mvp_request():
     asyncio.run(v.announce(f"Heard: {text}", "normal"))
     assert s.said == [("Heard: create a Python program that prints Hello World", False)]
     v.set_vocabulary(["LoginForm"])
-    assert v.prompt == "Artemis, Python, main.py, LoginForm"
+    assert v.prompt == "Hey Artemis, Artemis, Python, main.py, LoginForm"
 
 
 def test_watch_reports_at_start_and_on_change_only():
