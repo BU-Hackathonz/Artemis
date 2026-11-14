@@ -11,6 +11,7 @@ kickoff. API shapes are in
 | Item | Status |
 |---|---|
 | Windows-only native desktop app + headless core + fully nonvisual interaction | **Confirmed** |
+| Live demo on Ubuntu 24.04 + GNOME 46 with Jun's GNOME Shell island; Windows build later ([decisions §16](decisions.md#16-ubuntu-demo-decided-by-david-2026-11-14)) | **Confirmed** (David, 2026-11-14) |
 | Six workstreams and owners (Avery also owns Infrastructure; David approves merges until Avery arrives) | **Confirmed** |
 | First MVP: "create a Python program that prints Hello World", run it, hear the result | **Confirmed** |
 | Tauri 2 + React + TS + Tailwind; Python + FastAPI core | Proposed by team (treated as the plan) |
@@ -151,3 +152,39 @@ instead of describing the screen.
   `policy/testing.py`, selected with `ARTEMIS_RUNNER=fake`), so each owner can work alone and the
   skeleton never breaks.
 - No plugin system, no config framework, no DB until a feature actually needs one.
+
+## Ubuntu runtime shape (demo target since 2026-11-14)
+
+The core doesn't change. The UI around it does. Reasons: [`decisions.md`](decisions.md) §16.
+
+```
+GNOME Shell extension (Jun, client/prototypes/water-desktop)
+   top-edge notch: listening / working / result states; only Settings expands
+   typed-request panel (fallback); approval modal dialog with the Enter guard
+   │  HTTP POST commands + SSE event stream, 127.0.0.1 only, per-launch token
+   │  address + token read from a 0600 file under $XDG_RUNTIME_DIR
+   ▼
+FastAPI core (server/artemis/)       same process and routes as on Windows
+   voice/   wake word, mic capture, faster-whisper, Linux speech ("Firefly", engine pending)  (Avery)
+   agent/, policy/, conversation/  unchanged, platform-aware where it matters             (David)
+   runner/  same argv presets; Linux interpreter lookup (#139)                              (Avery)
+   │
+   ▼
+Workspace: ~/ArtemisProjects/<project>/   (may be a symlink; links inside a project aren't followed)
+Screen reader: Orca. The core speaks for itself, so Orca and Artemis must not talk over each other
+```
+
+`infra/start.sh` (Avery) generates the token, starts the core, writes the `0600` runtime file
+and enables the extension. The API key is typed at a hidden prompt and never saved. The island's
+states come only from real events: `voice.activity` (listening, transcribing, speaking) and
+`task.state`, `file.changed` and `run.result` for the rest.
+
+Ubuntu-specific risks:
+
+| # | Risk | Fix |
+|---|---|---|
+| U1 | Speech engine for "Firefly" not confirmed | Avery builds offline Piper, with ElevenLabs when a key is set; David confirms the engine |
+| U2 | Orca and Artemis speaking at once | One voice at a time, as on Windows (§ risk 3); Avery's voice lane owns detection |
+| U3 | Wake word hears Artemis's own speech | The mic is muted while Artemis speaks (Avery, voice lane) |
+| U4 | Shell extension crashes take the UI down | The typed-request panel is the fallback; the core keeps running |
+| U5 | No Ubuntu hardware for anyone but David | David runs the hardware QA and integration on his laptop |

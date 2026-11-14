@@ -172,6 +172,21 @@ def test_path_escape_is_rejected_without_asking(tmp_path, path):
     assert error.announce.priority == "high"
 
 
+def test_a_backslash_path_writes_into_the_folder_on_every_desktop(tmp_path):
+    # On Linux too: never a file named "src\\main.py" in the project root.
+    async def go():
+        w = World(tmp_path)
+        await w.call("create_project", name="hello-world")
+        return w, await w.write(path="src\\main.py")
+
+    w, result = asyncio.run(go())
+    root = w.projects / "hello-world"
+    assert result.ok, result
+    assert (root / "src" / "main.py").read_bytes() == HELLO.encode()
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()) == ["src/main.py"]
+    assert "src/main.py" in w.approvals.requests[0].summary
+
+
 def test_read_and_run_paths_are_checked_too(tmp_path):
     async def go():
         w = World(tmp_path)

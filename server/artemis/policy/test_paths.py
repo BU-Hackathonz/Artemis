@@ -11,6 +11,7 @@ from artemis.policy.paths import (
     PathRejected,
     check_read_size,
     check_write_size,
+    project_files,
     safe_resolve,
 )
 
@@ -32,18 +33,14 @@ def test_happy_path(root):
     assert safe_resolve(root, "main.py") == root.resolve() / "main.py"
 
 
-WINDOWS_ONLY = pytest.mark.skipif(
-    sys.platform != "win32", reason="a backslash is only a path separator on Windows"
-)
-
-
 def test_nested_folders(root):
     assert safe_resolve(root, "src/pkg/mod.py") == root.resolve() / "src" / "pkg" / "mod.py"
 
 
-@WINDOWS_ONLY
 def test_nested_folders_backslash(root):
+    # A separator on Linux too, so the policy is the same on both desktops.
     assert safe_resolve(root, "src\\pkg\\mod.py") == root.resolve() / "src" / "pkg" / "mod.py"
+    assert safe_resolve(root, "src/pkg\\mod.py") == root.resolve() / "src" / "pkg" / "mod.py"
 
 
 def test_dotdot_that_stays_inside_is_allowed(root):
@@ -77,7 +74,7 @@ def test_extended_prefix(root, rel):
 
 @pytest.mark.parametrize(
     "rel",
-    ["../x.py", pytest.param("..\\x.py", marks=WINDOWS_ONLY), "a/../../x.py", "a/b/../../../x.py"],
+    ["../x.py", "..\\x.py", "a\\..\\..\\x.py", "a/../../x.py", "a/b/../../../x.py"],
 )
 def test_dotdot_escape(root, rel):
     assert "outside the project" in rejected(root, rel)
@@ -93,6 +90,21 @@ def test_case_differences_stay_inside(root):
     if sys.platform == "win32":
         shouted = type(root)(str(root).upper())
         assert safe_resolve(shouted, "main.py").name == "main.py"
+
+
+def test_a_root_reached_through_a_link_still_works(root, tmp_path):
+    # On Linux ~/ArtemisProjects may be a symlink to another drive (the demo laptop's is).
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(root), str(tmp_path / "alias"))
+    else:
+        os.symlink(root, tmp_path / "alias", target_is_directory=True)
+    (root / "main.py").write_text("x")
+    alias = tmp_path / "alias"
+    assert safe_resolve(alias, "main.py") == root.resolve() / "main.py"
+    assert "outside the project" in rejected(alias, "../x.py")
+    assert project_files(alias) == ["main.py"]
 
 
 def test_link_that_points_outside(root, tmp_path):
@@ -171,8 +183,6 @@ def test_write_size_limit():
 
 
 def test_project_files_skips_links_caches_and_env(root, tmp_path):
-    from artemis.policy.paths import project_files
-
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.txt").write_text("x")

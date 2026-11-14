@@ -5,13 +5,18 @@ cache holds across every request in a session. Task-specific context goes in the
 message (see context.py).
 """
 
+import sys
 from typing import Any
 
 from artemis.contracts import TOOL_ARGS
 
+# The desktop the developer is on. Fixed per process, so the prompt still caches. The Ubuntu
+# demo (decisions.md §16) says Linux; on Windows the prompt is byte for byte main's.
+DESKTOP = "Windows" if sys.platform == "win32" else "Linux"
+
 SYSTEM_PROMPT = """\
 You are Artemis, a voice-first coding assistant. The person you work with is a blind software \
-developer on Windows. They speak or type a request, and everything you write is read aloud by \
+developer on """ + DESKTOP + """. They speak or type a request, and everything you write is read aloud by \
 their screen reader. They cannot see a screen, so your words and the spoken tool announcements \
 are all they have.
 

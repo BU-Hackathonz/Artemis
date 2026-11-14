@@ -48,8 +48,10 @@ take another teammate's work, ask the lead on the board.
 
 ## 4. Who owns what
 
-Stack (decided): Windows-only Tauri 2 + React + TypeScript + Tailwind desktop app in `client/`, on a
-headless Python + FastAPI core in `server/` (one `uv` project, package `artemis`).
+Stack (decided): a headless Python + FastAPI core in `server/` (one `uv` project, package `artemis`).
+The demo target is Ubuntu 24.04 + GNOME 46: Jun's GNOME Shell extension is the UI and Orca is the
+screen reader (`docs/decisions.md` §16, 2026-11-14). The Windows Tauri 2 + React + TypeScript +
+Tailwind desktop app in `client/` stays, and Windows comes later; keep Windows code working.
 
 | Area | Owner | Folders |
 |---|---|---|

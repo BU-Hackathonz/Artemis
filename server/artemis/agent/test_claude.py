@@ -20,7 +20,7 @@ from artemis.agent import claude as claude_module  # noqa: E402
 from artemis.agent.claude import ClaudeAgent  # noqa: E402
 from artemis.agent.config import Config  # noqa: E402
 from artemis.agent.context import task_message, vocabulary  # noqa: E402
-from artemis.agent.prompts import SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
+from artemis.agent.prompts import DESKTOP, SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
 from artemis.agent.stub import StubAgent  # noqa: E402
 from artemis.contracts import TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
 from artemis.policy.gateway import ToolGateway  # noqa: E402
@@ -502,8 +502,19 @@ def test_flag_off_system_prompt_is_mains():
     import hashlib
 
     assert system_prompt() == system_prompt(False) == SYSTEM_PROMPT
-    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == MAIN_SYSTEM_PROMPT_SHA256
+    # Off Windows only the desktop's name differs from main's prompt.
+    as_on_windows = SYSTEM_PROMPT.replace(f"developer on {DESKTOP}.", "developer on Windows.", 1)
+    assert hashlib.sha256(as_on_windows.encode()).hexdigest() == MAIN_SYSTEM_PROMPT_SHA256
     assert "How to read a spoken request" not in SYSTEM_PROMPT
+
+
+def test_system_prompt_names_the_desktop_it_runs_on():
+    import sys
+
+    expected = "Windows" if sys.platform == "win32" else "Linux"
+    assert DESKTOP == expected
+    assert f"blind software developer on {expected}." in SYSTEM_PROMPT
+    assert ("Windows" in SYSTEM_PROMPT) == (sys.platform == "win32")
 
 
 def test_flag_on_system_prompt_adds_the_spoken_request_paragraph():
