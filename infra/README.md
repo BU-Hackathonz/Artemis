@@ -77,3 +77,12 @@ log or in the exe, and it ends with the launcher process (no managed string copy
 This is **not** one-click packaging: it still needs this repository, `uv` and the synced
 dependencies above, because the Python core is started from the repository (decisions.md #3).
 It still shows a console window.
+
+### Saving the key in Windows Credential Manager (optional)
+
+After you type the key, the launcher asks whether to save it (and the workspace ID) in Windows
+Credential Manager. Say yes and later launches skip the prompt. It is stored as a generic
+credential for your Windows user only, protected by DPAPI; no file is written and nothing is
+printed. See or delete it in Credential Manager under "Artemis/AnthropicApiKey", or run
+`infra\launch.ps1 -ForgetKey`. Anyone signed in as you on this laptop could read it, so don't save
+it on a shared account. `-NoPause` never prompts or saves; it only reads what is already saved.
