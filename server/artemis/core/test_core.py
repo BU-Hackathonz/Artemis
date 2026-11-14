@@ -513,6 +513,10 @@ async def test_shortcut_failure_is_spoken_once_with_fixed_text(client, core, voi
         assert r.status_code == 204
     errors = [e for e in session.bus.history if e.type == "error"]
     assert len(errors) == 1 and errors[0].data["code"] == "shortcut_registration_failed"
+    # A different failing chord (the user picked another taken one) is spoken again.
+    other = {"code": "shortcut_registration_failed", "shortcut": "Control+Shift+Space"}
+    assert (await client.post(f"/sessions/{sid}/diagnostics", headers=AUTH, json=other)).status_code == 204
+    assert len([e for e in session.bus.history if e.type == "error"]) == 2
     assert errors[0].announce.priority == "high"
     assert errors[0].announce.text.startswith("The push-to-talk shortcut Control Alt Space couldn't be registered.")
 

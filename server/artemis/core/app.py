@@ -301,10 +301,12 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
     @app.post("/sessions/{sid}/diagnostics", status_code=204)
     async def diagnostics(sid: str, body: ClientDiagnostic):
         """A problem only the client can see (e.g. its global shortcut couldn't be registered),
-        spoken by the core like any other error. Fixed sentences per code; once per session."""
+        spoken by the core like any other error. Fixed sentences per code; once per code and chord
+        per session (the client announces a repeat of the same one itself)."""
         session = core.session(sid)
-        if body.code not in session.reported:
-            session.reported.add(body.code)
+        key = (body.code, body.shortcut)  # a different failing chord is news; the same one isn't
+        if key not in session.reported:
+            session.reported.add(key)
             message, recovery = diagnostic_text(body)
             await session.error(body.code, message, recovery)
         return Response(status_code=204)
