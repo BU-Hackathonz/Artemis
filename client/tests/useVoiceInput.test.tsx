@@ -34,7 +34,7 @@ describe('useVoiceInput shortcut registration', () => {
       await flush();
     }
     expect(registerPushToTalk).toHaveBeenCalledTimes(1);
-    expect(registerPushToTalk.mock.calls[0][0]).toBe('Control+Alt+Space');
+    expect(registerPushToTalk.mock.calls[0][0]).toBe('Control+Shift+Space');
     expect(unregister).not.toHaveBeenCalled();
     expect(latest?.registered).toBe(true);
     expect(core.reportShortcutFailure).not.toHaveBeenCalled();
@@ -49,7 +49,7 @@ describe('useVoiceInput shortcut registration', () => {
     expect(core.reportShortcutFailure).not.toHaveBeenCalled();
     await act(async () => root.render(<Probe core={core} sessionId="ses_1"/>));
     await flush();
-    expect(core.reportShortcutFailure.mock.calls).toEqual([['ses_1', 'Control+Alt+Space']]);
+    expect(core.reportShortcutFailure.mock.calls).toEqual([['ses_1', 'Control+Shift+Space']]);
     await act(async () => root.render(<Probe core={core} sessionId="ses_1" voiceReady/>));
     await flush();
     expect(core.reportShortcutFailure).toHaveBeenCalledTimes(1);
@@ -62,7 +62,7 @@ describe('useVoiceInput shortcut registration', () => {
     const core = fakeCore();
     await act(async () => root.render(<Probe core={core} sessionId="ses_1"/>));
     await flush();
-    expect(core.reportShortcutFailure.mock.calls).toEqual([['ses_1', 'Control+Alt+Space']]);
+    expect(core.reportShortcutFailure.mock.calls).toEqual([['ses_1', 'Control+Shift+Space']]);
     expect(latest?.noticeFailed).toBe(false);
     await act(async () => latest!.apply());
     await flush();
