@@ -25,7 +25,7 @@ test('settings is acknowledged after rendering, keeps typed requests in full vie
   await expect(page.getByRole('heading', {name:'Settings and controls'})).toBeFocused();
   await expect(page.getByRole('textbox')).toHaveCount(0);
   await expect(page.getByRole('button', {name:'Open request and activity controls'})).toBeVisible();
-  await expect.poll(()=>page.evaluate(()=>(window as unknown as {settingsCalls:string[]}).settingsCalls)).toContain('ready:Settings and controls:true');
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {settingsCalls:string[]}).settingsCalls)).toContain('ready:Artemis:true');
   expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', {name:'Open request and activity controls'})).toBeFocused();
