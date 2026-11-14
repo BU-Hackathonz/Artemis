@@ -1,0 +1,36 @@
+name: Windows exe (manual)
+
+# Builds the release desktop client so a laptop without Rust or disk space can still test it.
+# Run it from the Actions tab (workflow_dispatch). It is NOT part of PR CI.
+# The exe is an unsigned dev build of the client only: it does not contain the Python core,
+# and no secrets are used or embedded. Run it with infra\start.ps1 -AppPath <exe>.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: client release exe
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      - run: npm run tauri build -- --no-bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artemis-client-windows
+          path: client/src-tauri/target/release/artemis-client.exe
+          if-no-files-found: error
+          retention-days: 7
