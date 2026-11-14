@@ -173,10 +173,12 @@ process tree on timeout and caps captured output at 64 KB.
 ## 5. Turn-taking rules (voice and tasks)
 
 ### 5.1 Push-to-talk cuts off speech
-On `POST /voice/listen {action: "start"}`, the core calls `voice.stop_speech()` **before** it
-starts recording, then plays the "listening" earcon. Artemis's own voice (SAPI through the
-speakers) must never be recorded and transcribed as a request. NVDA's speech is cut the same way,
-through `cancelSpeech`. The client's own "Stop speech" control is unchanged.
+On `POST /voice/listen {action: "start"}`, the core only calls `voice.start_listening()`. That
+call does the whole sequence: stop current speech (SAPI purge, or NVDA's `cancelSpeech`), play the
+"listening" earcon to the end, then open the mic. `stop_listening()` plays the "stopped" earcon.
+The core doesn't call `stop_speech()` itself here. Artemis's own voice (SAPI through the speakers)
+must never be recorded and transcribed as a request. The client's own "Stop speech" control is
+unchanged.
 
 ### 5.2 One active task per session
 A task is active from `queued` until `succeeded`, `failed` or `canceled`.
