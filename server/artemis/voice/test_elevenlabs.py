@@ -1,0 +1,338 @@
+"""ElevenLabs engine tests. The HTTP stream and the audio device are fakes: nothing goes on the network."""
+
+import asyncio
+import json
+import logging
+import threading
+import time
+import urllib.error
+
+from artemis.voice.speech import (
+    FALLBACK_NOTICE,
+    Announcer,
+    ElevenLabsSpeaker,
+    RateStatus,
+)
+
+KEY = "sk_test_never_show_this_1234567890"
+
+
+class FakeSpeaker:
+    def __init__(self, name):
+        self.name, self.said, self.canceled = name, [], 0
+
+    def available(self):
+        return True
+
+    def speak(self, text, interrupt):
+        self.said.append((text, interrupt))
+
+    def cancel(self):
+        self.canceled += 1
+
+    def busy(self):
+        return False
+
+
+class FakeResponse:
+    def __init__(self, chunks, fail_first=None):
+        self.chunks, self.fail_first, self.closed = list(chunks), fail_first, False
+
+    def read(self, n):
+        if self.fail_first is not None:
+            error, self.fail_first = self.fail_first, None
+            raise error
+        return self.chunks.pop(0) if self.chunks else b""
+
+    def close(self):
+        self.closed = True
+
+
+class FakeOutput:
+    def __init__(self, per_write_s=0.0):
+        self.per_write_s, self.written, self.aborted, self.stopped = per_write_s, [], False, False
+
+    def start(self):
+        pass
+
+    def write(self, chunk):
+        if self.aborted:
+            raise RuntimeError("stream aborted")
+        time.sleep(self.per_write_s)
+        self.written.append(chunk)
+
+    def stop(self):
+        self.stopped = True
+
+    def abort(self):
+        self.aborted = True
+
+    def close(self):
+        pass
+
+
+class Opener:
+    def __init__(self, make_response):
+        self.make_response, self.requests, self.responses = make_response, [], []
+
+    def __call__(self, request, timeout_s):
+        self.requests.append(request)
+        response = self.make_response()
+        if isinstance(response, Exception):
+            raise response
+        self.responses.append(response)
+        return response
+
+
+def eleven(opener, outputs=None, sapi=None, **kw):
+    outputs = [] if outputs is None else outputs
+    per_write = kw.pop("per_write_s", 0.0)
+
+    def output():
+        outputs.append(FakeOutput(per_write))
+        return outputs[-1]
+
+    return ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=sapi or FakeSpeaker("sapi"),
+                             opener=opener, output=output, **kw)
+
+
+def ok_opener(chunks=(b"\x01\x00" * 10, b"\x02\x00" * 10)):
+    return Opener(lambda: FakeResponse(chunks))
+
+
+# ----- routing -----
+
+
+def test_nvda_running_means_elevenlabs_is_never_used():
+    opener = ok_opener()
+    nvda, sapi = FakeSpeaker("nvda"), FakeSpeaker("sapi")
+    e = eleven(opener, sapi=sapi)
+    a = Announcer(nvda=nvda, sapi=sapi, is_nvda_running=lambda: True, eleven=e)
+    asyncio.run(a.announce("main.py ran successfully.", "high"))
+    e.wait_idle(2)
+    assert a.current() is nvda and nvda.said == [("main.py ran successfully.", True)]
+    assert opener.requests == [] and sapi.said == []
+    assert a.status() == (True, "nvda")
+
+
+def test_without_nvda_the_order_is_elevenlabs_then_sapi():
+    sapi = FakeSpeaker("sapi")
+    e = eleven(ok_opener(), sapi=sapi)
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=sapi, is_nvda_running=lambda: False, eleven=e)
+    assert a.current() is e and a.status() == (True, None)
+    e.gave_up = True
+    assert a.current() is sapi
+
+
+def test_engine_is_off_unless_asked(monkeypatch):
+    monkeypatch.delenv("ARTEMIS_VOICE_ENGINE", raising=False)
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False)
+    assert a.eleven is None and a.current().name == "sapi"
+    monkeypatch.setenv("ARTEMIS_VOICE_ENGINE", "elevenlabs")
+    monkeypatch.setenv("ELEVENLABS_API_KEY", KEY)
+    monkeypatch.setenv("ARTEMIS_ELEVEN_VOICE_ID", "voice_abc")
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False)
+    assert a.eleven is not None and a.current().name == "elevenlabs"
+
+
+def test_missing_key_or_voice_falls_back_to_sapi_with_one_warning(monkeypatch, caplog):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    e = ElevenLabsSpeaker(voice_id="voice_abc", fallback=FakeSpeaker("sapi"))
+    assert not e.available() and "ELEVENLABS_API_KEY is not set" in caplog.text
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id=None, fallback=FakeSpeaker("sapi"))
+    assert not e.available()
+
+
+# ----- the request -----
+
+
+def test_request_uses_the_settings_and_sends_the_key_only_in_the_header():
+    opener = ok_opener()
+    e = eleven(opener, speed=1.1, stability=0.4, model="eleven_flash_v2_5")
+    e.speak("Hello.", interrupt=False)
+    assert e.wait_idle(2)
+    req = opener.requests[0]
+    assert req.full_url.startswith("https://api.elevenlabs.io/v1/text-to-speech/voice_abc/stream")
+    assert "output_format=pcm_22050" in req.full_url and KEY not in req.full_url
+    assert req.get_header("Xi-api-key") == KEY
+    body = json.loads(req.data)
+    assert body["text"] == "Hello." and body["model_id"] == "eleven_flash_v2_5"
+    assert body["voice_settings"] == {"stability": 0.4, "similarity_boost": 0.75, "use_speaker_boost": True, "speed": 1.1}
+
+
+def test_audio_plays_chunk_by_chunk():
+    outputs = []
+    e = eleven(ok_opener((b"a" * 4, b"b" * 4, b"c" * 4)), outputs)
+    e.speak("A sentence that is not cached.", interrupt=False)
+    assert e.wait_idle(2)
+    assert outputs[0].written == [b"a" * 4, b"b" * 4, b"c" * 4] and outputs[0].stopped
+    assert e.last_first_audio_s is not None and not e.busy()
+
+
+# ----- speed -----
+
+
+def test_speed_is_clamped_and_steps_by_a_tenth():
+    assert eleven(ok_opener(), speed=3.0).speed == 1.2
+    assert eleven(ok_opener(), speed=0.1).speed == 0.7
+    e = eleven(ok_opener(), speed=1.0)
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False, eleven=e)
+    assert asyncio.run(a.set_rate(1)) == RateStatus.FASTER and e.speed == 1.1
+    assert asyncio.run(a.set_rate(1)) == RateStatus.FASTER and e.speed == 1.2
+    assert asyncio.run(a.set_rate(1)) == RateStatus.AT_MAX and e.speed == 1.2
+    for _ in range(5):
+        asyncio.run(a.set_rate(-1))
+    assert e.speed == 0.7 and asyncio.run(a.set_rate(-1)) == RateStatus.AT_MIN
+    assert asyncio.run(a.set_rate(0)) == RateStatus.UNCHANGED
+
+
+def test_under_nvda_faster_never_touches_elevenlabs():
+    e = eleven(ok_opener(), speed=1.0)
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: True, eleven=e)
+    assert asyncio.run(a.set_rate(1)) == RateStatus.NVDA and e.speed == 1.0
+
+
+# ----- interrupt, cancel, busy -----
+
+
+def test_interrupt_stops_the_current_line_at_once():
+    outputs = []
+    many = [b"x" * 2] * 50
+    e = eleven(Opener(lambda: FakeResponse(list(many))), outputs, per_write_s=0.02)
+    e.speak("A long answer that takes a while.", interrupt=False)
+    deadline = time.monotonic() + 2
+    while not e.busy() or not outputs or not outputs[0].written:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    e.speak("main.py failed with exit code 1.", interrupt=True)
+    assert e.wait_idle(5)
+    assert outputs[0].aborted and len(outputs[0].written) < 50
+    assert len(outputs) == 2 and len(outputs[1].written) == 50
+
+
+def test_cancel_stops_playback_drops_the_queue_and_the_sapi_fallback():
+    outputs, sapi = [], FakeSpeaker("sapi")
+    opener = Opener(lambda: FakeResponse([b"x" * 2] * 50))
+    e = eleven(opener, outputs, sapi=sapi, per_write_s=0.02)
+    e.speak("first line", interrupt=False)
+    e.speak("second line", interrupt=False)
+    deadline = time.monotonic() + 2
+    while not outputs or not outputs[0].written:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    e.cancel()
+    assert e.wait_idle(3)
+    assert outputs[0].aborted and len(opener.requests) == 1  # the queued line was never fetched
+    assert sapi.canceled == 1 and not e.busy()
+
+
+def test_low_lines_are_dropped_while_elevenlabs_plays():
+    outputs = []
+    e = eleven(Opener(lambda: FakeResponse([b"x" * 2] * 30)), outputs, per_write_s=0.02)
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False, eleven=e)
+
+    async def run():
+        await a.announce("main.py ran successfully.", "high")
+        await asyncio.sleep(0.15)
+        await a.announce("Still working.", "low")  # dropped: the result is still playing
+
+    asyncio.run(run())
+    assert e.wait_idle(5) and len(outputs) == 1
+
+
+def test_push_to_talk_stop_speech_cancels_elevenlabs():
+    outputs = []
+    e = eleven(Opener(lambda: FakeResponse([b"x" * 2] * 50)), outputs, per_write_s=0.02)
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False, eleven=e)
+    asyncio.run(a.announce("A long answer.", "normal"))
+    deadline = time.monotonic() + 2
+    while not outputs or not outputs[0].written:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    asyncio.run(a.stop_speech())  # what WhisperVoice.start_listening calls before the listening earcon
+    assert outputs[0].aborted and e.wait_idle(3)
+
+
+# ----- fallback and the circuit breaker -----
+
+
+def test_slow_first_chunk_falls_back_to_sapi_for_that_line(caplog):
+    sapi = FakeSpeaker("sapi")
+    e = eleven(Opener(lambda: FakeResponse([b"x"], fail_first=TimeoutError("timed out"))), sapi=sapi)
+    e.speak("Created main.py, 1 line.", interrupt=False)
+    assert e.wait_idle(2)
+    assert sapi.said == [("Created main.py, 1 line.", False)]
+    assert "no audio within the timeout" in caplog.text and not e.gave_up
+
+
+def test_fallback_runs_on_the_event_loop_thread():
+    sapi = FakeSpeaker("sapi")
+    seen = []
+    sapi.speak = lambda text, interrupt: seen.append((text, threading.current_thread() is threading.main_thread()))
+    e = eleven(Opener(lambda: urllib.error.URLError("offline")), sapi=sapi)
+
+    async def run():
+        e.speak("Hello.", interrupt=False)
+        await asyncio.to_thread(e.wait_idle, 2)
+        await asyncio.sleep(0.05)
+
+    asyncio.run(run())
+    assert seen == [("Hello.", True)]  # SAPI (COM) is only ever called from the loop's thread
+
+
+def test_three_failures_in_a_row_switch_to_sapi_and_say_so_once():
+    sapi, notices = FakeSpeaker("sapi"), []
+    e = eleven(Opener(lambda: urllib.error.HTTPError("u", 503, "busy", {}, None)), sapi=sapi,
+               on_give_up=notices.append)
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=sapi, is_nvda_running=lambda: False, eleven=e)
+    for n in range(3):
+        e.speak(f"line {n}", interrupt=False)
+        assert e.wait_idle(2)
+    assert e.gave_up and not e.available() and a.current() is sapi
+    assert notices == [FALLBACK_NOTICE]
+    assert [t for t, _ in sapi.said] == ["line 0", "line 1", "line 2"]
+
+
+def test_a_success_resets_the_failure_count():
+    results = [urllib.error.URLError("x"), urllib.error.URLError("x"), None, urllib.error.URLError("x")]
+
+    def make():
+        r = results.pop(0)
+        return FakeResponse([b"ok"]) if r is None else r
+
+    e = eleven(Opener(make))
+    for n in range(4):
+        e.speak(f"line {n}", interrupt=False)
+        assert e.wait_idle(2)
+    assert not e.gave_up
+
+
+# ----- cache and privacy -----
+
+
+def test_only_fixed_short_lines_are_cached():
+    opener = ok_opener()
+    e = eleven(opener)
+    for _ in range(2):
+        e.speak("Canceled.", interrupt=False)
+        assert e.wait_idle(2)
+    assert len(opener.requests) == 1  # the second one played from memory
+    for _ in range(2):
+        e.speak("print('my secret code')", interrupt=False)
+        assert e.wait_idle(2)
+    assert len(opener.requests) == 3  # never cached
+    e.step_speed(1)
+    e.speak("Canceled.", interrupt=False)
+    assert e.wait_idle(2) and len(opener.requests) == 4  # cached per speed
+
+
+def test_the_key_never_reaches_logs(caplog):
+    caplog.set_level(logging.DEBUG)
+    errors = [urllib.error.HTTPError("https://api.elevenlabs.io/x", 401, f"bad key {KEY}", {"xi-api-key": KEY}, None),
+              urllib.error.URLError(f"fail {KEY}"), RuntimeError(f"boom {KEY}")]
+    e = eleven(Opener(lambda: errors.pop(0)), on_give_up=lambda notice: None)
+    for n in range(3):
+        e.speak(f"line {n}", interrupt=False)
+        assert e.wait_idle(2)
+    assert e.gave_up and KEY not in caplog.text
+    assert "HTTP 401" in caplog.text and KEY not in repr(e) and KEY not in FALLBACK_NOTICE

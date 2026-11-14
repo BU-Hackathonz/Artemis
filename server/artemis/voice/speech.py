@@ -14,9 +14,15 @@ import asyncio
 import ctypes
 import inspect
 import logging
+import json
 import os
+import queue
 import sys
+import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Protocol
@@ -198,6 +204,310 @@ class SapiSpeaker:
         return self._voice.Status.RunningState == self._SPEAKING
 
 
+# ----- ElevenLabs (opt-in: ARTEMIS_VOICE_ENGINE=elevenlabs; used only when NVDA is not running) -----
+
+ELEVEN_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+ELEVEN_PCM_RATE = 22_050  # output_format=pcm_22050: 16-bit mono, playable as each chunk arrives
+SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
+FAILURES_BEFORE_SAPI = 3
+FALLBACK_NOTICE = "My natural voice isn't reachable, so I'm using the Windows voice."
+# Short fixed lines worth keeping as audio so they play at once. Only these exact strings are cached:
+# never transcripts, code, file contents or anything the agent wrote.
+CACHED_LINES = frozenset({
+    "Artemis is ready. Hold Control Shift Space and speak, or type a request.",
+    "Artemis is ready. Use the Start listening button and speak, or type a request.",
+    "Canceled.",
+    "Canceled. Nothing was written.",
+    "Speaking faster.",
+    "Speaking slower.",
+    "That's the fastest I go.",
+    "That's the slowest I go.",
+    "Still working.",
+})
+PLACEHOLDER_VOICE = "<PASTE_VOICE_ID>"
+
+
+def _env_float(name: str, default: float, low: float | None = None, high: float | None = None) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("%s=%r is not a number; using %s", name, raw, default)
+        return default
+    if value != value:  # nan
+        return default
+    if low is not None:
+        value = max(low, value)
+    if high is not None:
+        value = min(high, value)
+    return value
+
+
+def clamp_speed(speed: float) -> float:
+    return round(max(SPEED_MIN, min(SPEED_MAX, float(speed))), 2)
+
+
+def _open_stream(request: urllib.request.Request, timeout_s: float):
+    return urllib.request.urlopen(request, timeout=timeout_s)  # noqa: S310 (fixed https URL)
+
+
+def _output_stream():
+    import sounddevice as sd
+
+    return sd.RawOutputStream(samplerate=ELEVEN_PCM_RATE, channels=1, dtype="int16")
+
+
+def _chain(first: bytes, rest):
+    yield first
+    yield from rest
+
+
+def voice_engine() -> str:
+    """ARTEMIS_VOICE_ENGINE: unset keeps today's behaviour; 'elevenlabs' opts in."""
+    return os.environ.get("ARTEMIS_VOICE_ENGINE", "").strip().lower()
+
+
+class ElevenLabsSpeaker:
+    """ElevenLabs streaming text-to-speech, played as the first audio chunk arrives.
+
+    The network and the audio device run on one worker thread, so the event loop never waits on them.
+    A line that can't start within the timeout (no key, a failed request, a slow first chunk) is spoken
+    by the fallback speaker (SAPI) instead. After FAILURES_BEFORE_SAPI failures in a row this speaker
+    reports unavailable for the rest of the session, so the router uses SAPI. The API key is only ever
+    sent in the request header: it is never logged, spoken or put in an event.
+    """
+
+    name = "elevenlabs"
+
+    def __init__(self, api_key: str | None = None, voice_id: str | None = None, model: str | None = None,
+                 speed: float | None = None, stability: float | None = None, timeout_s: float | None = None,
+                 fallback: Speaker | None = None, opener=_open_stream, output=_output_stream,
+                 on_give_up: Callable[[str], None] | None = None) -> None:
+        self._key = api_key if api_key is not None else os.environ.get("ELEVENLABS_API_KEY", "").strip()
+        self.voice_id = voice_id or os.environ.get("ARTEMIS_ELEVEN_VOICE_ID", "").strip() or PLACEHOLDER_VOICE
+        self.model = model or os.environ.get("ARTEMIS_ELEVEN_MODEL", "").strip() or "eleven_flash_v2_5"
+        self.speed = clamp_speed(speed if speed is not None else _env_float("ARTEMIS_ELEVEN_SPEED", 1.0))
+        self.stability = stability if stability is not None else _env_float("ARTEMIS_ELEVEN_STABILITY", 0.5, 0.0, 1.0)
+        self.timeout_s = timeout_s if timeout_s is not None else _env_float("ARTEMIS_ELEVEN_TIMEOUT_S", 1.5, 0.2, 10.0)
+        self.fallback = fallback
+        self.on_give_up = on_give_up  # the core can set this to say FALLBACK_NOTICE through the bus
+        self._opener, self._output = opener, output
+        self._queue: queue.Queue = queue.Queue()
+        self._gen = 0  # bumped by cancel (and so by interrupt): work holding an older number stops
+        self._lock = threading.Lock()
+        self._playing = threading.Event()
+        self._idle = threading.Event()
+        self._idle.set()
+        self._stream = None  # the open output stream, so cancel() can abort it from the loop thread
+        self._response = None  # the open HTTP response, so cancel() can abandon the download
+        self._failures = 0
+        self.gave_up = False
+        self._cache: dict[tuple, bytes] = {}
+        self.last_first_audio_s: float | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._worker: threading.Thread | None = None
+        if not self._key:
+            log.warning("ARTEMIS_VOICE_ENGINE=elevenlabs, but ELEVENLABS_API_KEY is not set; using the Windows voice")
+        elif self.voice_id == PLACEHOLDER_VOICE:
+            log.warning("ARTEMIS_VOICE_ENGINE=elevenlabs, but ARTEMIS_ELEVEN_VOICE_ID is not set; using the Windows voice")
+
+    # Speaker protocol
+
+    def available(self) -> bool:
+        return bool(self._key) and self.voice_id != PLACEHOLDER_VOICE and not self.gave_up
+
+    def speak(self, text: str, interrupt: bool) -> None:
+        try:
+            self._loop = asyncio.get_running_loop()  # the SAPI fallback must run on the loop's thread (COM)
+        except RuntimeError:
+            self._loop = None
+        if interrupt:
+            self.cancel()
+        with self._lock:
+            gen = self._gen
+            self._idle.clear()
+            self._queue.put((gen, text))
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(target=self._run, name="artemis-elevenlabs", daemon=True)
+                self._worker.start()
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._gen += 1
+            stream, response = self._stream, self._response
+            try:
+                while True:
+                    self._queue.get_nowait()
+            except queue.Empty:
+                pass
+        for thing, how in ((stream, "abort"), (response, "close")):
+            if thing is not None:
+                try:
+                    getattr(thing, how)()  # stop the sound now, and abandon the download
+                except Exception:
+                    pass
+        if self.fallback is not None:
+            try:
+                self.fallback.cancel()  # a line that fell back to SAPI stops too (push-to-talk)
+            except Exception:
+                pass
+
+    def busy(self) -> bool:
+        return self._playing.is_set() or not self._queue.empty()
+
+    # Speed: "faster" and "slower"
+
+    def step_speed(self, delta: int) -> RateStatus:
+        if not delta:
+            return RateStatus.UNCHANGED
+        after = clamp_speed(self.speed + (SPEED_STEP if delta > 0 else -SPEED_STEP))
+        if after == self.speed:
+            return RateStatus.AT_MAX if delta > 0 else RateStatus.AT_MIN
+        self.speed = after
+        return RateStatus.FASTER if delta > 0 else RateStatus.SLOWER
+
+    # Worker thread
+
+    def wait_idle(self, timeout: float = 5.0) -> bool:
+        """For tests and measurements: wait until everything queued was played or dropped."""
+        return self._idle.wait(timeout)
+
+    def _current(self, gen: int) -> bool:
+        with self._lock:
+            return gen == self._gen
+
+    def _run(self) -> None:
+        while True:
+            try:
+                gen, text = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                with self._lock:
+                    if self._queue.empty():
+                        self._idle.set()
+                        self._worker = None
+                        return
+                continue
+            if self._current(gen):
+                self._say(gen, text)
+            with self._lock:
+                if self._queue.empty():
+                    self._idle.set()
+
+    def _say(self, gen: int, text: str) -> None:
+        key = (self.voice_id, self.model, self.speed, text)
+        cached = self._cache.get(key)
+        if cached is not None:
+            self.last_first_audio_s = 0.0
+            self._play(iter([cached]), gen)
+            return
+        started = time.monotonic()
+        try:
+            chunks = self._fetch(text)
+            first = next(chunks)
+        except StopIteration:
+            self._failed(text, gen, "the stream returned no audio")
+            return
+        except Exception as e:
+            self._failed(text, gen, self._reason(e))
+            return
+        self.last_first_audio_s = time.monotonic() - started
+        self._failures = 0
+        played = self._play(_chain(first, chunks), gen)
+        if played is not None and text in CACHED_LINES:
+            self._cache[key] = played
+
+    def _fetch(self, text: str):
+        body = json.dumps({
+            "text": text,
+            "model_id": self.model,
+            "voice_settings": {"stability": self.stability, "similarity_boost": 0.75,
+                               "use_speaker_boost": True, "speed": self.speed},
+        }).encode("utf-8")
+        url = ELEVEN_URL.format(voice_id=urllib.parse.quote(self.voice_id, safe="")) + f"?output_format=pcm_{ELEVEN_PCM_RATE}"
+        request = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"xi-api-key": self._key, "Content-Type": "application/json", "Accept": "audio/pcm"},
+        )
+        response = self._opener(request, self.timeout_s)
+        with self._lock:
+            self._response = response
+        try:
+            while True:
+                chunk = response.read(4096)
+                if not chunk:
+                    return
+                yield chunk
+        finally:
+            with self._lock:
+                self._response = None
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def _play(self, chunks, gen: int) -> bytes | None:
+        """Play PCM chunks as they come. Returns the whole audio if it played to the end, else None."""
+        stream = self._output()
+        with self._lock:
+            if gen != self._gen:
+                return None
+            self._stream = stream
+        kept = bytearray()
+        self._playing.set()
+        try:
+            stream.start()
+            for chunk in chunks:
+                if not self._current(gen):
+                    return None
+                stream.write(chunk)
+                kept += chunk
+            stream.stop()  # drains the buffer, so busy() stays true until the last word is heard
+            return bytes(kept) if self._current(gen) else None
+        except Exception as e:
+            if self._current(gen):
+                log.warning("ElevenLabs playback stopped: %s", type(e).__name__)
+            return None
+        finally:
+            self._playing.clear()
+            with self._lock:
+                self._stream = None
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _reason(e: Exception) -> str:
+        """A short reason for the log. Never the request, its headers or body: the key lives there."""
+        if isinstance(e, urllib.error.HTTPError):
+            return f"HTTP {e.code}"
+        if isinstance(e, TimeoutError) or "timed out" in str(e).lower():
+            return "no audio within the timeout"
+        return type(e).__name__
+
+    def _failed(self, text: str, gen: int, reason: str) -> None:
+        if not self._current(gen):
+            return  # canceled meanwhile: say nothing
+        self._failures += 1
+        log.warning("ElevenLabs failed (%s); this line uses the Windows voice", reason)
+        if self._failures >= FAILURES_BEFORE_SAPI and not self.gave_up:
+            self.gave_up = True
+            log.warning("ElevenLabs failed %d times in a row; using the Windows voice for this session", self._failures)
+            if self.on_give_up is not None:
+                self._on_loop(self.on_give_up, FALLBACK_NOTICE)
+        if self.fallback is not None and self.fallback.available():
+            self._on_loop(self.fallback.speak, text, False)
+
+    def _on_loop(self, fn, *args) -> None:
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(fn, *args)
+        else:
+            fn(*args)
+
+
 class NullSpeaker:
     """No voice output. The core reports voice_ready=false so the client's live region speaks instead."""
 
@@ -217,12 +527,17 @@ class NullSpeaker:
 
 
 class Announcer:
-    """announce() for the core: picks NVDA, SAPI or silence, applies priority, remembers the last line."""
+    """announce() for the core: picks NVDA, then ElevenLabs (opt-in), then SAPI, then silence; applies priority."""
 
-    def __init__(self, nvda: Speaker | None = None, sapi: Speaker | None = None, is_nvda_running: Callable[[], bool] = nvda_running) -> None:
+    def __init__(self, nvda: Speaker | None = None, sapi: Speaker | None = None, is_nvda_running: Callable[[], bool] = nvda_running,
+                 eleven: Speaker | None = None) -> None:
         self.nvda = nvda or NvdaSpeaker()
         self.sapi = sapi or SapiSpeaker()
         self.is_nvda_running = is_nvda_running
+        # Opt-in natural voice, used only when NVDA is not running. Unset ARTEMIS_VOICE_ENGINE keeps today's behaviour.
+        if eleven is None and voice_engine() == "elevenlabs":
+            eleven = ElevenLabsSpeaker(fallback=self.sapi)
+        self.eleven = eleven
         self.last: str | None = None
         self._warned = False
 
@@ -234,6 +549,8 @@ class Announcer:
                 log.warning("NVDA is running but its controller DLL is unavailable; staying silent. Run: python -m artemis.voice.setup")
                 self._warned = True
             return NullSpeaker()
+        if self.eleven is not None and self.eleven.available():
+            return self.eleven
         return self.sapi if self.sapi.available() else NullSpeaker()
 
     def status(self) -> tuple[bool, str | None]:
@@ -294,6 +611,8 @@ class Announcer:
         speaker = self.current()
         if speaker.name == "nvda":
             return RateStatus.NVDA
+        if hasattr(speaker, "step_speed"):  # ElevenLabs: speed 0.7..1.2 in steps of 0.1, for this session
+            return speaker.step_speed(delta)
         if not hasattr(speaker, "set_rate"):
             return RateStatus.NO_OUTPUT  # no voice output at all; there is nothing to make faster or slower
         if not delta:

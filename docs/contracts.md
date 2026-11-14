@@ -35,7 +35,7 @@ Errors outside the table: a missing or wrong token is `401 {error: "unauthorized
 ## 2. Core → client: the event stream
 
 One envelope for everything. The client renders every event's `announce.text` in the log
-region. **Speech happens in the core** (`announce()` → NVDA or SAPI), so the client's live region
+region. **Speech happens in the core** (`announce()` → NVDA, else the opt-in ElevenLabs voice, else SAPI), so the client's live region
 stays silent while the core can speak, and turns on whenever it can't (§5.3).
 
 ```jsonc
@@ -171,7 +171,7 @@ class Voice(Protocol):
     async def start_listening(self) -> None: ...
     async def stop_listening(self, client_request_id: str) -> str: ...   # final transcript, wake word stripped; no partials
     def set_vocabulary(self, words: list[str]) -> None: ...               # file names and symbols for the prompt
-    async def announce(self, text: str, priority: Priority) -> None: ...  # NVDA if running, else SAPI
+    async def announce(self, text: str, priority: Priority) -> None: ...  # NVDA if running, else ElevenLabs (opt-in), else SAPI
     async def stop_speech(self) -> None: ...
     async def repeat_last(self) -> None: ...
 ```
@@ -285,7 +285,12 @@ NVDA itself was saying, and Artemis can't change NVDA's speaking rate: "slower" 
 pointer to NVDA's own rate setting. The controller knows which applies from `voice.status`.
 On SAPI the rate is the user's Windows setting unless `ARTEMIS_SAPI_RATE` replaces it, clamped to
 -3..6. Conversation's "faster" and "slower" change only the SAPI rate, one step at a time, and say
-so when a limit is reached.
+so when a limit is reached. **Proposed (Yaovi, needs Avery):** with the opt-in ElevenLabs engine
+(`ARTEMIS_VOICE_ENGINE=elevenlabs`, decisions.md §5a) speaking instead of SAPI, they step its speed
+by 0.1 within 0.7..1.2 and return the same statuses, so the core's lines are unchanged. When
+ElevenLabs gives up for the session, the voice calls the core's hook once with the fixed line "My
+natural voice isn't reachable, so I'm using the Windows voice.", which the core says as an
+`agent.message` at normal (core wiring is a follow-up; until then it is only logged).
 
 ### 5.4 Conversation (behind `ARTEMIS_CONVERSATION=on`, default off)
 With the flag off, §5.1 and §5.2 apply exactly as written above. With it on, every final
