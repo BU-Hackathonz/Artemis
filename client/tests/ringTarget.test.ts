@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {ringTarget} from '../src/LiquidRing';
-import {RING_STATES} from '../src/liquidRing';
+import {RING_STATES} from '../src/ringRenderer';
 
 const base = {connected: true, taskState: 'idle' as const, microphone: 'idle' as const, approval: false};
 

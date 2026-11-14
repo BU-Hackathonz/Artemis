@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
-import {AgentRing, RING_STATES} from './liquidRing';
-import type {RingTarget} from './liquidRing';
+import {AgentRing, RING_STATES} from './ringRenderer';
+import type {RingTarget} from './ringRenderer';
 import type {TaskState} from './contracts';
 import type {TalkStatus} from './pushToTalk';
 
