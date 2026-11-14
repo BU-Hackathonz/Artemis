@@ -40,7 +40,7 @@
     <ul>
       <li><strong>Your voice, not a second one.</strong> When NVDA is running, Artemis speaks through it, in your voice and at your speed, and sends the same text to your braille display. Without NVDA it uses the Windows voice. It never uses both at once.</li>
       <li><strong>Works from any app.</strong> Push-to-talk and spoken results work even when Artemis isn't the focused window.</li>
-      <li><strong>Interruptible.</strong> Pressing push-to-talk stops current speech first, so Artemis never records itself. You can also stop or repeat the last line at any time.</li>
+      <li><strong>Interruptible.</strong> Pressing push-to-talk stops current speech first, so what Artemis was saying isn't recorded. You can also stop or repeat the last line at any time.</li>
       <li><strong>Keyboard first.</strong> Approvals are Enter and Escape on a focused dialog. Focus moves to the dialog when it opens and back when it closes.</li>
       <li><strong>Nothing silent.</strong> Every pause, failure and completion is announced, and everything spoken is kept in a log you can review.</li>
     </ul>
@@ -51,7 +51,7 @@
     <ul>
       <li><strong>Exact approvals.</strong> An approval covers one exact edit, or for a run, the entry file you reviewed and its arguments. Other project files are not part of a run's approval. If the files for an edit change before you decide, it is cancelled and asked again.</li>
       <li><strong>A spoken "yes" never approves.</strong> Approvals are keyboard-only, so a misheard word can't write or run anything.</li>
-      <li><strong>Blocked actions stay blocked by default.</strong> When a security scan finds a serious problem, Enter alone rejects. Overriding takes a separate shortcut on the Approve button.</li>
+      <li><strong>Blocked actions stay blocked by default.</strong> When a security scan finds a serious problem, focus starts on Reject and Enter alone can't approve. Overriding takes a separate shortcut on the Approve button.</li>
       <li><strong>No shell, no install tool.</strong> The agent's tools are: create or open a project, list and read files, propose new or edited files, run a Python file after approval, scan for security problems, and inspect a local HTML page.</li>
       <li><strong>Files are untrusted.</strong> Text in your project, such as a comment telling the AI to delete everything, is treated as data, not as an instruction. The agent has no delete tool, and any change it proposes still needs your approval. An approved program runs with your permissions, so read it before you approve.</li>
     </ul>
@@ -61,7 +61,7 @@
     <h2 id="data-title">Your data</h2>
     <ul>
       <li><strong>Speech stays on your computer.</strong> Recognition runs locally. Audio is held in memory only while you speak and is discarded after transcription. It is never saved or uploaded.</li>
-      <li><strong>The agent uses Claude.</strong> Your request and the project files the agent reads are sent to Anthropic's Claude API to plan changes. The API key is never put in prompts, logs or speech.</li>
+      <li><strong>The agent uses Claude.</strong> Your request, the project's file names, the files the agent reads and its tool results (such as a program's output) are sent to Anthropic's Claude API to plan changes. The API key is never put in prompts, logs or speech.</li>
       <li><strong>Local only.</strong> The core listens on your own computer and requires a secret token for each launch, so websites can't control it.</li>
       <li><strong>This site</strong> has no cookies or analytics. Its one small script only runs the visual motion and the Pause motion button, and it loads nothing from other servers.</li>
     </ul>

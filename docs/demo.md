@@ -1,5 +1,7 @@
 # Demo runbook
 
+**On stage, use the one-page [stage runbook](stage-runbook.md).** This file has the details behind it.
+
 How to set up the demo laptop, run the five-part demo for judges, and rehearse it with your eyes
 closed. Spoken lines in quotes are the exact text the core produces (from
 `server/artemis/policy/gateway.py`, `server/artemis/core/session.py`, `server/artemis/core/app.py`,
@@ -73,11 +75,21 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    cd client; npm ci; cd ..
    ```
    Echo Check uses Edge or Chrome if Playwright's Chromium isn't installed.
+   Speech: `$env:ARTEMIS_WHISPER_MODEL` (default `small.en`; `medium.en` is more accurate, slower). Opt-in, off by default: `$env:ARTEMIS_WHISPER_BEAM='5'` (default 1), `$env:ARTEMIS_PTT_POST_ROLL='0.35'` (seconds the mic stays open after release; default 0) and `$env:ARTEMIS_WHISPER_PROMPT='natural'` (spoken-style prompt).
+   Use the opt-in ones on stage only after row 3 passes word for word with them on, on this laptop. Set them in the same window before `artemis.voice.setup` (so it downloads that model) and `start.ps1`.
 3. **NVDA.** Decide on or off before starting, and rehearse the same way.
    - On (recommended, it is what our users run): the core speaks through NVDA's controller DLL in
      the user's NVDA voice. If the DLL is missing, the core goes silent and the app's activity log
      speaks through NVDA instead.
    - Off: the core speaks with Windows SAPI. Never both at once.
+   - **Clearer voice (NVDA on).** What you hear is NVDA's own synthesizer; Artemis never changes its
+     voice or rate (in conversation mode "faster" and "slower" only say so), so tune NVDA first: NVDA
+     menu (NVDA+N) → Preferences → Settings → Speech (NVDA+Control+V). **Change...** picks the
+     synthesizer: Windows OneCore voices (NVDA's default) or eSpeak NG (built into NVDA). Then try
+     each **Voice**, set **Rate** (0 to 100) to a pace judges can follow, and leave **Rate boost**
+     off. More OneCore voices: Windows Settings → Time & language → Speech → Manage voices →
+     Add voices, then restart NVDA. Without NVDA the core uses SAPI: the Windows default voice and
+     rate unless `ARTEMIS_SAPI_VOICE` / `ARTEMIS_SAPI_RATE` are set (`infra/README.md`).
 4. **Global shortcut.** Quit apps that may take Ctrl+Shift+Space as a global shortcut (desktop
    assistants' quick-entry keys are likely suspects). Start Artemis and listen: if it says the
    push-to-talk shortcut couldn't be registered, apply another chord (see Keys above) before the

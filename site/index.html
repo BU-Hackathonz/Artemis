@@ -59,7 +59,9 @@
             <dl class="log">
               <dt class="you">You say</dt><dd>Artemis, create a Python program that prints Hello World.</dd>
               <dt>Artemis</dt><dd>Heard: create a Python program that prints Hello World.</dd>
-              <dt>Artemis</dt><dd>Waiting for your approval to create main.py.</dd>
+              <dt>Artemis</dt><dd>Create project hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject.</dd>
+              <dt class="you">You press</dt><dd>Enter</dd>
+              <dt>Artemis</dt><dd>Run main.py with Python. No security findings. Enter to run, Escape to reject.</dd>
               <dt class="you">You press</dt><dd>Enter</dd>
               <dt>Artemis</dt><dd>main.py ran successfully. It printed: Hello, World!</dd>
             </dl>
@@ -68,24 +70,24 @@
             <h3>Approval</h3>
             <div class="dialog">
               <strong>Review file changes</strong>
-              <p>Create project hello-world with one file, main.py, 1 line.</p>
+              <p>Create project hello-world with 1 file: main.py, 1 line. No security findings.</p>
               <code>+ print("Hello, World!")</code>
               <div class="row" aria-hidden="true"><span class="chip">Reject</span><span class="chip on">Approve</span></div>
             </div>
           </div>
         </div>
       </div>
-      <p class="caption">Every line is spoken in your NVDA voice (or the Windows voice without NVDA), sent to your braille display, and kept in a log you can review.</p>
+      <p class="caption">Artemis speaks in your NVDA voice and sends the same line to your braille display (or uses the Windows voice without NVDA), and keeps every line in a log you can review.</p>
     </div>
   </section>
 
   <section class="marquee-sec" aria-label="Built on">
     <p class="marquee-label">Built with</p>
     <div class="marquee" aria-hidden="true">
-      <div class="track"><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>WCAG 2.2</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>WCAG 2.2</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span></div>
+      <div class="track"><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span></div>
       <div class="track rev"><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Reviewable log</span><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Reviewable log</span></div>
     </div>
-    <p class="sr">Built on NVDA, Windows SAPI, Whisper, Claude, Tauri, WCAG 2.2, axe-core, Bandit and Python, with braille display support. Features: push-to-talk, spoken diffs, keyboard approvals, security scans, Echo Check, local speech and a reviewable log.</p>
+    <p class="sr">Built on NVDA, Windows SAPI, Whisper, Claude, Tauri, axe-core, Bandit and Python, with braille display support. Features: push-to-talk, spoken diffs, keyboard approvals, security scans, Echo Check, local speech and a reviewable log.</p>
   </section>
 
   <section aria-labelledby="what-title">
@@ -97,7 +99,7 @@
         <li><a href="trust.html"><span class="k">Control</span><strong>Approve the exact change</strong><p>Enter approves, Escape rejects. A spoken "yes" never decides.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="how-it-works.html"><span class="k">Runs</span><strong>Run it for real</strong><p>A fixed command, a time limit, and none of Artemis's secrets.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="trust.html"><span class="k">Safety</span><strong>Catch problems before they run</strong><p>Python files are scanned before each write or run. A serious finding blocks it until you decide.</p><span class="arr" aria-hidden="true">↗</span></a></li>
-        <li><a href="how-it-works.html"><span class="k">Echo Check</span><strong>Hear what a page really exposes</strong><p>Artemis reads a web page's real accessibility tree and speaks the problems, most serious first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="how-it-works.html"><span class="k">Echo Check</span><strong>Hear what a page really exposes</strong><p>Artemis reads a local web page's real accessibility tree and speaks the problems, most serious first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="trust.html"><span class="k">Screen reader</span><strong>Your voice, never a second one</strong><p>Speaks through NVDA when it runs, and sends the same line to braille.</p><span class="arr" aria-hidden="true">↗</span></a></li>
       </ul>
     </div>
@@ -167,7 +169,7 @@
       <h2 class="h2" id="how-title">From your voice to a running program, <span class="lite">in five clear steps.</span></h2>
       <ol class="steps">
         <li class="step"><div><span class="k">Speak</span><h3>You hold the shortcut and talk.</h3><p>Artemis stops talking, plays a rising tone, then listens. Release and it transcribes on your own computer.</p></div></li>
-        <li class="step"><div><span class="k">Confirm</span><h3>It reads back what it heard.</h3><p>"Heard: create a Python program…" The text stays editable, so a misheard word is easy to fix.</p></div></li>
+        <li class="step"><div><span class="k">Confirm</span><h3>It reads back what it heard.</h3><p>"Heard: create a Python program…" The text also lands in the request field, so you can cancel, fix a misheard word and send it again.</p></div></li>
         <li class="step"><div><span class="k">Review</span><h3>You hear the exact change.</h3><p>A summary built from the real edit, with the full diff to step through. Enter approves, Escape rejects.</p></div></li>
         <li class="step"><div><span class="k">Scan and run</span><h3>It checks the code, then runs it.</h3><p>A security scan of any Python files first, then its own approval, a fixed command and a time limit.</p></div></li>
         <li class="step"><div><span class="k">Hear</span><h3>You hear what really happened.</h3><p>What the program printed, or the exit code and final error line, then an explanation and a fix.</p></div></li>
@@ -206,7 +208,7 @@
       <div class="faq">
         <details><summary>Which screen readers does it work with?</summary><p>Artemis is built and tested with NVDA on Windows 11. Without NVDA it speaks through the Windows voice. Other screen readers aren't tested yet.</p></details>
         <details><summary>Does my voice leave my computer?</summary><p>No. Speech is recognised locally with Whisper, held in memory only while you speak, and never saved or uploaded.</p></details>
-        <details><summary>Is my code sent anywhere?</summary><p>Your request and the files the agent reads go to Anthropic's Claude to plan changes. Artemis sends nothing else. An approved program runs on your computer with your permissions.</p></details>
+        <details><summary>Is my code sent anywhere?</summary><p>Your request, the open project's file names, the files the agent reads and its tool results (such as a program's output) go to Anthropic's Claude to plan changes. Artemis sends nothing else. An approved program runs on your computer with your permissions.</p></details>
         <details><summary>Can it run anything it wants?</summary><p>No. Every run needs your approval, Python files are scanned first, and it runs with a fixed command and a time limit. It's gated and limited, not an operating-system sandbox.</p></details>
         <details><summary>What if the shortcut doesn't work?</summary><p>Another app may own it. Choose a different shortcut in Artemis, or use the Start listening button.</p></details>
       </div>
@@ -217,7 +219,7 @@
     <div class="lens" aria-hidden="true"></div>
     <div class="wrap">
       <h2 id="final-title">Ready to build <span class="lite">without asking for help?</span></h2>
-      <p class="lede center">Artemis is in active development. The parts work on their own, and the desktop app's in-memory demo uses a simulated assistant.</p>
+      <p class="lede center">Artemis is in active development. The launcher runs the whole app with Claude or a scripted agent, and the browser-only in-memory demo uses a simulated assistant.</p>
       <div class="ctas"><a class="btn btn-white" href="get-started.html">Get started</a><a class="btn btn-ghost" href="https://github.com/BU-Hackathonz/Artemis">Source on GitHub</a></div>
     </div>
   </section>
@@ -234,6 +236,6 @@
     <div class="foot-bottom"><span>artemis. Built at HackUMass 2026.</span><span>No cookies, no analytics, no tracking.</span></div>
   </div>
 </footer>
-<button class="pause" type="button" aria-pressed="false">Pause motion</button>
+<button class="pause" type="button">Pause motion</button>
 </body>
 </html>

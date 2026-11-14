@@ -271,3 +271,119 @@ def test_probes_and_git_init_get_no_secrets(tmp_path, monkeypatch):
         env = kwargs["env"]
         assert "ANTHROPIC_API_KEY" not in env and "ARTEMIS_TOKEN" not in env, cmd
         assert "PATH" in env, cmd
+
+
+# ----- cancel: "Canceled" means the program has stopped -----
+
+
+def _gone(pid: int) -> bool:
+    """The process no longer exists, or is a zombie nobody has reaped yet (it runs no code)."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] == "Z"
+    except FileNotFoundError:
+        return True
+
+
+@pytest.mark.skipif(local.IS_WINDOWS or not Path("/proc").exists(), reason="POSIX process group, /proc")
+async def test_cancel_kills_the_tree_before_it_writes(runner, tmp_path):
+    import asyncio
+
+    marker = tmp_path / "written_after_cancel"
+    pids = tmp_path / "pids"
+    child = f"import time\ntime.sleep(1)\nopen({str(marker)!r}, 'w').write('child')\n"
+    code = (
+        "import os, subprocess, sys, time\n"
+        "kid = subprocess.Popen([sys.executable, 'child.py'])\n"
+        f"open({str(pids)!r}, 'w').write(f'{{os.getpid()}} {{kid.pid}}')\n"
+        "time.sleep(1)\n"
+        f"open({str(marker)!r}, 'w').write('main')\n"
+        "time.sleep(30)\n"
+    )
+    ref = project(runner, {"main.py": code, "child.py": child})
+    job = asyncio.create_task(runner.run(ref, "main.py", [], timeout_s=10))
+    for _ in range(500):  # both processes are up
+        if pids.exists() and len(pids.read_text().split()) == 2:
+            break
+        await asyncio.sleep(0.01)
+    main_pid, child_pid = map(int, pids.read_text().split())
+
+    job.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(job, timeout=2)  # the cancel completes promptly
+
+    for _ in range(100):  # SIGKILL is delivered asynchronously; allow it a moment
+        if _gone(main_pid) and _gone(child_pid):
+            break
+        await asyncio.sleep(0.01)
+    assert _gone(main_pid) and _gone(child_pid), "the program outlived the cancel"
+    await asyncio.sleep(2)
+    assert not marker.exists(), f"written after the cancel by {marker.read_text()}"
+
+
+async def test_cancel_kills_with_the_timeout_helper_and_survives_its_failure(runner, monkeypatch):
+    """Windows path with fakes: a cancel runs taskkill /T /F on the program, and a kill that raises
+    doesn't stop the cancel from completing."""
+    import asyncio
+    import threading
+
+    ref = project(runner, {"main.py": "print('hi')\n"})  # before faking subprocess (git init)
+    monkeypatch.setattr(local, "IS_WINDOWS", True)
+    started, release = threading.Event(), threading.Event()
+    killed = []
+
+    class Proc(_FakeProc):
+        stdout = stderr = None
+
+        def wait(self, timeout=None):
+            started.set()
+            release.wait(10)  # the program "runs" until it is killed
+            self.returncode = 1
+            return 1
+
+        def kill(self):
+            super().kill()
+            release.set()
+
+    procs = []
+
+    def fake_popen(argv, **kwargs):
+        assert kwargs["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+        procs.append(Proc())
+        return procs[-1]
+
+    def fake_run(cmd, **kwargs):
+        killed.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    def no_killpg(*args):
+        raise AssertionError("killpg is POSIX-only")
+
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x8000000, raising=False)
+    monkeypatch.setattr(local.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(local.subprocess, "run", fake_run)
+    monkeypatch.setattr(local.os, "killpg", no_killpg, raising=False)  # absent on Windows
+    monkeypatch.setattr(local, "_Tail", lambda pipe: type("T", (), {"truncated": False, "text": lambda s: ""})())
+
+    async def cancel_mid_run():
+        job = asyncio.create_task(runner.run(ref, "main.py", []))
+        assert await asyncio.to_thread(started.wait, 5)
+        job.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(job, timeout=2)
+
+    await cancel_mid_run()
+    assert killed == [["taskkill", "/T", "/F", "/PID", "4242"]]
+    assert procs[0].killed == 1
+
+    # The kill itself fails: the cancel still completes (and the program is still killed directly).
+    started.clear()
+    release.clear()
+
+    def broken_kill_tree(proc):
+        raise RuntimeError("taskkill exploded")
+
+    monkeypatch.setattr(local, "_kill_tree", broken_kill_tree)
+    await cancel_mid_run()
+    assert procs[1].killed == 1
