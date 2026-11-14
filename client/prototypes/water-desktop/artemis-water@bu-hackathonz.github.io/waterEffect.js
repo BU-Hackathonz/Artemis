@@ -28,6 +28,12 @@ uniform float uCap;                // most the wallpaper can ever be shifted (px
 uniform vec4 uTrail;               // agent flow: tint rgb, glow on the slopes (0 = pointer mode: no tint)
 uniform float uCount;
 
+// tanh() is GLSL 1.30+; GNOME 46's Cogl compiles snippets as GLSL 1.10, where it doesn't exist.
+float softCap(float x) {
+  float e = exp(2.0 * clamp(x, -10.0, 10.0));
+  return (e - 1.0) / (e + 1.0);
+}
+
 vec3 spectral(float t) {
   return vec3(exp(-pow((t - 0.15) / 0.2, 2.0)) + 0.18 * exp(-pow((t - 0.95) / 0.1, 2.0)),
               exp(-pow((t - 0.5) / 0.19, 2.0)),
@@ -82,7 +88,7 @@ if (gl2 > 1e-10) {
   // Refraction along the slope: gentle slopes bend almost linearly (a slow drift still shows),
   // and no amount of overlapping ripples can push the picture more than uCap pixels.
   float sl = sqrt(gl2);
-  vec2 off = (g / sl) * uCap * tanh(sl * uLook.x / uCap) / uView.xy;
+  vec2 off = (g / sl) * uCap * softCap(sl * uLook.x / uCap) / uView.xy;
   // Spectral dispersion: 7 wavelengths, each bent a little differently, recombined with spectral
   // weights. The spread grows with the slope, so steep fronts get real rainbow fringes.
   vec3 nl = normalize(vec3(-g * 7.0, 1.0));
