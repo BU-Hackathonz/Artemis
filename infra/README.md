@@ -57,3 +57,23 @@ powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets 
   `signup-page` after the agent fixed it) is reset only after a y. Other projects are listed, never
   touched. It deletes nothing outside the projects folder and removes links without following them.
 - Restart `start.ps1` afterwards, so the session starts fresh.
+
+## Double-click launcher (demo/dev, not an installer)
+
+`Artemis.cmd` (double-click it, or make a desktop shortcut to it) runs `launch.ps1`, which wraps
+`start.ps1`:
+
+1. Finds `artemis-client.exe` in `%LOCALAPPDATA%\Artemis\app\`, then in
+   `client\src-tauri\target\release\`. If it is missing it says where to get it: GitHub Actions,
+   "Windows exe (manual)", download the `artemis-client-windows` artifact.
+2. Asks for your Anthropic API key with a hidden prompt. Press Enter to use the scripted stub
+   agent instead. If `ANTHROPIC_API_KEY` is already set in the window, it uses that.
+3. Runs `start.ps1 -Agent <stub|claude> -AppPath <exe>`. Closing the Artemis window stops the core.
+
+The key lives only in the launcher's process environment: never in a file, on a command line, in a
+log or in the exe, and it ends with the launcher process (no managed string copy can be zeroed). Options: `-Agent stub|claude`, `-Voice whisper|stub`,
+`-AppPath <exe>`, `-Conversation`, `-NoPause` (scripts: never wait for Enter).
+
+This is **not** one-click packaging: it still needs this repository, `uv` and the synced
+dependencies above, because the Python core is started from the repository (decisions.md #3).
+It still shows a console window.
