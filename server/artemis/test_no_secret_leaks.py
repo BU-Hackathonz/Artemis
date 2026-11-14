@@ -46,6 +46,7 @@ KEY = "sk-ant-api03-FAKE7sDQPqA3djAdSJowinHhkI5FyGdIAFNJ9B_Yzf-VRdl-w5s8YkBLaVsq
 WORKSPACE = "wrkspc_FAKEb467cd7be0943bd85da7eb92"
 PIECE = 12  # any 12 characters in a row of a secret count as a leak
 FINAL = {"succeeded", "failed", "canceled"}
+VOICE_S = 40  # each wait in the voice flow (it takes well under a second; slow CI gets room within the 60 s test limit)
 
 
 def free_port() -> int:
@@ -470,7 +471,10 @@ async def test_no_secret_leaks_end_to_end(launch):
         sid = await run.session()
         voice = run.core.voice
 
-        # Demo 1, by voice: push-to-talk, the transcript, then the task.
+        # Demo 1, by voice: push-to-talk, the transcript, then the task. The first run looks for a
+        # Python (uv, then fallbacks, each bounded at 15 s on a slow runner): do that lookup before
+        # the timed waits below, so they measure the voice flow and nothing else.
+        await asyncio.to_thread(lambda: run.core.sessions[sid].runner.python)
         voice.transcript = "Artemis, create a Python program that prints Hello World, and run it"
         run.model.steps += [
             tool("create_project", name="hello world"),
@@ -480,10 +484,16 @@ async def test_no_secret_leaks_end_to_end(launch):
         ]
         assert (await run.call("POST", "/voice/listen", json={"action": "start"})).status_code == 204
         assert (await run.call("POST", "/voice/listen", json={"action": "stop"})).status_code == 204
-        await run.wait(lambda: any(e["type"] == "task.state" and e["data"]["state"] == "succeeded" for e in run.events))
+        # Wait for this request's own transcript, then for the task it started (not any task).
+        await run.wait(lambda: any(e["type"] == "transcript.final" and e["data"]["text"].startswith("create a Python") for e in run.events), VOICE_S)
+        cid = next(e["data"]["client_request_id"] for e in run.events if e["type"] == "transcript.final" and e["data"]["text"].startswith("create a Python"))
+        await run.wait(lambda: any(t.request.client_request_id == cid for t in run.core.sessions[sid].tasks.values()), VOICE_S)
+        voice_tid = next(t.task_id for t in run.core.sessions[sid].tasks.values() if t.request.client_request_id == cid)
+        await run.wait(lambda: run.state(voice_tid) in FINAL, VOICE_S)
+        assert run.state(voice_tid) == "succeeded", run.said(voice_tid)
         assert not run.model.steps
         # The voice hears the announcement a little after the task reports succeeded.
-        await run.wait(lambda: "main.py ran successfully. It printed: Hello, World!" in run.spoken)
+        await run.wait(lambda: "main.py ran successfully. It printed: Hello, World!" in run.spoken, VOICE_S)
 
         # Demo 2: a failed run, explained, then fixed.
         await run.task(

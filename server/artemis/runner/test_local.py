@@ -72,25 +72,38 @@ async def test_no_secrets_no_stdin_no_stray_tilde(runner, monkeypatch):
     assert not (Path(ref.root) / "~").exists()
 
 
-async def test_output_is_capped(runner):
-    ref = project(runner, {"main.py": "import sys\nsys.stdout.write(('x' * 99 + '\\n') * 3000)\n"})
+# Windows writes CRLF, Linux LF. The child writes bytes so both are tested on every OS.
+EOLS = ["\n", "\r\n"]
+
+
+@pytest.mark.parametrize("eol", EOLS)
+async def test_output_is_capped(runner, eol):
+    payload = ("x" * 99 + eol) * 3000
+    ref = project(runner, {"main.py": f"import sys\nsys.stdout.buffer.write({payload!r}.encode())\n"})
     result = await runner.run(ref, "main.py", [])
     assert result.truncated and 64 * 1024 - 100 < len(result.stdout_tail) <= 64 * 1024
-    assert result.stdout_tail.startswith("\n" + "x" * 99)  # the cut-off line is dropped
+    lines = result.stdout_tail.splitlines()
+    assert lines[0] == ""  # the cut-off line is dropped, whatever its line ending
+    assert set(lines[1:]) == {"x" * 99}
 
 
-async def test_a_secret_the_cut_goes_through_leaves_no_piece(runner):
+@pytest.mark.parametrize("eol", EOLS)
+async def test_a_secret_the_cut_goes_through_leaves_no_piece(runner, eol):
     """Only the last 64 KB is kept. If the cut lands inside a secret, the rest of it no longer
     matches the secret, so redaction would miss it: the runner drops that cut-off word."""
     key = "sk-ant-api03-FAKEcutthrough0123456789abcdefghijklmnopqrstuvwxyz"
+    header = key + " tail" + eol
+    # Total output is 64 KB + 25 bytes, so the kept tail starts 25 bytes into the key.
+    filler = "w" * (64 * 1024 + 25 - len(header.encode()))
     code = (
         "import sys\n"
-        f"sys.stdout.write({key!r} + ' tail\\n')\n"
-        f"sys.stdout.write('w' * ({64 * 1024 + 25} - {len(key) + 6}))\n"
+        f"sys.stdout.buffer.write({header!r}.encode())\n"
+        f"sys.stdout.buffer.write({filler!r}.encode())\n"
     )
     result = await runner.run(project(runner, {"main.py": code}), "main.py", [])
     assert result.truncated
-    assert key[25:] not in result.stdout_tail and result.stdout_tail.startswith(" tail\n")
+    assert not any(key[i : i + 12] in result.stdout_tail for i in range(len(key) - 11))
+    assert result.stdout_tail.splitlines()[0] == " tail"
 
 
 def test_writes_stay_inside_and_report_changes(runner):
@@ -298,7 +311,7 @@ def _gone(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat") as f:
             return f.read().rsplit(")", 1)[1].split()[0] == "Z"
-    except FileNotFoundError:
+    except OSError:  # gone: the entry can vanish between open and read (ProcessLookupError), or before it
         return True
 
 
