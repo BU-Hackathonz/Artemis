@@ -31,12 +31,23 @@ from artemis.contracts import (
     TurnSummary,
 )
 from artemis.conversation import Controller
+from artemis.conversation.controller import NVDA_RATE_LINE
 from artemis.policy.gateway import ToolGateway
 
 from .approvals import SessionApprovals
 from .bus import EventBus
 
 log = logging.getLogger(__name__)
+
+# What the core says for each rate status the voice reports (voice.speech.RateStatus, compared as plain
+# strings so the core never imports the voice). "no_output" uses the controller's own fallback line.
+RATE_LINES = {
+    "faster": "Speaking faster.",
+    "slower": "Speaking slower.",
+    "at_max": "That's the fastest I go.",
+    "at_min": "That's the slowest I go.",
+    "nvda": NVDA_RATE_LINE,
+}
 
 MAX_HISTORY_TURNS = 10
 
@@ -380,15 +391,24 @@ class Session:
                 result = set_rate(decision.delta)
                 if inspect.isawaitable(result):
                     result = await result
-                if result is False and not self._voice_ready():
-                    # The voice answers a rate change itself, except when it has no output at all
-                    # (no SAPI, or NVDA without its DLL). Then say it, so the client's live region
-                    # speaks it. With output, False means it already spoke (a limit, or NVDA).
-                    await self.say(tid, decision.say)
+                await self._say_rate(tid, decision, result)
         elif decision.say:  # "say", and "queue" (the controller already kept the request)
             await self.say(tid, decision.say, decision.priority)
         if decision.reminder:
             await self.say(tid, decision.reminder)
+
+    async def _say_rate(self, tid: str | None, decision, result) -> None:
+        """Say the outcome of a rate change through the bus, so it reaches the log and the live region."""
+        if isinstance(result, bool):  # an older voice: True = changed, False = did not say why
+            if result:
+                await self.say(tid, RATE_LINES["faster" if decision.delta > 0 else "slower"])
+            elif not self._voice_ready():
+                await self.say(tid, decision.say)
+            return
+        status = getattr(result, "value", result)  # a RateStatus (str Enum) or its plain string
+        line = decision.say if status == "no_output" else RATE_LINES.get(status)
+        if line:
+            await self.say(tid, line)
 
     def _voice_ready(self) -> bool:
         """voice_ready as voice.status reports it; False if the voice can't tell us."""

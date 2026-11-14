@@ -13,10 +13,10 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header">
-  <div class="nav-pill">
-    <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
-    <nav class="site-nav" aria-label="Main">
+<header class="nav">
+  <div class="nav-in">
+    <a class="logo" href="index.html" aria-label="artemis, home">artemis.</a>
+    <nav aria-label="Main">
       <ul>
         <li><a href="index.html">Home</a></li>
         <li><a href="how-it-works.html">How it works</a></li>
@@ -24,11 +24,12 @@
         <li><a href="team.html">About</a></li>
       </ul>
     </nav>
-    <a class="button button-solid button-small" href="get-started.html">Get started</a>
+    <a class="btn btn-white" href="get-started.html">Get started</a>
   </div>
 </header>
 
 <main id="main">
+<div class="wrap">
   <div class="page-head">
     <h1>Accessibility and safety</h1>
     <p class="lede">Artemis is designed around a screen reader, and around one rule: the developer decides every change.</p>
@@ -48,11 +49,11 @@
   <section class="block panel prose" aria-labelledby="control-title">
     <h2 id="control-title">You approve every change</h2>
     <ul>
-      <li><strong>Exact approvals.</strong> An approval covers one exact edit or one exact run. If the files change before you decide, it is cancelled and asked again.</li>
+      <li><strong>Exact approvals.</strong> An approval covers one exact edit, or for a run, the entry file you reviewed and its arguments. Other project files are not part of a run's approval. If the files for an edit change before you decide, it is cancelled and asked again.</li>
       <li><strong>A spoken "yes" never approves.</strong> Approvals are keyboard-only, so a misheard word can't write or run anything.</li>
       <li><strong>Blocked actions stay blocked by default.</strong> When a security scan finds a serious problem, Enter alone rejects. Overriding takes a separate shortcut on the Approve button.</li>
-      <li><strong>No shell, no installs.</strong> The agent can read files, propose edits and ask to run a program. That is the whole list.</li>
-      <li><strong>Files are untrusted.</strong> Text in your project, such as a comment telling the AI to delete everything, is treated as data. No tool exists that could carry it out.</li>
+      <li><strong>No shell, no install tool.</strong> The agent's tools are: create or open a project, list and read files, propose new or edited files, run a Python file after approval, scan for security problems, and inspect a local HTML page.</li>
+      <li><strong>Files are untrusted.</strong> Text in your project, such as a comment telling the AI to delete everything, is treated as data, not as an instruction. The agent has no delete tool, and any change it proposes still needs your approval. An approved program runs with your permissions, so read it before you approve.</li>
     </ul>
   </section>
 
@@ -62,7 +63,7 @@
       <li><strong>Speech stays on your computer.</strong> Recognition runs locally. Audio is held in memory only while you speak and is discarded after transcription. It is never saved or uploaded.</li>
       <li><strong>The agent uses Claude.</strong> Your request and the project files the agent reads are sent to Anthropic's Claude API to plan changes. The API key is never put in prompts, logs or speech.</li>
       <li><strong>Local only.</strong> The core listens on your own computer and requires a secret token for each launch, so websites can't control it.</li>
-      <li><strong>This site</strong> has no cookies, analytics or scripts, and loads nothing from other servers.</li>
+      <li><strong>This site</strong> has no cookies or analytics. Its one small script only runs the visual motion and the Pause motion button, and it loads nothing from other servers.</li>
     </ul>
   </section>
 
@@ -74,11 +75,19 @@
       <li>Speech recognition can mishear names and symbols. Artemis reads every transcript back, and typing is always available.</li>
     </ul>
   </section>
+</div>
 </main>
 
-<footer class="site-footer">
-  <p>artemis. Built at HackUMass 2026.</p>
-  <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
+<footer>
+  <div class="wrap">
+    <div class="foot-top"><span class="logo">artemis.</span><p>A voice-first development environment for blind developers. Built at HackUMass 2026.</p></div>
+    <div class="cols">
+      <div><h2>Product</h2><ul><li><a href="how-it-works.html">How it works</a></li><li><a href="get-started.html">Get started</a></li></ul></div>
+      <div><h2>Trust</h2><ul><li><a href="trust.html">Accessibility and safety</a></li></ul></div>
+      <div><h2>Team</h2><ul><li><a href="team.html">About</a></li><li><a href="https://github.com/BU-Hackathonz/Artemis">GitHub</a></li></ul></div>
+    </div>
+    <div class="foot-bottom"><span>artemis. Built at HackUMass 2026.</span><span>No cookies, no analytics, no tracking.</span></div>
+  </div>
 </footer>
 </body>
 </html>

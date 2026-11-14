@@ -25,7 +25,7 @@ agrees on the board; record any change here.
 | 11 | Echo Check | Playwright for Python (Chromium) + `aria_snapshot()` + axe-core; after the MVP, web projects only | Proposed | Avery + Jun |
 | 12 | Event transport | `POST` commands + Server-Sent Events with sequence ids | Proposed | Avery |
 | 13 | UI components | Semantic HTML first; React Aria for dialogs/listboxes; Tailwind for styling only | Proposed | Jun |
-| 14 | Security scanning | Semgrep with vendored local rules (team pick); Bandit as the Windows-safe fallback for the Python MVP | Proposed | David |
+| 14 | Security scanning | Bandit (pure Python), run before every write and run approval. Semgrep: not implemented; revisit after the MVP | Proposed | David |
 | 15 | Windows UI Automation | Not needed for the MVP (WebView2 already exposes UIA to NVDA); revisit for inspecting native apps | Deferred | Jun |
 
 The confirmed MVP is "create a Python program that prints Hello World, run it, hear the result".
@@ -117,8 +117,9 @@ on both Windows test laptops (RegisterHotKey error 1409), so the default is now 
 filesystem directly. The handoff requires every action to pass our policy gate, with approval
 bound to the exact patch.
 **Our own tools on the Anthropic Python SDK (pick).** The tools are the ones in
-[`contracts.md`](contracts.md) §3.2 (`create_project`, `list_files`, `read_file`, `write_file`,
-`run_program`, `ask_user`, then `edit_file`, `scan` and `inspect_page`), with `strict` schemas. Every
+[`contracts.md`](contracts.md) §3.2 (`create_project`, `open_project`, `list_files`, `read_file`,
+`write_files`, `run_program`, `edit_file`, `inspect_page`, `scan_project`), with `strict` schemas. A
+question to the user is the agent's final answer, not a tool. Every
 call goes through the policy gate, which pauses the call until the user approves any write or run.
 So "the agent can't write or run without approval" is a property of the design, not a prompt
 instruction. Use the SDK's tool runner if its per-turn hooks fit the approval pause;
@@ -129,7 +130,9 @@ otherwise a manual loop where the orchestrator owns the pause across user turns.
 `claude-opus-5-5`, effort `medium` set explicitly. Thinking is always on for this model. Stream, so
 the event stream can announce progress. Handle `stop_reason: "refusal"` and enable the server-side
 `fallbacks: "default"` option. If voice round-trip latency hurts the demo, measure lower effort
-before switching models. The API key lives in `.env` and never appears in prompts, logs or speech.
+before switching models. The API key comes from the environment: `ANTHROPIC_API_KEY`, set in the
+launching window or typed into the launcher's hidden prompt (optionally saved in Windows Credential
+Manager). It never appears in prompts, logs or speech, and is never written to a file.
 
 ## 9. Patch format and approval
 
@@ -182,11 +185,10 @@ announced. Focus moves deliberately: to the approval dialog when one opens, and 
 **Semgrep (team pick).** For: multi-language, well known, a strong "AI security" story. Against:
 native Windows support is newer, and `--config p/python` downloads rules from the registry, which
 fails on bad venue Wi-Fi. **Bandit.** For: pure Python, pip-installs anywhere, made exactly for the
-Python MVP. Against: Python only. **Pick:** run both behind one `scan()` interface. Semgrep uses
-rules vendored into the repo (no network); if Semgrep doesn't install cleanly on the demo laptop in
-the kickoff time-box, Bandit carries the MVP. Findings are spoken as "1 high-severity issue in
-main.py line 4: subprocess call with shell=True", and a high finding blocks the run until the user
-explicitly approves it.
+Python MVP. Against: Python only. **Pick:** Bandit behind a `scan()` interface (built). Semgrep is
+not implemented: the plan was to vendor its rules, and Bandit carries the MVP. Findings are
+spoken as "1 high-severity issue, main.py line 4, subprocess call with shell=True", and a high
+finding blocks the run until the user explicitly approves it.
 
 ## Security notes (David)
 

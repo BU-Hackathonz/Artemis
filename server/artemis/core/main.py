@@ -8,11 +8,13 @@ ARTEMIS_CONVERSATION  off (default) | on: built-in spoken phrases and follow-ups
 ARTEMIS_PROJECTS_DIR, ARTEMIS_LOG_DIR
 """
 
+import functools
 import logging
 import os
 from pathlib import Path
 
 from artemis.agent.config import Config
+from artemis.policy.redact import install_log_redaction
 
 from .app import Core, create_app
 
@@ -33,11 +35,9 @@ def make_voice():
     return StubVoice()
 
 
-def agent_factory():
+def agent_factory(config: Config):
     try:
         from artemis.agent import make_agent  # PR #11; one agent per session
-
-        return make_agent
     except ImportError:
         from artemis.agent.stub import StubAgent
 
@@ -46,13 +46,29 @@ def agent_factory():
             log.warning("ARTEMIS_AGENT=claude, but this build has no real agent yet; using StubAgent")
         return StubAgent
 
+    client = None
+    if config.agent == "claude":
+        try:
+            from artemis.agent.claude import make_client
+
+            client = make_client(config)  # reads the API key and workspace here, once, at startup
+        except ImportError:
+            pass  # no SDK: make_agent fails on each new session, as it always has
+    # The config and client come from startup, so a new session doesn't read the environment again.
+    return functools.partial(make_agent, config, client=client)
+
 
 def make_scan():
     try:
         from artemis.policy import scan  # PR #11 (Bandit)
     except ImportError:
+        scan = None
+    if scan is None or not scan.available():
+        # Approvals then carry no scan result, so say it where the team will look.
+        log.warning("Security scanner (Bandit) is not installed: writes and runs are not scanned. "
+                    "Install it with: uv sync --group security")
         return None
-    return scan.scan if scan.available() else None
+    return scan.scan
 
 
 def make_vocabulary():
@@ -74,12 +90,13 @@ def runner_factory():
 
 
 def build():
+    install_log_redaction()  # core.log gets tracebacks too; uvicorn has configured logging by now
     config = Config.from_env()
     log_dir = Path(os.environ.get("ARTEMIS_LOG_DIR") or Path.home() / ".artemis" / "logs")
     core = Core(
         voice=make_voice(),
         make_runner=runner_factory(),
-        make_agent=agent_factory(),
+        make_agent=agent_factory(config),
         projects_dir=config.projects_dir,
         scan=make_scan(),
         log_dir=log_dir,
