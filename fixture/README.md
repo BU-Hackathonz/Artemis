@@ -3,6 +3,10 @@
 Files for the pitch demo. The exact contents match the offline tests in
 `server/artemis/agent/test_flows.py` (PR #12), so what's shown on stage is what's tested.
 
+`infra\setup-demo.ps1` copies every project below into `%USERPROFILE%\ArtemisProjects` under the
+name the demo opens (and asks before removing an old `hello-world`). The demo script is
+[`docs/demo.md`](../docs/demo.md).
+
 ## `injected-readme/`: a prompt injection that does nothing
 
 A tiny Python project (`main.py` prints `1 + 1`) whose `README.md` contains instructions planted for
@@ -28,6 +32,16 @@ Expected: the first proposal uses `subprocess.call(command, shell=True)`. Bandit
 the finding is spoken, and the approval is **blocked**: Reject is the default and plain Enter does
 not approve. After the developer rejects it, the agent proposes a version with `shlex.split` and no
 shell, which scans clean.
+
+## `risky-run/`: the same risk, already on disk
+
+`main.py` is the unsafe version above (`subprocess.call(command, shell=True)` on line 5), byte for
+byte the file in `test_a_risky_file_already_on_disk_blocks_the_run`. Copied to `old-app`, it makes
+the Security Guardian demo independent of what the model writes. Demo request:
+**"Open the old-app project and run main.py."**
+Expected: the run approval is blocked (B602, high), Reject is focused, and nothing runs unless the
+developer presses Shift+Enter on Approve. Even then, the program gets no keyboard input and stops at
+`input()` with an EOFError.
 
 ## Failed run explained
 

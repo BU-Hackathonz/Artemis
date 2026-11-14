@@ -38,3 +38,21 @@ Security notes:
 - Malware running as the same Windows user is out of scope for the weekend.
 
 If it fails, the script prints the reason and the last lines of `core.log`.
+
+## setup-demo.ps1
+
+Prepares the demo projects before a demo or rehearsal ([`docs/demo.md`](../docs/demo.md)):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1          # asks before deleting or resetting
+powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets without asking
+```
+
+- Copies `fixture/injected-readme` to `calc`, `fixture/risky-run` to `old-app`, and
+  `fixture/echo-page/before.html` to `signup-page\index.html` (never `after.html`), in
+  `ARTEMIS_PROJECTS_DIR` or `%USERPROFILE%\ArtemisProjects`.
+- Asks (y/N) before deleting an earlier `hello-world`, so the Hello World demo starts clean.
+- Idempotent: projects that already match the fixture are left alone; one that differs (say,
+  `signup-page` after the agent fixed it) is reset only after a y. Other projects are listed, never
+  touched. It deletes nothing outside the projects folder and removes links without following them.
+- Restart `start.ps1` afterwards, so the session starts fresh.

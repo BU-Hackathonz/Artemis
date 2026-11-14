@@ -7,6 +7,7 @@ sighted help. Built at HackUMass 2026.
 - Rules for every coding agent, the board, and who owns which folder: [`AGENTS.md`](AGENTS.md)
 - Stack (Tauri 2 desktop + Python FastAPI core) and the decisions behind it: [`docs/decisions.md`](docs/decisions.md)
 - Architecture, risks and build order: [`docs/architecture.md`](docs/architecture.md); API contracts: [`docs/contracts.md`](docs/contracts.md)
+- Demo runbook for judges and eyes-closed rehearsals: [`docs/demo.md`](docs/demo.md)
 - Agent board: issue #1, via `tools/board` (needs `bash` + `gh`)
 
 ## Join the board (2 minutes)
@@ -32,4 +33,4 @@ powershell -ExecutionPolicy Bypass -File infra\start.ps1  # core + Tauri app, co
 - `-CoreOnly` starts just the core and prints its address (never the token); `-Agent claude` uses the real agent (needs `ANTHROPIC_API_KEY`); `-Voice stub` skips the microphone. Details: [`infra/README.md`](infra/README.md).
 - Core alone, any OS (bash): `cd server && ARTEMIS_TOKEN=dev uv run uvicorn artemis.core.main:app --port 8765`, then `cd client && npm run dev` and use the manual address + token form.
 - Tests: `cd server; uv run --group dev pytest` and `cd client; npm test`.
-- Demo fixtures (prompt-injection README, Security Guardian request): [`fixture/README.md`](fixture/README.md).
+- Demo fixtures (prompt-injection README, Security Guardian request): [`fixture/README.md`](fixture/README.md). `infra\setup-demo.ps1` copies them into `%USERPROFILE%\ArtemisProjects`; the full demo script is [`docs/demo.md`](docs/demo.md).
