@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 use tauri::Manager;
+mod caret;
 mod companion;
 mod controls;
+mod flow;
 
 #[derive(Clone, Serialize)]
 struct CoreConfig {
@@ -101,6 +103,9 @@ fn main() {
                 }
             }
             if let Some(status) = status {
+                // The droplet overlay comes with the notch (decorative, click-through, hidden until
+                // Artemis works). If it cannot be built, the notch works without it.
+                let _ = flow::create(app.handle());
                 if status.show().is_ok() {
                     let _ = status.set_focus();
                 }
@@ -118,7 +123,10 @@ fn main() {
             controls::register_controls_handler,
             controls::show_settings,
             controls::set_controls_view,
-            controls::controls_view_ready
+            controls::controls_view_ready,
+            flow::get_flow_state,
+            flow::set_flow_visible,
+            flow::get_caret_position
         ])
         .run(tauri::generate_context!())
         .expect("Could not start Artemis desktop client");

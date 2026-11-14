@@ -58,6 +58,16 @@ struct Reveal {
     foreground: bool,
 }
 impl CompanionState {
+    /// What the flow overlay may know: whether Artemis is working, and whether an approval waits.
+    /// Two booleans, nothing else from the status.
+    pub fn flow_snapshot(&self) -> Result<(bool, bool), String> {
+        let status = self
+            .status
+            .lock()
+            .map_err(|_| "Desktop status is unavailable.")?;
+        let busy = matches!(status.task, Task::Queued | Task::Working | Task::Running);
+        Ok((busy, status.approval))
+    }
     fn update(&self, status: Status, changed: bool, focused: bool) -> Result<Reveal, String> {
         let mut current = self
             .status

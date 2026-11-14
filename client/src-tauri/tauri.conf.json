@@ -35,6 +35,22 @@
         "focus": false,
         "visible": false,
         "skipTaskbar": false
+      },
+      {
+        "label": "flow",
+        "create": false,
+        "title": "Artemis flow",
+        "url": "index.html#flow",
+        "width": 800,
+        "height": 600,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "focus": false,
+        "visible": false,
+        "skipTaskbar": true
       }
     ],
     "security": {

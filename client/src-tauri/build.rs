@@ -11,6 +11,9 @@ fn main() {
             "show_settings",
             "set_controls_view",
             "controls_view_ready",
+            "get_flow_state",
+            "set_flow_visible",
+            "get_caret_position",
         ]),
     ))
     .expect("Could not build Artemis desktop resources");

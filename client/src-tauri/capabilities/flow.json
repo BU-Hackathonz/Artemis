@@ -1,0 +1,13 @@
+{
+  "identifier": "flow",
+  "description": "The click-through droplet overlay can read two fixed values (working, approval waiting) and the notch ring's position, ask where the text caret is (two numbers, never text), and show or hide itself. No core:window or core:event permission; each command also checks that its caller is this window.",
+  "local": true,
+  "windows": [
+    "flow"
+  ],
+  "permissions": [
+    "allow-get-flow-state",
+    "allow-set-flow-visible",
+    "allow-get-caret-position"
+  ]
+}

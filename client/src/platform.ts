@@ -3,6 +3,9 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 
 // compact: the launcher opted in to the compact desktop status (infra/start.ps1 -Compact).
 export interface NativeCoreConfig { core_url: string; token: string; compact: boolean }
+/** What the flow overlay may know (fixed values): working, approval waiting, where the notch ring is
+ * (the overlay's CSS pixels, null while the notch is hidden), and the overlay's origin and scale. */
+export interface FlowState { busy: boolean; approval: boolean; ring: [number, number] | null; origin: [number, number]; scale: number }
 const native = '__TAURI_INTERNALS__' in window;
 const launchError = 'Native core configuration is unavailable. Close Artemis and start it with infra/start.ps1.';
 let registrationQueue: Promise<unknown> = Promise.resolve();
@@ -35,6 +38,18 @@ export const platform = {
   },
   updateCompanionStatus(status: CompanionStatus, approvalChanged: boolean): Promise<boolean> {return native ? invoke<boolean>('update_companion_status', {status, approvalChanged}) : Promise.resolve(false);},
   getCompanionStatus(): Promise<CompanionStatus> {return invoke('get_companion_status');},
+  /** Flow overlay only (the native command checks its caller): fixed values for the droplet. */
+  getFlowState(): Promise<FlowState> {return invoke('get_flow_state');},
+  setFlowVisible(visible: boolean): Promise<void> {return invoke('set_flow_visible', {visible});},
+  /** The text caret's screen position in physical pixels, or null when the focused application has
+   * no system caret to follow. Flow overlay only; two numbers, never text. */
+  async caretPosition(): Promise<{x: number; y: number} | null> {
+    if (!native) return null;
+    try {
+      const at = await invoke<[number, number] | null>('get_caret_position');
+      return Array.isArray(at) && at.length === 2 && at.every(Number.isFinite) ? {x: at[0], y: at[1]} : null;
+    } catch { return null; }
+  },
   enterCompact(): Promise<void> {return invoke('enter_compact');},
   revealApproval(): Promise<void> {return invoke('reveal_approval');},
   registerControlsHandler(handler: (notice: {revision: number; view: 'full' | 'settings'; guard: boolean}) => void): Promise<void> {
