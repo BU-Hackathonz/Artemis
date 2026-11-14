@@ -149,6 +149,9 @@ class WhisperVoice:
     async def repeat_last(self) -> None:
         await self.announcer.repeat_last()
 
+    async def set_rate(self, delta: int) -> bool:
+        return await self.announcer.set_rate(delta)
+
 
 if __name__ == "__main__":
     async def _demo() -> None:

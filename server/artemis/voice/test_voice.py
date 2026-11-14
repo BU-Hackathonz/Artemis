@@ -131,6 +131,73 @@ def test_watch_survives_a_failing_callback():
     assert seen == [None, "nvda"]
 
 
+class FakeSapi(FakeSpeaker):
+    """A SAPI-like speaker with a rate, clamped like the real one."""
+
+    def __init__(self, rate=1):
+        super().__init__("sapi")
+        self.rate = rate
+
+    def set_rate(self, rate):
+        from artemis.voice.speech import clamp_rate
+
+        self.rate = clamp_rate(rate)
+        return self.rate
+
+
+def test_faster_and_slower_change_sapi_rate_and_say_so():
+    sapi = FakeSapi(rate=1)
+    a = Announcer(FakeSpeaker("nvda"), sapi, is_nvda_running=lambda: False)
+    assert asyncio.run(a.set_rate(1)) is True and sapi.rate == 2
+    assert asyncio.run(a.set_rate(-1)) is True and sapi.rate == 1
+    assert [t for t, _ in sapi.said] == ["Speaking faster.", "Speaking slower."]
+
+
+def test_rate_is_bounded_and_says_when_at_the_limit():
+    from artemis.voice.speech import RATE_MAX, RATE_MIN
+
+    sapi = FakeSapi(rate=RATE_MAX)
+    a = Announcer(FakeSpeaker("nvda"), sapi, is_nvda_running=lambda: False)
+    assert asyncio.run(a.set_rate(1)) is False and sapi.rate == RATE_MAX
+    sapi.rate = RATE_MIN
+    assert asyncio.run(a.set_rate(-1)) is False and sapi.rate == RATE_MIN
+    assert [t for t, _ in sapi.said] == ["That's the fastest I go.", "That's the slowest I go."]
+
+
+def test_rate_never_changes_under_nvda():
+    nvda, sapi = FakeSpeaker("nvda"), FakeSapi(rate=1)
+    a = Announcer(nvda, sapi, is_nvda_running=lambda: True)
+    assert asyncio.run(a.set_rate(1)) is False
+    assert sapi.rate == 1 and sapi.said == []
+    assert "NVDA's speech settings" in nvda.said[0][0]
+
+
+def test_env_rate_is_optional_and_safe(monkeypatch=None):
+    import os
+
+    from artemis.voice.speech import RATE_DEFAULT, RATE_MAX, _env_rate
+
+    old = os.environ.get("ARTEMIS_SAPI_RATE")
+    try:
+        os.environ.pop("ARTEMIS_SAPI_RATE", None)
+        assert _env_rate() == RATE_DEFAULT
+        os.environ["ARTEMIS_SAPI_RATE"] = "99"
+        assert _env_rate() == RATE_MAX
+        os.environ["ARTEMIS_SAPI_RATE"] = "fast"
+        assert _env_rate() == RATE_DEFAULT
+    finally:
+        if old is None:
+            os.environ.pop("ARTEMIS_SAPI_RATE", None)
+        else:
+            os.environ["ARTEMIS_SAPI_RATE"] = old
+
+
+def test_stub_voice_passes_set_rate_through():
+    sapi = FakeSapi(rate=0)
+    v = StubVoice(announcer=Announcer(FakeSpeaker("nvda"), sapi, is_nvda_running=lambda: False))
+    assert asyncio.run(v.set_rate(1)) is True and sapi.rate == 1
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

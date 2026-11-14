@@ -27,6 +27,21 @@ log = logging.getLogger(__name__)
 NVDA_DLL = Path(os.environ.get("ARTEMIS_NVDA_DLL") or Path(__file__).parent / "bin" / "nvdaControllerClient.dll")
 
 
+# SAPI rates run -10..10 (0 = normal). Past about 6 words blur together; below -3 drags.
+RATE_MIN, RATE_MAX, RATE_DEFAULT = -3, 6, 1
+
+
+def clamp_rate(rate: int) -> int:
+    return max(RATE_MIN, min(RATE_MAX, int(rate)))
+
+
+def _env_rate() -> int:
+    try:
+        return clamp_rate(int(os.environ.get("ARTEMIS_SAPI_RATE", RATE_DEFAULT)))
+    except ValueError:
+        return RATE_DEFAULT
+
+
 def nvda_running() -> bool:
     """True while NVDA runs. NVDA keeps a hidden window of class wxWindowClassNR titled "NVDA"."""
     if sys.platform != "win32":
@@ -90,7 +105,7 @@ class SapiSpeaker:
     _ASYNC, _PURGE = 1, 2  # SVSFlagsAsync, SVSFPurgeBeforeSpeak
     _SPEAKING = 2  # SRSEIsSpeaking
 
-    def __init__(self) -> None:
+    def __init__(self, voice_name: str | None = None, rate: int | None = None) -> None:
         self._voice = None
         try:
             import pythoncom
@@ -100,9 +115,36 @@ class SapiSpeaker:
             self._voice = win32com.client.Dispatch("SAPI.SpVoice")
         except Exception:  # pywin32 missing or COM unavailable: report unavailable, don't crash the core
             self._voice = None
+            return
+        # Both optional. Without them Windows' own default voice is used, at a slightly brisker rate.
+        self.choose_voice(voice_name if voice_name is not None else os.environ.get("ARTEMIS_SAPI_VOICE"))
+        self.set_rate(rate if rate is not None else _env_rate())
 
     def available(self) -> bool:
         return self._voice is not None
+
+    def choose_voice(self, name: str | None) -> bool:
+        """Use the first installed voice whose description contains `name`; keep the default if none does."""
+        if not name:
+            return False
+        try:
+            for token in self._voice.GetVoices():
+                if name.lower() in token.GetDescription().lower():
+                    self._voice.Voice = token
+                    return True
+        except Exception:
+            pass
+        log.warning("SAPI voice %r is not installed; keeping the Windows default voice", name)
+        return False
+
+    @property
+    def rate(self) -> int:
+        return int(self._voice.Rate)
+
+    def set_rate(self, rate: int) -> int:
+        """Set SAPI's rate, clamped to RATE_MIN..RATE_MAX so speech never becomes unintelligible."""
+        self._voice.Rate = clamp_rate(rate)
+        return self.rate
 
     def speak(self, text: str, interrupt: bool) -> None:
         self._voice.Speak(text, self._ASYNC | (self._PURGE if interrupt else 0))
@@ -200,3 +242,23 @@ class Announcer:
     async def repeat_last(self) -> None:
         if self.last:
             self.current().speak(self.last, interrupt=True)
+
+    async def set_rate(self, delta: int) -> bool:
+        """'Slower' / 'faster' from the conversation controller. Speaks its own confirmation.
+
+        Only SAPI's rate is ours to change. Under NVDA the voice and rate are the user's own settings,
+        so they are never touched. Returns True when the rate changed.
+        """
+        speaker = self.current()
+        if speaker.name == "nvda":
+            await self.announce("I'm using your NVDA voice. Change its speed in NVDA's speech settings.", "normal")
+            return False
+        if not hasattr(speaker, "set_rate"):
+            return False  # no voice output at all; there is nothing to make faster or slower
+        before = speaker.rate
+        after = speaker.set_rate(before + (1 if delta > 0 else -1))
+        if after == before:
+            await self.announce("That's the fastest I go." if delta > 0 else "That's the slowest I go.", "normal")
+            return False
+        await self.announce("Speaking faster." if delta > 0 else "Speaking slower.", "normal")
+        return True
