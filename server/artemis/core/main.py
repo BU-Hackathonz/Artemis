@@ -5,6 +5,7 @@ ARTEMIS_AGENT      stub (default) | claude
 ARTEMIS_VOICE      whisper (default when the voice group is installed) | stub
 ARTEMIS_RUNNER     real (default) | fake (writes files, never runs anything)
 ARTEMIS_CONVERSATION  off (default) | on: built-in spoken phrases and follow-ups (contracts.md §5.4)
+ARTEMIS_WHISPER_MODEL, ARTEMIS_WHISPER_BEAM  speech model (small.en) and beam (5); voice/listen.py
 ARTEMIS_PROJECTS_DIR, ARTEMIS_LOG_DIR
 """
 

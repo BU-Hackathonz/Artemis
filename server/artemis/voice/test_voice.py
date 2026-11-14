@@ -7,6 +7,7 @@ import logging
 import pytest
 
 from artemis.voice import Announcer, StubVoice, strip_wake_word, vocabulary_prompt
+from artemis.voice.text import PROMPT_LEAD
 
 
 class FakeSpeaker:
@@ -46,18 +47,31 @@ def test_strip_wake_word_accepts_close_spellings():
     assert strip_wake_word("okay Artimis run it") == "run it"
 
 
+def test_strip_wake_word_accepts_a_clipped_artem():
+    # David's hardware run: "Hey Artemis, create a Python program..." came back as "Hey Artem, this is creative...".
+    assert strip_wake_word("Hey Artem, this is creative Python program") == "this is creative Python program"
+    for text in ["Artem, create a file", "artem. create a file", "ok Artem create a file", "Hey Ardem, create a file"]:
+        assert strip_wake_word(text) == "create a file", text
+
+
 def test_strip_wake_word_leaves_other_words_alone():
     for text in ["artistic rendering", "art is hard", "If so, then create a program", "Artemisia is a plant",
-                 "run artemus.py", "Armis is a name"]:
+                 "run artemus.py", "Armis is a name", "Artemia live in salt lakes", "run Artem"]:
         assert strip_wake_word(text) == text, text
 
 
-def test_vocabulary_prompt_dedupes_and_caps():
-    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm"]) == "Hey Artemis, Artemis, Python, main.py, LoginForm"
-    assert vocabulary_prompt(["artemis", "PYTHON"]) == "Hey Artemis, Artemis, Python, main.py"
-    assert vocabulary_prompt([]) == "Hey Artemis, Artemis, Python, main.py"
-    p = vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=50)
-    assert len(p) <= 50 and p.startswith("Hey Artemis, Artemis, Python, main.py, word0")
+def test_vocabulary_prompt_reads_like_speech_then_project_words():
+    assert PROMPT_LEAD == "Hey Artemis, create a Python program, print, run it, main.py."
+    assert "Hello World" not in PROMPT_LEAD  # primes words, never a whole demo sentence to copy
+    assert vocabulary_prompt([]) == PROMPT_LEAD
+    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm", "utils"]) == PROMPT_LEAD + " LoginForm, utils."
+    assert vocabulary_prompt(["artemis", "PYTHON", "Run"]) == PROMPT_LEAD  # already in the lead
+
+
+def test_vocabulary_prompt_caps_its_length():
+    for cap in (len(PROMPT_LEAD) + 7, len(PROMPT_LEAD) + 50, 600):
+        p = vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=cap)
+        assert len(p) <= cap and p.startswith(PROMPT_LEAD + " word0") and p.endswith(".")
 
 
 def router(nvda_up=True, sapi_up=True, running=False, busy=False):
@@ -109,7 +123,7 @@ def test_stub_voice_returns_mvp_request():
     asyncio.run(v.announce(f"Heard: {text}", "normal"))
     assert s.said == [("Heard: create a Python program that prints Hello World", False)]
     v.set_vocabulary(["LoginForm"])
-    assert v.prompt == "Hey Artemis, Artemis, Python, main.py, LoginForm"
+    assert v.prompt == PROMPT_LEAD + " LoginForm."
 
 
 def test_watch_reports_at_start_and_on_change_only():

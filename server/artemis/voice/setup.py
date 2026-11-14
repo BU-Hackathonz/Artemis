@@ -4,7 +4,8 @@
 
 1. Downloads NVDA's controller client from NV Access, checks its pinned SHA-256, and extracts
    the x64 DLL (64-bit Python can't load the x86 one) to voice/bin/.
-2. Downloads and loads the faster-whisper model so the first push-to-talk doesn't stall.
+2. Downloads and loads the faster-whisper model (ARTEMIS_WHISPER_MODEL, default small.en) so the
+   first push-to-talk doesn't stall.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from .speech import NVDA_DLL, NvdaSpeaker, nvda_running
 NVDA_VERSION = "2026.2"
 CLIENT_URL = f"https://download.nvaccess.org/releases/{NVDA_VERSION}/nvda_{NVDA_VERSION}_controllerClient.zip"
 CLIENT_SHA256 = "510736f021aefa33378076fa342a4524b586bc1c6b096db9479af42b28aac649"
-MODEL = "small.en"
 
 
 def fetch_nvda_dll() -> None:
@@ -48,9 +48,12 @@ def fetch_nvda_dll() -> None:
 def fetch_model() -> None:
     from faster_whisper import WhisperModel
 
+    from .listen import whisper_model
+
+    model = whisper_model()  # the same one the core will load
     t = time.time()
-    WhisperModel(MODEL, device="cpu", compute_type="int8")
-    print(f"Whisper {MODEL} ready ({time.time() - t:.1f} s).")
+    WhisperModel(model, device="cpu", compute_type="int8")
+    print(f"Whisper {model} ready ({time.time() - t:.1f} s).")
 
 
 if __name__ == "__main__":

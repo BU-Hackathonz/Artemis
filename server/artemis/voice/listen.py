@@ -2,23 +2,32 @@
 
 Push-to-talk: the client calls start on key down and stop on key up. Start stops current speech,
 plays the "listening" earcon to the end, and only then opens the mic, so neither Artemis's voice
-nor the beep is transcribed (contracts.md 5.1). sounddevice records 16 kHz
+nor the beep is transcribed (contracts.md 5.1). Stop keeps the mic open for a short post-roll
+(people let go of the key while still saying the last word), closes it, and only then plays the
+"stopped" earcon, so that beep is never transcribed either. sounddevice records 16 kHz
 mono into memory; faster-whisper transcribes locally on the CPU. Audio is never written to disk
 and is dropped as soon as it is transcribed (handoff: minimal audio retention).
 
-Manual check on a laptop: python -m artemis.voice.listen  (records 4 s, prints the transcript)
+ARTEMIS_WHISPER_MODEL (default small.en) and ARTEMIS_WHISPER_BEAM (default 5) pick the model and beam.
+
+Manual check on a laptop: python -m artemis.voice.listen  (records 4 s, prints the transcript and time)
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import threading
+import time
 
 import numpy as np
 
 from . import earcons
 from .speech import Announcer, Priority, RateStatus
 from .text import strip_wake_word, vocabulary_prompt
+
+log = logging.getLogger(__name__)
 
 RATE = 16_000
 MAX_SECONDS = 60  # a stuck key can't fill memory
@@ -31,6 +40,25 @@ WINDOW = RATE // 10  # 100 ms: a short word in a long key hold is judged on its 
 # 0.70; real short commands (cancel, stop, repeat, yes, no...) scored 0.07 or less. avg_logprob does not
 # separate them (commands -0.41 to -0.93, the fake -0.95), so it is deliberately not used.
 MAX_NO_SPEECH = 0.6
+POST_ROLL = 0.35  # seconds the mic stays open after release, for the end of the last word
+MODEL = "small.en"  # ARTEMIS_WHISPER_MODEL overrides, e.g. medium.en (more accurate, slower)
+# Beam search, faster-whisper's own default. Greedy (1) misheard two hardware runs ("Artem, this is
+# creative", "Prince") and can end a window early, skipping its last words. ARTEMIS_WHISPER_BEAM=1 if too slow.
+BEAM = 5
+
+
+def whisper_model() -> str:
+    return os.environ.get("ARTEMIS_WHISPER_MODEL", "").strip() or MODEL
+
+
+def whisper_beam() -> int:
+    raw = os.environ.get("ARTEMIS_WHISPER_BEAM", "").strip()
+    if not raw:
+        return BEAM
+    if raw.isdigit() and 1 <= int(raw) <= 10:
+        return int(raw)
+    log.warning("ARTEMIS_WHISPER_BEAM=%r is not a whole number from 1 to 10; using %d", raw, BEAM)
+    return BEAM
 
 
 def loudest_rms(audio: np.ndarray) -> float:
@@ -53,15 +81,19 @@ def _input_stream(callback):
 
 
 class WhisperVoice:
-    def __init__(self, announcer: Announcer | None = None, model_name: str = "small.en", model=None, stream_factory=None, earcon=earcons.play) -> None:
+    def __init__(self, announcer: Announcer | None = None, model_name: str | None = None, model=None, stream_factory=None,
+                 earcon=earcons.play, beam_size: int | None = None, post_roll: float = POST_ROLL) -> None:
         self.announcer = announcer or Announcer()
-        self.model_name = model_name
+        self.model_name = model_name or whisper_model()
+        self.beam_size = beam_size or whisper_beam()
+        self.post_roll = post_roll
         self._model = model
         self._stream_factory = stream_factory or _input_stream
         self._earcon = earcon
         self._stream = None
         self._wanted = False  # key is held; cleared by stop, even while the start earcon plays
         self._gen = 0  # bumped by every press and release, so a stale start never opens the mic
+        self._tail: tuple[asyncio.Event, asyncio.Event] | None = None  # (cut, closed) during a post-roll
         self._chunks: list[np.ndarray] = []
         self._frames = 0
         self._lock = threading.Lock()  # the audio callback runs on PortAudio's thread
@@ -90,6 +122,12 @@ class WhisperVoice:
         self._wanted = True
         self._gen += 1
         gen = self._gen
+        if self._tail is not None:  # pressed again during the last release's post-roll: end it now
+            cut, closed = self._tail
+            cut.set()
+            await closed.wait()  # that mic is closed before this beep plays, so it can't record it
+            if gen != self._gen:
+                return  # released again meanwhile; that stop already played "stopped"
         await self.announcer.stop_speech()
         await asyncio.sleep(self._earcon("listening"))  # let the beep finish before the mic opens
         if not self._wanted or gen != self._gen:
@@ -105,36 +143,64 @@ class WhisperVoice:
         self._stream = stream
 
     async def stop_listening(self, client_request_id: str) -> str:
+        held = self._wanted  # False for a repeated stop, or after start failed and spoke its error
         self._wanted = False
         self._gen += 1
         if self._stream is None:
+            if held:
+                self._earcon("stopped")  # released during the listening earcon: still say the mic is off
             return ""
         stream, self._stream = self._stream, None
-        self._earcon("stopped")  # mic is about to close; no need to wait
+        cut, closed = asyncio.Event(), asyncio.Event()
+        self._tail = (cut, closed)
+        began = time.monotonic()
         try:
-            stream.stop()
-            stream.close()
-        except Exception as e:  # mic unplugged mid-recording
-            with self._lock:
-                self._chunks, self._frames = [], 0
-            raise VoiceError(f"Microphone stopped unexpectedly: {e}") from e
-        with self._lock:
-            audio = np.concatenate(self._chunks)[: RATE * MAX_SECONDS] if self._chunks else np.zeros(0, np.float32)
-            self._chunks, self._frames = [], 0
-        if len(audio) < RATE * MIN_SECONDS:
+            await asyncio.wait_for(cut.wait(), self.post_roll)  # the end of the last word is still arriving
+        except TimeoutError:
+            pass
+        finally:
+            rolled = time.monotonic() - began
+            audio = self._close(stream, cut, closed)
+        if len(audio) < RATE * (MIN_SECONDS + rolled):
             return ""
         if loudest_rms(audio) < MIN_RMS:
             return ""  # nobody spoke
         text = await asyncio.to_thread(self._transcribe, audio)
         return strip_wake_word(text)
 
+    def _close(self, stream, cut: asyncio.Event, closed: asyncio.Event) -> np.ndarray:
+        """Close the mic and take its audio, then play "stopped": after the close, so the beep is never recorded."""
+        try:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception as e:  # mic unplugged mid-recording
+                with self._lock:
+                    self._chunks, self._frames = [], 0
+                raise VoiceError(f"Microphone stopped unexpectedly: {e}") from e
+            with self._lock:
+                audio = np.concatenate(self._chunks)[: RATE * MAX_SECONDS] if self._chunks else np.zeros(0, np.float32)
+                self._chunks, self._frames = [], 0
+            return audio
+        finally:
+            self._tail = None
+            closed.set()
+            if not cut.is_set():  # a press during the post-roll plays its own "listening" instead
+                self._earcon("stopped")
+
     def _transcribe(self, audio: np.ndarray) -> str:
         self.warm()
         # Pass numpy, not a file: faster-whisper's file decoder breaks on current PyAV.
         segments, _ = self._model.transcribe(
-            audio, language="en", beam_size=1, vad_filter=True, initial_prompt=self.prompt or None
+            audio, language="en", beam_size=self.beam_size, vad_filter=True, initial_prompt=self.prompt or None
         )
-        kept = [s for s in segments if getattr(s, "no_speech_prob", 0.0) <= MAX_NO_SPEECH]
+        kept = []
+        for s in segments:
+            if getattr(s, "no_speech_prob", 0.0) <= MAX_NO_SPEECH:
+                kept.append(s)
+            else:  # where and how sure, never the words: tells a dropped last phrase from a dropped "Thank you."
+                log.warning("Dropped a segment Whisper scored as probably not speech (no_speech_prob %.2f, %.1f-%.1f s of %.1f s)",
+                            s.no_speech_prob, getattr(s, "start", 0.0), getattr(s, "end", 0.0), len(audio) / RATE)
         return " ".join(s.text.strip() for s in kept).strip()
 
     def set_vocabulary(self, words: list[str]) -> None:
@@ -161,8 +227,9 @@ if __name__ == "__main__":
         await asyncio.sleep(2)  # let the prompt finish so the mic doesn't hear it
         await v.start_listening()
         await asyncio.sleep(4)
+        began = time.monotonic()
         text = await v.stop_listening("cr_demo")
-        print(repr(text))
+        print(repr(text), f"{time.monotonic() - began:.1f} s after release ({v.model_name}, beam {v.beam_size})")
         await v.announce(f"Heard: {text}" if text else "I didn't hear anything.", "high")
 
     asyncio.run(_demo())

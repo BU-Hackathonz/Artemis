@@ -69,6 +69,8 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    cd client; npm ci; cd ..
    ```
    Echo Check uses Edge or Chrome if Playwright's Chromium isn't installed.
+   Speech accuracy: `$env:ARTEMIS_WHISPER_MODEL` (default `small.en`; `medium.en` is more accurate, slower) and `$env:ARTEMIS_WHISPER_BEAM` (default 5; 1 is fastest).
+   Set them in the same window before `artemis.voice.setup` (so it downloads that model) and `start.ps1`.
 3. **NVDA.** Decide on or off before starting, and rehearse the same way.
    - On (recommended, it is what our users run): the core speaks through NVDA's controller DLL in
      the user's NVDA voice. If the DLL is missing, the core goes silent and the app's activity log
