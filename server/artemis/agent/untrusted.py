@@ -1,5 +1,10 @@
 """Wrap text that came from files or programs so the model treats it as data (design B4)."""
 
+import re
+
+# Any spelling of a closing tag (case, spaces) is escaped, so the text can't end the block.
+_CLOSE = re.compile(r"<\s*/\s*untrusted", re.IGNORECASE)
+
 MAX_BYTES = 8 * 1024
 
 
@@ -16,6 +21,6 @@ def truncate(text: str, limit: int = MAX_BYTES) -> str:
 
 def wrap(source: str, text: str, limit: int = MAX_BYTES) -> str:
     """`<untrusted source="file:main.py">…</untrusted>`; the text can't close the tag itself."""
-    body = truncate(text, limit).replace("</untrusted", "<\\/untrusted")
+    body = _CLOSE.sub("<\\/untrusted", truncate(text, limit))
     label = source.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
     return f'<untrusted source="{label}">\n{body}\n</untrusted>'
