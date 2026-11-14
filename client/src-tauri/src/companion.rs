@@ -124,6 +124,21 @@ fn controls(app: &AppHandle, focus: bool) -> Result<(), String> {
     }
     Ok(())
 }
+/// Opt-in only (start.ps1 -Compact): tauri.conf.json declares this window with `create: false`.
+pub fn create(app: &AppHandle) -> Option<WebviewWindow> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "companion")?
+        .clone();
+    let window = tauri::WebviewWindowBuilder::from_config(app, &config)
+        .ok()?
+        .build()
+        .ok()?;
+    place(app).ok().map(|_| window)
+}
 pub fn place(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("companion")
@@ -310,6 +325,23 @@ mod tests {
         let mut invalid = valid;
         invalid["task"] = json!("arbitrary speech");
         assert!(serde_json::from_value::<Status>(invalid).is_err());
+    }
+
+    #[test]
+    fn compact_window_is_only_created_on_request() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let windows = config["app"]["windows"].as_array().unwrap();
+        let companion = windows
+            .iter()
+            .find(|window| window["label"] == json!("companion"))
+            .unwrap();
+        assert_eq!(companion["create"], json!(false));
+        let main = windows
+            .iter()
+            .find(|window| window["label"] == json!("main"))
+            .unwrap();
+        assert_ne!(main["create"], json!(false));
     }
 
     #[test]

@@ -8,6 +8,7 @@
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude    # real agent (needs ANTHROPIC_API_KEY)
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -AppPath C:\path\artemis-client.exe
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly        # just the core
+  powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Compact         # opt-in compact status window
 #>
 [CmdletBinding()]
 param(
@@ -17,6 +18,7 @@ param(
     [ValidateSet("stub", "claude")][string]$Agent = "stub",
     [ValidateSet("whisper", "stub")][string]$Voice = "whisper",
     [switch]$Conversation,  # ARTEMIS_CONVERSATION=on: built-in phrases and follow-ups (contracts.md 5.4)
+    [switch]$Compact,  # ARTEMIS_COMPACT=1 for the app: opt-in compact status window; off by default
     [int]$HealthTimeoutS = 120
 )
 
@@ -169,12 +171,15 @@ try {
     }
 
     $appEnv = @{ "ARTEMIS_CORE_URL" = $url; "ARTEMIS_TOKEN" = $token }
+    # Compact status is opt-in: without -Compact the app never inherits ARTEMIS_COMPACT from this shell.
+    $appWithhold = $coreOnlySecrets + @("ARTEMIS_COMPACT")
+    if ($Compact) { $appEnv["ARTEMIS_COMPACT"] = "1" }
     if ($AppPath) {
         Write-Host "Starting the app: $AppPath"
-        $app = Start-Child $AppPath "" (Split-Path -Parent $AppPath) $appEnv $coreOnlySecrets
+        $app = Start-Child $AppPath "" (Split-Path -Parent $AppPath) $appEnv $appWithhold
     } else {
         Write-Host "Starting the app in dev mode (npm run tauri dev). The first build takes a few minutes."
-        $app = Start-Child "cmd.exe" "/d /c npm run tauri dev" $Client $appEnv $coreOnlySecrets
+        $app = Start-Child "cmd.exe" "/d /c npm run tauri dev" $Client $appEnv $appWithhold
     }
 
     # Polling instead of WaitForExit, so Ctrl+C reaches the finally block.

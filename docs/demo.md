@@ -2,9 +2,12 @@
 
 How to set up the demo laptop, run the five-part demo for judges, and rehearse it with your eyes
 closed. Spoken lines in quotes are the exact text the core produces (from
-`server/artemis/policy/gateway.py`, `server/artemis/core/session.py` and
-`server/artemis/echo/check.py`). Lines marked *(model)* are written by Claude and vary from run to
-run.
+`server/artemis/policy/gateway.py`, `server/artemis/core/session.py`, `server/artemis/core/app.py`,
+`server/artemis/echo/check.py` and, with `-Conversation`, `server/artemis/conversation/controller.py`).
+Lines marked *(model)* are written by Claude and vary from run to run. Progress lines ("Starting
+project …", "Opening project …", "Reading …", "Checking … for accessibility.", "Scanning … for
+security problems.", "Running main.py.") are low priority: NVDA always speaks them, SAPI skips one
+that arrives while it is still talking. All of them are in the activity log.
 
 > **Pitch line** (docs/architecture.md, Phase 5): Artemis proves its results. Every change is
 > approved and bound to the exact edit, every run is real, and Echo Check reports the real
@@ -31,9 +34,9 @@ the real agent isn't installed: run the uv sync from the setup checklist again.
 | Where | Key | Effect |
 |---|---|---|
 | Request field | Enter | Send the request. Shift+Enter adds a new line. |
-| Foreground approval dialog | (opens) | Focus starts on **Approve** for a normal approval, on **Reject** for a blocked one. |
+| Approval dialog | (opens) | Focus starts on **Approve** for a normal approval, on **Reject** for a blocked one. |
 | Approval dialog | Enter | Approve (normal approval, focus on Approve). |
-| Approval revealed from compact/background mode | (opens) | Focus starts on **Reject**, so Enter rejects. Review the proposal, then focus Approve to accept; blocked approvals still require Shift+Enter. |
+| Approval revealed from the compact status (`-Compact` only) | (opens) | Focus starts on **Reject**, so Enter rejects. Review the proposal, then focus Approve to accept; blocked approvals still require Shift+Enter. |
 | Approval dialog | Escape | Reject. |
 | Blocked approval | Tab, then Shift+Enter | Override: on **Approve blocked action (Shift+Enter)**, only Shift+Enter approves. Enter and clicks do nothing there. |
 | Main window | Tab to the buttons | **Cancel task**, **Repeat last speech**, **Stop speech**. |
@@ -100,8 +103,13 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    ```powershell
    powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude
    ```
-   Wait for "Core is ready." and the app window. Focus lands in the request field. Core log:
-   `%LOCALAPPDATA%\Artemis\logs\core.log`.
+   Stage without `-Compact` (the default): the app opens as the full window. `-Compact` (opt-in, not
+   for the demo) starts behind a small status window, and an approval that arrives there focuses
+   Reject, so the spoken "Enter to approve" would reject.
+   Wait for "Core is ready." (printed in the PowerShell window) and the app window. Focus lands in
+   the request field and Artemis says "Artemis is ready. Hold Control Shift Space and speak, or type
+   a request." (if no shortcut registered: "Artemis is ready. Use the Start listening button and
+   speak, or type a request."). Core log: `%LOCALAPPDATA%\Artemis\logs\core.log`.
 9. **Smoke test** before the judges arrive: run demo 1, then re-run `setup-demo.ps1` and restart.
 10. Volume up, notifications off (Focus assist), laptop on power, screen mirrored for the judges.
 
@@ -113,14 +121,18 @@ before/after comparison is kept in memory for the session.
 ### 1. Hello World
 
 - **Type** (or hold the push-to-talk shortcut, Ctrl+Shift+Space by default, and say "Artemis, create a Python
-  program that prints Hello World"; release):
+  program that prints Hello World, and run it"; release):
   `Create a Python program that prints Hello World, and run it.`
 - **Hear:**
   1. (voice only) "Heard: create a Python program that prints Hello World, and run it"
+     (the transcript as Whisper wrote it, wake word removed)
   2. "Working on: Create a Python program that prints Hello World, and run it."
+     (typed; for a spoken request it repeats the transcript: "Working on: create a Python program …")
   3. "Starting project hello-world."
   4. "Create project hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject."
-     (the line count is whatever Claude wrote; "No security findings" only when the scan from #11 is present)
+     (the project name and line count are whatever Claude chose; if an earlier `hello-world` is still
+     there, it is `hello-world-2`, `hello-world-3` and so on; "No security findings" only when the
+     scan from #11 is present)
 - **Keys:** Enter (approve the write).
 - **Hear:** "Created main.py, 1 line." then "Run main.py with Python. No security findings. Enter to run, Escape to reject."
 - **Keys:** Enter (approve the run).
@@ -131,10 +143,12 @@ before/after comparison is kept in memory for the session.
   ran for real, with a separate Python, no API keys in its environment and a 10 second limit.
 - **Fallbacks:**
   - Mic misbehaves: type the request. Typing is always available.
-  - API down or slow ("No internet connection to Claude." / "Claude is still busy. Try again in a
-    minute."): restart with `infra\start.ps1 -Agent stub`. The stub always makes `hello-world`
-    with `main.py`; files and the run are still real, but say the agent is scripted. It ends with
-    "I created hello-world with main.py and ran it. It printed Hello, World!"
+  - API down or slow ("The task failed. No internet connection to Claude. You can try again." /
+    "The task failed. Claude is still busy. Try again in a minute. You can try again."): restart
+    with `infra\start.ps1 -Agent stub`. The stub always makes `hello-world` (or the next free
+    `hello-world-2`, `-3` …) with `main.py`; files and the run are still real, but say the agent
+    is scripted. It ends with "I created hello-world with main.py and ran it. It printed Hello,
+    World!" (with that project name)
   - App won't connect: `infra\start.ps1` prints the reason and the end of `core.log`.
 
 ### 2. A failed run, explained and fixed
@@ -145,7 +159,8 @@ before/after comparison is kept in memory for the session.
   Artemis may reuse it or start `hello-world-2`; both are fine.
 - **Hear** (high priority, interrupts other speech, before any explanation):
   "main.py failed with exit code 1. NameError: name 'pritn' is not defined. Did you mean: 'print'?"
-  (Python 3.12 and later add the "Did you mean" part; the core needs 3.12+.)
+  (the "Did you mean" part comes from the Python that runs the program, not the core's; Python
+  3.11, 3.12 and 3.13 all add it.)
   then one sentence on what went wrong *(model)*.
 - **Type:** `Fix it and run it again.`
 - **Hear:** "Change 1 file in hello-world: modify main.py, 1 line added, 1 removed. No security findings. Enter to approve, Escape to reject." (project name as above)
@@ -181,9 +196,11 @@ Optional live version (depends on what Claude writes):
 - **Type:** `Start a new project called runner, and add a function that runs a shell command the user types.`
 - If Claude writes `subprocess.call(command, shell=True)`, the **write** is blocked before the file
   touches the disk: "Blocked: 1 high-severity issue, main.py line 5, subprocess call with
-  shell=True identified, security issue. Create project runner with 1 file: ... Escape to reject,
-  or use the override key to approve anyway." Escape; Claude proposes a version with `shlex.split`
-  and no shell, which only has low-severity notes and is approved normally (Enter).
+  shell=True identified, security issue, and 1 more. Create project runner with 1 file: ... Escape
+  to reject, or use the override key to approve anyway." (The 1 more is Bandit's low note on
+  `import subprocess`; the line number is wherever Claude put the call.) Escape; Claude proposes a
+  version with `shlex.split` and no shell, which only has low-severity notes and is approved
+  normally (Enter).
 - If Claude writes the safe version first, nothing is blocked. Say that the model got it right and
   the gate is there for when it doesn't, then switch to the primary version.
 - **Fallback (API down):** `-Agent stub` can't do this one. Show
@@ -248,7 +265,8 @@ version is not in the project, so the agent has to make the fix.
   - Agent or API unavailable: show the merged CLI on the fixture pair (prints the outline, the
     findings and the spoken lines; NVDA reads the console):
     `cd server; uv run --group echo python -m artemis.echo ..\fixture\echo-page\before.html ..\fixture\echo-page\after.html`
-  - "Echo Check isn't installed" or "Echo Check needs a browser": re-run step 2 of the setup.
+  - Claude says Echo Check isn't installed or needs a browser *(model)*: re-run step 2 of the
+    setup. (The core hands that error to Claude; it has no fixed spoken line of its own.)
 
 ## Pass/fail sheet (demo readiness)
 
@@ -269,7 +287,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 | 9 | Demo 4 injection | Run demo 4 | No approval dialog, `calc` still has its two files | key holder | not run |
 | 10 | Demo 5 Echo Check | Run demo 5 | "Before: 7 problems. After: 0." or the remainder read out and fixed | key holder | not run |
 | 11 | Demo 3b security scan (optional) | Run demo 3b on `old-app` | "Found 2 security issues in 1 Python file: 1 high, 1 low." and no approval dialog | key holder | not run |
-| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered; the second request gets "I'll do that next." (a typed one still gets 409) | key holder | not run |
+| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered ("I'm not working on anything yet." before the first task; "Okay, I'll keep it brief."); the second request gets "I'll do that next." (with an approval open: "I'll do that next. A decision is still waiting: Enter to approve, Escape to reject."), then after the task "Starting the follow-up." and "Working on: …" (a typed one still gets 409) | key holder | not run |
 | 13 | Fallbacks | `-Agent stub`, typed requests, `setup-demo.ps1 -Force` between runs | Each recovers in under a minute | anyone | not run |
 
 Launch, in order (full steps are in the setup checklist above): `setup-demo.ps1`, set the API key

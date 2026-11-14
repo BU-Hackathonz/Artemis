@@ -8,6 +8,8 @@ mod companion;
 struct CoreConfig {
     core_url: String,
     token: String,
+    // Opt-in compact desktop status (infra/start.ps1 -Compact). Off: full controls only, as before.
+    compact: bool,
 }
 
 const LAUNCH_ERROR: &str = "Native core configuration is missing or invalid. Close Artemis and start it with infra/start.ps1.";
@@ -33,9 +35,13 @@ impl CoreConfig {
         Ok(Self {
             core_url: url.origin().ascii_serialization(),
             token,
+            compact: false,
         })
     }
 
+    fn with_compact(self, compact: bool) -> Self {
+        Self { compact, ..self }
+    }
 }
 
 // Launch-only variables. ARTEMIS_* are consumed here; the ANTHROPIC_* names are removed
@@ -59,6 +65,11 @@ fn take_launch_env() -> (Option<String>, Option<String>) {
     (address, token)
 }
 
+// ARTEMIS_COMPACT=1 (start.ps1 -Compact) turns on the compact status window. It is not a secret.
+fn compact_requested(value: Option<String>) -> bool {
+    value.as_deref() == Some("1")
+}
+
 struct LaunchState(Result<CoreConfig, String>);
 
 fn config_for_window(label: &str, state: &LaunchState) -> Result<CoreConfig, String> {
@@ -75,24 +86,36 @@ fn get_core_config(
 }
 
 fn main() {
+    // Read before take_launch_env(). ARTEMIS_COMPACT is not a secret and stays in the environment.
+    let compact = compact_requested(std::env::var("ARTEMIS_COMPACT").ok());
     let (address, token) = take_launch_env();
-    let state = LaunchState(CoreConfig::from_values(address, token));
+    let state = LaunchState(
+        CoreConfig::from_values(address, token).map(|config| config.with_compact(compact)),
+    );
+    // A failed launch shows full controls with the recovery text, never the compact status.
+    let compact = state.0.as_ref().is_ok_and(|config| config.compact);
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .manage(companion::CompanionState::default())
-        .setup(|app| {
-            let compact = companion::place(app.handle())
-                .ok()
-                .and_then(|_| app.get_webview_window("companion"));
+        .setup(move |app| {
+            // Default: no compact status window; full controls open and take focus as before.
+            let status = if compact {
+                companion::create(app.handle())
+            } else {
+                None
+            };
             if let Some(main) = app.get_webview_window("main") {
                 // Keep full controls in the taskbar/Alt+Tab even before they are first opened.
-                if compact.is_some() {
+                if status.is_some() {
                     let _ = main.minimize();
                 }
                 let _ = main.show();
+                if status.is_none() {
+                    let _ = main.set_focus();
+                }
             }
-            if let Some(status) = compact {
+            if let Some(status) = status {
                 if status.show().is_ok() {
                     let _ = status.set_focus();
                 }
@@ -115,6 +138,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_status_is_off_unless_the_launcher_asks_for_it() {
+        assert!(compact_requested(Some("1".into())));
+        for value in [None, Some(""), Some("0"), Some("true"), Some(" 1")] {
+            assert!(!compact_requested(value.map(String::from)));
+        }
+        let config = CoreConfig::from_values(
+            Some("http://127.0.0.1:8123".into()),
+            Some("test-only".into()),
+        )
+        .unwrap_or_else(|_| panic!("valid fixture rejected"));
+        assert!(!config.compact);
+        assert!(config.with_compact(true).compact);
+    }
 
     #[test]
     fn only_the_main_window_can_receive_the_launch_token() {
@@ -162,6 +200,7 @@ mod tests {
         std::env::set_var("ARTEMIS_TOKEN", "test-only_token");
         std::env::set_var("ANTHROPIC_API_KEY", "test-only-key");
         std::env::set_var("ANTHROPIC_WORKSPACE_ID", "test-only-workspace");
+        std::env::set_var("ARTEMIS_COMPACT", "1");
 
         let (address, token) = take_launch_env();
         assert_eq!(address.as_deref(), Some("http://127.0.0.1:8123"));
@@ -169,6 +208,9 @@ mod tests {
         for name in LAUNCH_ENV_VARS {
             assert!(std::env::var(name).is_err(), "{name} still in environment");
         }
+        // Not a launch secret: the compact switch stays readable.
+        assert_eq!(std::env::var("ARTEMIS_COMPACT").as_deref(), Ok("1"));
+        std::env::remove_var("ARTEMIS_COMPACT");
     }
 
     #[test]
