@@ -70,10 +70,17 @@ export function App() {
     }, setStatus);
   }, [connection]);
   useEffect(() => {
-    if (!connection || !ready || focusedSession.current === connection.sid) return;
-    focusedSession.current = connection.sid;
+    if (!connection || !ready) return;
+    const firstFocus = focusedSession.current !== connection.sid;
     const frame = requestAnimationFrame(() => {
-      if (!document.querySelector('[role="dialog"]')) input.current?.focus();
+      if (document.querySelector('[role="dialog"]')) return;
+      const active = document.activeElement;
+      // Disabling the field during reconnect can leave focus on the document.
+      // Restore that empty focus, while preserving a chosen control or the log.
+      if (firstFocus || !active || active === document.body || active === document.documentElement) {
+        input.current?.focus();
+        if (document.activeElement === input.current) focusedSession.current = connection.sid;
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [connection, ready]);
