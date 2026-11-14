@@ -96,6 +96,65 @@ the exit code and the last line of the error output (the exception) verbatim bef
 explanation. Earcons are Yaovi's and don't collide with speech; built so far: listening on and off.
 The "still working" heartbeat is a low-priority spoken line from the core, not an earcon.
 
+### 5a. ElevenLabs, Artemis's own voice (Yaovi; default when a key is set; issue #134)
+
+**Why.** SAPI voices sound robotic, and Artemis is meant to sound like a voice you work with, not a
+form read aloud. ElevenLabs streams a natural voice fast enough to start speaking in about a second
+with its flash model. The voice, speed and engine are the user's choice.
+
+**When it is used.** ElevenLabs is the first choice for Artemis's own lines, **even while NVDA
+runs** (decided by Yaovi and David, #134). NVDA stays the screen reader: it keeps reading focus,
+navigation and the user's own text, and Artemis's lines still go to the braille display through
+NVDA's `brailleMessage`. NVDA is not asked to speak them, so no line is heard twice, and Artemis never
+cancels NVDA's own speech. This revises "never both" in §5: one voice per line, but Artemis's voice
+and NVDA's reading can overlap, and Artemis can't tell when NVDA is talking.
+- No key, no voice id, or `ARTEMIS_VOICE_ENGINE=nvda` or `sapi`: today's order, NVDA when it runs,
+  else SAPI, else silence. So a machine without a key behaves exactly as before, including the
+  rehearsed demo.
+- `screen_reader` in `voice.status` stays "nvda" only when Artemis speaks through NVDA, so "faster"
+  reaches ElevenLabs instead of answering with the NVDA rate line.
+
+**How it behaves.**
+- Audio streams as raw PCM and starts playing on the first chunk. The download and the playback run
+  on a worker thread, so the core's event loop never waits on the network or the audio device.
+- A `high` line stops the current audio at once, and push-to-talk stops it before the listening
+  earcon, as it does for SAPI.
+- If a line can't start within `ARTEMIS_ELEVEN_TIMEOUT_S` (no key, a failed request, a slow first
+  chunk), that same line is spoken by NVDA when it runs, else SAPI, and one warning is logged. After
+  3 failures in a row, that fallback is used for the rest of the session. Each of the first 3
+  failing lines can wait up to the timeout (1.5 s by default) before the fallback speaks it. The
+  notice "My natural voice isn't reachable, so I'm using the Windows voice." is handed to the core
+  through a hook; until the core wires it to the event bus, it is logged only.
+- "Faster" and "slower" change the ElevenLabs speed by 0.1 within 0.7 to 1.2, for the session.
+- A few short fixed lines (the ready lines, "Canceled.", the rate lines, "Still working.") are kept
+  as audio in memory, per voice and speed, so they play at once. Transcripts, code, file contents and
+  the agent's answers are never cached.
+
+**Privacy.** With ElevenLabs on, the text Artemis speaks is sent to ElevenLabs to be turned into
+audio. That includes file names, error lines, the agent's answers and the read-back of what you
+said ("Heard: …"), so the text of your request leaves the computer even though the audio does not.
+Speech recognition stays local: your recorded voice never leaves the computer, with or without
+ElevenLabs. Every line is run through `redact()` just before it is sent, so secrets in answers,
+transcripts and error lines are replaced with `[redacted]` first. The API key is read only from
+the `ELEVENLABS_API_KEY` environment variable (Artemis does not read a `.env` file), sent only in
+the request header, and never logged, spoken, put in an event or committed (`.env.example` holds
+an empty placeholder).
+
+**Settings.**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ARTEMIS_VOICE_ENGINE` | `elevenlabs` | Artemis's voice: `elevenlabs`, `nvda` or `sapi` (the last two keep NVDA first) |
+| `ELEVENLABS_API_KEY` | unset | The API key. Without it, NVDA or SAPI is used |
+| `ARTEMIS_ELEVEN_VOICE_ID` | `fPIfC3elMLbN9tNwMXkw` | The voice. Defaults to Artemis's own voice (chosen by Avery); set it to use another |
+| `ARTEMIS_ELEVEN_MODEL` | `eleven_flash_v2_5` | The model |
+| `ARTEMIS_ELEVEN_SPEED` | `1.0` | Starting speed, clamped to 0.7..1.2 |
+| `ARTEMIS_ELEVEN_STABILITY` | `0.5` | Voice stability, 0..1 |
+| `ARTEMIS_ELEVEN_TIMEOUT_S` | `1.5` | Seconds to wait for the first audio before SAPI says the line |
+
+**Follow-ups.** A spoken "change voice" command (new conversation logic, David's controller), and the
+core wiring for the fallback notice (Avery).
+
 ## 6. Audio capture and speech-to-text
 
 **Where to record.** Recording in the WebView means `getUserMedia` and WebView2's permission

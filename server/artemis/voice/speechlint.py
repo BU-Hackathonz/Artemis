@@ -22,7 +22,7 @@ STARTERS = (
     "Reading", "Scanning", "Running", "Waiting", "Canceled", "Blocked", "Enter", "Escape", "Result",
 )
 _RUN_ON = re.compile(r"\b([A-Za-z][\w']*) (" + "|".join(STARTERS) + r")\b")
-NAMES = {"Echo Check"}  # product names that look like a run-on but are one name
+NAMES = {"Echo Check", "Press Enter", "press Enter"}  # one name or one key instruction, not a run-on
 
 
 def run_ons(text: str) -> list[str]:
