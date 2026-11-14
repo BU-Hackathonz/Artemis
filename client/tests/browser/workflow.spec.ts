@@ -181,3 +181,24 @@ test('active-task conflict, blocked override, stale hash and changing speech ava
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+
+test('manual blocked demo exposes the native-hardware test without a backend', async ({page}) => {
+  await page.goto('/');
+  await page.getByRole('button',{name:'Try blocked-action demo',exact:true}).click();
+  const input = page.getByLabel('What would you like to build?');
+  await input.fill('test a blocked run');
+  await page.getByRole('button',{name:'Send request',exact:true}).click();
+  await page.getByRole('dialog').getByRole('button',{name:'Approve',exact:true}).click();
+  const dialog = page.getByRole('dialog',{name:'Review program run'});
+  await expect(dialog).toContainText('Synthetic finding for keyboard testing only');
+  await expect(dialog.getByRole('button',{name:'Reject',exact:true})).toBeFocused();
+  const approve = dialog.getByRole('button',{name:'Approve blocked action (Shift+Enter)',exact:true});
+  await approve.focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Shift+Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('log')).toContainText('No files were written and no code was run.');
+  await expect(input).toBeFocused();
+});
