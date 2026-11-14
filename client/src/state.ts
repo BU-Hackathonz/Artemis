@@ -1,3 +1,4 @@
+import {isTaskState} from './contracts';
 import type { Approval, CoreEvent, TaskState } from './contracts';
 export interface ViewState {
   seq: number; events: CoreEvent[]; approvals: {approval: Approval; taskId: string | null}[];
@@ -27,7 +28,7 @@ export function reduceEvent(state: ViewState, event: CoreEvent): ViewState {
   if (event.type === 'approval.resolved') next.approvals = state.approvals.filter(item => item.approval.approval_id !== event.data.approval_id);
   if (event.type === 'task.state') {
     const value = event.data.state;
-    if (typeof value === 'string' && ['queued','working','awaiting_reply','awaiting_approval','running','succeeded','failed','canceled'].includes(value)) {
+    if (isTaskState(value)) {
       next.taskId = event.task_id; next.taskState = value as TaskState;
       if (['succeeded','failed','canceled'].includes(value)) next.approvals = next.approvals.filter(item => item.taskId !== event.task_id);
     }
