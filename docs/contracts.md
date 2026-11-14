@@ -19,7 +19,7 @@ and passes it to both processes.
 | POST | `/sessions` | `{}` → `{session_id}` | One session per app launch |
 | GET | `/sessions/{sid}/events` | SSE stream of `Event` (§2) | Resumes from `Last-Event-ID` |
 | POST | `/sessions/{sid}/tasks` | `{client_request_id, source: "voice"\|"keyboard", text}` → `{task_id}`, or `409 {error: "task_active", task_id}` | Idempotent per `client_request_id`; one active task per session (§5.2) |
-| POST | `/tasks/{tid}/reply` | `{text, source}` → `204` | Answers a clarification question |
+| POST | `/tasks/{tid}/reply` | `{text, source}` → `204` | **Reserved, unused in the MVP.** The agent asks a question by ending its turn; the user's next request is the answer |
 | POST | `/approvals/{aid}` | `{decision: "approve"\|"reject", approval_hash}` → `204`, `409` if stale | The hash must match the one that was offered |
 | POST | `/tasks/{tid}/cancel` | `{}` → `204` | Stops active work; the event reports what was already applied |
 | POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events |
@@ -49,7 +49,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 | `type` | `data` |
 |---|---|
 | `transcript.partial` / `transcript.final` | `{text, client_request_id}` |
-| `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled` |
+| `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP |
 | `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}` |
 | `approval.requested` | `Approval` (below) |
 | `approval.resolved` | `{approval_id, decision, by: "user"\|"invalidated"}` |
@@ -69,9 +69,14 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
   "files": [{ "path": "main.py", "action": "created", "lines_added": 1, "lines_removed": 0 }],
   "diff": "--- /dev/null\n+++ main.py\n@@ -0,0 +1 @@\n+print(\"Hello, World!\")\n",
   "run": null,                    // for run_program: {"preset": "python", "entry": "main.py", "timeout_s": 10}
-  "findings": []                  // security findings that apply to this approval
+  "findings": [],                 // security findings that apply to this approval
+  "blocking": false               // true when a high-severity finding applies (default false)
 }
 ```
+
+When `blocking` is true the summary starts with "Blocked: …", the client's default action is
+Reject, and approving needs a distinct key (not plain Enter), so a risky write or run is never
+approved by reflex. The user can still override: Artemis doesn't overrule the developer.
 
 Rules: the core never sends two events with the same `seq`; the client drops any `seq` it has
 already seen. If the files under an approval change, the core emits `approval.resolved` with
@@ -111,20 +116,24 @@ class ToolGateway(Protocol):
 approval it emits `approval.requested` and **awaits** the user's decision (an `asyncio.Future`
 resolved by `POST /approvals/{aid}`). Then it validates again and executes. A rejection returns
 `ToolResult(ok=False, error="rejected_by_user")`, which the agent explains instead of retrying.
+A security scan runs inside the gateway before each write approval (on the proposed files, in a
+temp folder outside the workspace) and again before each run approval; its findings go into the
+`Approval`.
 
 | Tool | Args | Approval | MVP |
 |---|---|---|---|
-| `create_project` | `{name}` | with the first write | yes |
+| `create_project` | `{name}` | no: it only reserves the name; the folder is created by the first approved `write_files` | yes |
+| `open_project` | `{name}` | no | yes |
 | `list_files` | `{dir?}` | no | yes |
 | `read_file` | `{path, start_line?, end_line?}` | no | yes |
-| `write_file` | `{path, content}` (new files only) | yes | yes |
-| `edit_file` | `{path, edits: [{old, new}]}` | yes | after MVP |
+| `write_files` | `{files: [{path, content}]}`: one approval for the whole batch. Overwrites only in a project created this session | yes, after a scan | yes |
 | `run_program` | `{entry, args?: [str]}`; the preset comes from the file type | yes, after a scan | yes |
-| `scan` | `{paths?}` | no | after MVP (runs automatically before `run_program` in MVP) |
-| `ask_user` | `{question}` | no (pauses as `awaiting_reply`) | yes |
+| `edit_file` | `{path, edits: [{old, new}]}` | yes | after MVP |
 | `inspect_page` | `{url}` (fixture only) | no | Echo Check |
 
-There is no shell tool and no install tool, and the agent can't apply anything without approval.
+There is no shell, delete, network or install tool, and the agent can't apply anything without
+approval. `ask_user` and `scan` are not model tools: a question is the agent's final answer, and
+the scan runs inside the gateway.
 Paths are rejected unless `Path(root / p).resolve()` stays under `root`.
 
 ### 3.3 Voice (Yaovi ↔ Avery)
@@ -151,9 +160,16 @@ class Runner(Protocol):
     async def run(self, project: ProjectRef, entry: str, args: list[str], timeout_s: int = 10) -> RunResult: ...
 ```
 
-`run()` uses a fixed argv (`[python_exe, "-I", entry, *args]`), `cwd=project.root`, an explicit
-minimal env (`PATH`, `SYSTEMROOT`, `TEMP`; no API keys), and `shell=False`. It kills the whole
-process tree on timeout and caps captured output at 64 KB.
+`run()`:
+- finds the interpreter once at startup (`uv python find`, then `py -3`, else fail with a spoken
+  message); never the core's own Python (`sys.executable`);
+- uses a fixed argv `[python_exe, "-I", "-X", "utf8", entry, *args]`, `shell=False`,
+  `cwd=project.root`, `stdin=DEVNULL` (an `input()` call gets end-of-file instead of hanging);
+- passes an explicit env: only `SYSTEMROOT`, `TEMP`, `TMP`, `PATH` (interpreter dir + System32) and
+  `PYTHONIOENCODING=utf-8`; no API keys;
+- has a 10 s timeout, kills the whole process tree, and caps captured output at 64 KB;
+- runs `subprocess.run` inside `asyncio.to_thread`, not `asyncio.create_subprocess_exec` (on
+  Windows, uvicorn's `--reload` event loop can't start subprocesses).
 
 ## 4. Sample payloads (the first fixtures)
 
