@@ -321,3 +321,75 @@ def test_real_bandit_a_linked_file_outside_is_never_blamed_on_a_file_inside(tmp_
     assert result.data["files_scanned"] == 1
     assert log.spoken()[-1] == "No security findings in 1 Python file."
     assert not any("link.py line" in line for line in log.spoken())
+
+
+# ----- Avery's second review of #35: layouts where Bandit silently read nothing -----
+
+
+@needs_bandit
+@pytest.mark.parametrize(
+    "sibling", [".github/scripts", ".githooks", ".venv-tools", "node_modules_old", "__pycache__x"]
+)
+def test_real_bandit_reads_a_folder_whose_name_only_starts_like_a_skipped_one(tmp_path, sibling):
+    """Bandit treats each -x entry as a substring too, so "<root>/.git" used to hide ".github"."""
+    root, log, run = real(tmp_path)
+    (root / "main.py").write_text("print(1)\n")
+    (root / sibling).mkdir(parents=True)
+    (root / sibling / "release.py").write_text(RISKY)
+    whole = run()
+    assert whole.data["files_scanned"] == 2 and whole.data["counts"]["high"] == 1
+    assert f"high: B602 {sibling}/release.py line 2" in whole.data["findings"]
+    only = run(sibling)
+    assert only.data["files_scanned"] == 1 and only.data["counts"]["high"] == 1
+    # The same holds for the scan before a write or a run, which calls scan() directly.
+    assert f"{sibling}/release.py" in {f.path for f in asyncio.run(scan_module.scan(root))}
+
+
+@needs_bandit
+@pytest.mark.parametrize("parent", ["node_modules", ".venv", "__pycache__", ".git"])
+def test_real_bandit_scans_a_project_that_lives_under_a_folder_with_a_skipped_name(tmp_path, parent):
+    """The skip patterns are anchored to the project, so folders above it don't count."""
+    projects = tmp_path / parent / "home" / "ArtemisProjects"
+    root = projects / "calc"
+    for rel in ["main.py", "node_modules/x/b.py", "w/node_modules/y/c.py"]:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(RISKY)
+    log = EventLog()
+    gateway = ToolGateway(FakeRunner(projects), FakeApprovals(), log, projects_dir=projects, scan=scan_module.scan)
+
+    async def go(path):
+        await gateway.call("tsk_1", "open_project", {"name": "calc"})
+        return await gateway.call("tsk_1", "scan_project", {"path": path})
+
+    whole = asyncio.run(go(None))
+    assert whole.data["files_scanned"] == 1 and whole.data["counts"]["high"] == 1
+    assert "node_modules" not in whole.data["findings"]  # the project's own one is still skipped
+    one = asyncio.run(go("main.py"))
+    assert one.data["counts"]["high"] == 1
+    assert not any("No security findings" in line for line in log.spoken())
+
+
+def test_a_file_the_scanner_skipped_is_reported_never_counted_as_clean(tmp_path, monkeypatch):
+    """The backstop: whatever the reason, a listed file missing from Bandit's metrics is a finding."""
+    import json
+
+    root, log, run = real(tmp_path)
+    (root / "main.py").write_text("print(1)\n")
+    (root / "src").mkdir()
+    (root / "src" / "skipped.py").write_text(RISKY)
+
+    class Done:
+        returncode = 0
+        # Bandit says it read main.py only, and found nothing.
+        stdout = json.dumps({"errors": [], "results": [], "metrics": {str(root / "main.py"): {}, "_totals": {}}})
+
+    monkeypatch.setattr(scan_module.subprocess, "run", lambda *a, **k: Done())
+    result = run()
+    assert result.data["files_scanned"] == 2 and result.data["counts"] == {"high": 0, "medium": 1, "low": 0}
+    assert "medium: SCAN src/skipped.py line 1: couldn't be scanned: the scanner skipped this file" in result.data["findings"]
+    assert log.spoken()[-1] == (
+        "Found 1 security issue in 2 Python files: 1 medium. "
+        "The worst is src/skipped.py line 1, couldn't be scanned: the scanner skipped this file."
+    )
+    # And for the scan before a write or a run: an unread file is a finding there too.
+    assert [f.path for f in asyncio.run(scan_module.scan(root))] == ["src/skipped.py"]
