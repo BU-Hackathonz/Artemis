@@ -209,7 +209,7 @@ async def test_websockets_never_reach_a_server(tmp_path):
 async def test_playwright_driver_and_browser_get_no_secrets(tmp_path, monkeypatch):
     """No browser is needed: the Node driver starts without the key or token, and the launch env has neither
     (audit finding 2). The launch is faked, so this checks the env the real code builds."""
-    import playwright.async_api as pw_api
+    pw_api = pytest.importorskip("playwright.async_api")  # the echo group isn't in CI's sync
 
     from artemis.echo import check
 
