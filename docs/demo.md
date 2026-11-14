@@ -142,7 +142,8 @@ before/after comparison is kept in memory for the session.
 - **Keys:** Enter for the write; Enter for the run. `hello-world` already exists, so
   Artemis may reuse it or start `hello-world-2`; both are fine.
 - **Hear** (high priority, interrupts other speech, before any explanation):
-  "main.py failed with exit code 1. NameError: name 'pritn' is not defined."
+  "main.py failed with exit code 1. NameError: name 'pritn' is not defined. Did you mean: 'print'?"
+  (Python 3.12 and later add the "Did you mean" part; the core needs 3.12+.)
   then one sentence on what went wrong *(model)*.
 - **Type:** `Fix it and run it again.`
 - **Hear:** "Change 1 file in hello-world: modify main.py, 1 line added, 1 removed. No security findings. Enter to approve, Escape to reject." (project name as above)
