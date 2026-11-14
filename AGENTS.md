@@ -57,6 +57,7 @@ headless Python + FastAPI core in `server/` (one `uv` project, package `artemis`
 | Voice: push-to-talk, mic capture, STT, listening states, transcript correction, earcons | @unseentrader007 (Yaovi) | `server/artemis/voice/` |
 | AI/ML: project context, agent loop, tool requests, explanations | @dribeiro0 (David) | `server/artemis/agent/` |
 | Security: tool policy gate, injection defenses, secret handling | @dribeiro0 (David) | `server/artemis/policy/` |
+| Conversation: what to do with what was said (built-in phrases, follow-ups, answer style) | @dribeiro0 (David) | `server/artemis/conversation/` |
 | Backend / orchestration: FastAPI app, sessions, task state, approvals, cancel, event stream | @DxubleBTW (Avery) | `server/artemis/core/`, `server/artemis/contracts/`, `server/pyproject.toml` |
 | Infrastructure: runner, Echo Check, demo fixture, startup scripts | @DxubleBTW (Avery) | `server/artemis/runner/`, `server/artemis/echo/`, `fixture/`, `infra/` |
 | Landing site: public static site for judges and users (no tracking, no third-party scripts) | @unseentrader007 (Yaovi) | `site/` |

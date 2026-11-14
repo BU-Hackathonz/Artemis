@@ -17,7 +17,7 @@ from artemis.policy.redact import redact
 from .base import say
 from .config import Config
 from .context import task_message
-from .prompts import SYSTEM_PROMPT, tool_definitions
+from .prompts import system_prompt, tool_definitions
 
 MAX_TOKENS = 16000
 RETRY_DELAY_S = 2.0
@@ -35,6 +35,7 @@ class ClaudeAgent:
         self._config = config or Config.from_env()
         self._client = client  # created on first use, so a missing key fails as a spoken error
         self._tools = tool_definitions()
+        self._system = system_prompt(self._config.conversation)
         self.messages: list[dict] = []
 
     def reset(self) -> None:
@@ -153,7 +154,7 @@ class ClaudeAgent:
             # Thinking is always on for this model, so no `thinking` parameter is sent.
             output_config={"effort": self._config.effort},
             cache_control={"type": "ephemeral"},
-            system=SYSTEM_PROMPT,
+            system=self._system,
             tools=self._tools,
             messages=self.messages,
         )

@@ -20,7 +20,7 @@ from artemis.agent import claude as claude_module  # noqa: E402
 from artemis.agent.claude import ClaudeAgent  # noqa: E402
 from artemis.agent.config import Config  # noqa: E402
 from artemis.agent.context import task_message, vocabulary  # noqa: E402
-from artemis.agent.prompts import SYSTEM_PROMPT, strict_schema, tool_definitions  # noqa: E402
+from artemis.agent.prompts import SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
 from artemis.agent.stub import StubAgent  # noqa: E402
 from artemis.contracts import TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
 from artemis.policy.gateway import ToolGateway  # noqa: E402
@@ -475,6 +475,41 @@ def test_system_prompt_is_frozen_and_covers_the_rules():
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
+# sha256 of main's SYSTEM_PROMPT before contracts.md §5.4: with ARTEMIS_CONVERSATION off the
+# agent must see exactly that prompt.
+MAIN_SYSTEM_PROMPT_SHA256 = "fc08c24151eb7ce889b6459025678a8e90ae5494258f2bb2c3ee839a874664a5"
+
+
+def test_flag_off_system_prompt_is_mains():
+    import hashlib
+
+    assert system_prompt() == system_prompt(False) == SYSTEM_PROMPT
+    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == MAIN_SYSTEM_PROMPT_SHA256
+    assert "How to read a spoken request" not in SYSTEM_PROMPT
+
+
+def test_flag_on_system_prompt_adds_the_spoken_request_paragraph():
+    on = system_prompt(True)
+    # Spoken input: self-corrections, and what must never be lost from a transcript.
+    for phrase in ["actually green", "last version only", "negation", "misheard"]:
+        assert phrase in on and phrase not in SYSTEM_PROMPT
+    assert on.index("How to answer") < on.index("How to read a spoken request") < on.index("How to work")
+    assert on.replace(SPOKEN_REQUESTS + "\n\n", "", 1) == SYSTEM_PROMPT
+    assert "202" not in on
+
+
+def test_the_agent_sends_the_prompt_for_its_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    assert Config.from_env().conversation is False
+    assert ClaudeAgent(Config(), client=object())._system == SYSTEM_PROMPT
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    assert Config.from_env().conversation is True
+    w = World(tmp_path, [message(text("Hello."))])
+    w.agent = ClaudeAgent(Config(conversation=True), client=w.client)
+    asyncio.run(w.run())
+    assert w.client.calls[0]["system"] == system_prompt(True)
+
+
 def test_task_message_without_and_with_a_project(tmp_path):
     none = task_message(TaskContext(task_id="tsk_1", request="hello"))
     assert none == '<task id="tsk_1" project="none">\nNo project is open.\n</task>\n\nhello'
@@ -492,6 +527,20 @@ def test_task_message_without_and_with_a_project(tmp_path):
     assert "\nmain.py\n" in text_ and "\nsrc/ops.py\n" in text_
     assert ".git" not in text_ and ".env" not in text_ and "pycache" not in text_
     assert text_.count("</untrusted>") == 1 and text_.endswith("explain it")
+
+
+def test_task_message_carries_the_answer_style_only_when_one_was_asked_for():
+    from artemis.contracts import Style
+
+    plain = task_message(TaskContext(task_id="t", request="add a footer"))
+    assert "Answer style" not in plain and plain.endswith("\n\nadd a footer")
+    styled = task_message(
+        TaskContext(task_id="t", request="add a footer", style=Style(verbosity="brief", focus="visual"))
+    )
+    assert "[Answer style: Keep the answer to one or two short sentences. Describe what the page looks like" in styled
+    assert styled.endswith("]\n\nadd a footer")  # the request itself is never rewritten
+    detailed = task_message(TaskContext(task_id="t", request="r", style=Style(verbosity="detailed", focus="code")))
+    assert "step by step" in detailed and "which files and functions" in detailed
 
 
 def test_task_message_tree_is_capped(tmp_path):
