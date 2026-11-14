@@ -87,16 +87,21 @@ def parse_bandit(output: str, folder: Path) -> list[Finding]:
     return sorted(findings, key=lambda f: (order[f.severity], f.path, f.line))
 
 
-def _run_bandit(folder: Path) -> str:
+def _run_bandit(folder: Path, only: Path | None = None) -> str:
     # Bandit is our own tool, so it runs on the core's interpreter, with a minimal
     # environment: no API keys reach it.
     env = {name: os.environ[name] for name in _ENV_NAMES if name in os.environ}
-    # Don't crawl a virtual environment or node_modules before every run.
-    excluded = ",".join(str(folder / name) for name in sorted(SKIP_DIRS))
+    # Don't read a virtual environment or node_modules before every run: the top-level
+    # folders by path, and the same names at any depth by pattern.
+    excluded = ",".join(
+        [str(folder / name) for name in sorted(SKIP_DIRS)]
+        + [f"*/{name}/*" for name in sorted(SKIP_DIRS)]
+    )
+    target = str(only or folder)
     try:
         done = subprocess.run(
             [
-                sys.executable, "-m", "bandit", "-r", str(folder), "-f", "json", "-q", "-x", excluded,
+                sys.executable, "-m", "bandit", "-r", target, "-f", "json", "-q", "-x", excluded,
                 # The project can't turn findings off: no .bandit from the folder, no `# nosec`.
                 "--ini", str(_INI), "--ignore-nosec",
             ],
@@ -117,9 +122,10 @@ def _run_bandit(folder: Path) -> str:
     return done.stdout
 
 
-async def scan(folder: Path) -> list[Finding]:
-    """Scan every Python file under `folder`. Paths in the findings are relative to it."""
+async def scan(folder: Path, only: Path | None = None) -> list[Finding]:
+    """Scan every Python file under `folder`, or just the file or folder `only` inside it.
+    Paths in the findings are relative to `folder` either way."""
     # subprocess.run in a thread, not asyncio's subprocess: uvicorn --reload on Windows uses
     # an event loop that can't start subprocesses (design D6).
-    output = await asyncio.to_thread(_run_bandit, Path(folder))
+    output = await asyncio.to_thread(_run_bandit, Path(folder), Path(only) if only else None)
     return parse_bandit(output, Path(folder))

@@ -129,7 +129,7 @@ with `strict: true`.
 Any text that came from files or programs sits inside `data` as
 `<untrusted source="file:main.py">…</untrusted>`. Output is truncated to 8 KB, keeping the head and
 tail with a `[… N bytes cut …]` marker, and redacted (D4). Error codes are fixed: `invalid_args`,
-`path_rejected`, `rejected_by_user`, `invalidated`, `scan_blocked`, `timeout`, `not_found`.
+`path_rejected`, `rejected_by_user`, `invalidated`, `scan_blocked`, `timeout`, `not_found`. Added since: `tool_failed`, `echo_unavailable`, `scan_unavailable`.
 
 ---
 

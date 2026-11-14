@@ -30,8 +30,8 @@ class World:
         self.approvals = FakeApprovals()
         self.scanned: list = []
 
-        async def fake_scan(folder):
-            self.scanned.append(folder)
+        async def fake_scan(folder, only=None):
+            self.scanned.append(folder if only is None else (folder, only))
             if isinstance(found, Exception):
                 raise found
             return list(found)
@@ -107,6 +107,8 @@ def test_a_path_narrows_the_scan_to_a_folder_or_a_file(tmp_path):
 
     one = w.scan("main.py", open_first=False)
     assert one.data["scope"] == "main.py" and one.data["counts"] == {"high": 1, "medium": 0, "low": 0}
+    # Only the requested folder or file is handed to the scanner, not the whole project.
+    assert w.scanned == [(w.root, w.root / "src"), (w.root, w.root / "main.py")]
 
     text = w.scan("README.md", open_first=False)
     assert text.data["files_scanned"] == 0
@@ -187,6 +189,24 @@ def test_announcement_wording():
     )
 
 
+@pytest.mark.parametrize("path", ["node_modules", ".venv/lib", "src/__pycache__", "node_modules/x/bad.py", "NODE_MODULES"])
+def test_a_path_inside_a_skipped_folder_is_refused_not_reported_clean(tmp_path, path):
+    """Avery's review of #35: the scanner never reads these folders, so "no findings" would be false."""
+    files = ("main.py", "node_modules/x/bad.py", ".venv/lib/v.py", "src/__pycache__/c.py")
+    w = World(tmp_path, [], files=files)
+    result = w.scan(path)
+    assert result.error == "invalid_args" and "never checks" in result.message
+    assert w.scanned == []
+    assert not any("No security findings" in line or "Scanning" in line for line in w.log.spoken())
+
+
+def test_pyw_files_count_as_python(tmp_path):
+    windowed = Finding(rule="B602", severity="high", path="app.pyw", line=1, message="shell=True")
+    w = World(tmp_path, [windowed], files=("app.pyw",))
+    result = w.scan()
+    assert result.data["files_scanned"] == 1 and result.data["counts"]["high"] == 1
+
+
 # ----- real Bandit -----
 
 needs_bandit = pytest.mark.skipif(not scan_module.available(), reason="bandit is not installed")
@@ -244,3 +264,60 @@ def test_real_bandit_does_not_report_files_behind_a_link(tmp_path):
     result = run()
     assert result.data["files_scanned"] == 1 and "secret" not in result.data["findings"]
     assert log.spoken()[-1] == "No security findings in 1 Python file."
+
+
+# ----- Avery's review of #35, each case against real Bandit -----
+
+
+@needs_bandit
+def test_real_bandit_a_skipped_folder_is_refused_and_nested_ones_are_not_read(tmp_path):
+    root, log, run = real(tmp_path)
+    for rel in ["main.py", "node_modules/x/bad.py", "pkg/.venv/lib/v.py", "web/node_modules/y/n.py"]:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(RISKY)
+    refused = run("node_modules")
+    assert refused.error == "invalid_args"
+    assert not any("No security findings" in line for line in log.spoken())
+
+    # The count is what Bandit read: the nested skipped folders are in neither.
+    whole = run()
+    assert whole.data["files_scanned"] == 1 and whole.data["counts"]["high"] == 1
+    assert "node_modules" not in whole.data["findings"] and ".venv" not in whole.data["findings"]
+    # Asked directly, with no gateway filter behind it, the scanner doesn't read them either.
+    assert {f.path for f in asyncio.run(scan_module.scan(root))} == {"main.py"}
+
+
+@needs_bandit
+def test_real_bandit_reads_only_the_requested_file_or_folder(tmp_path):
+    root, log, run = real(tmp_path)
+    for rel in ["main.py", "src/tool.py", "src/deep/more.py"]:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(RISKY)
+    # Paths stay relative to the project, whatever was scanned.
+    assert {f.path for f in asyncio.run(scan_module.scan(root, root / "src"))} == {"src/tool.py", "src/deep/more.py"}
+    assert {f.path for f in asyncio.run(scan_module.scan(root, root / "src" / "tool.py"))} == {"src/tool.py"}
+
+    one = run("src/tool.py")
+    assert one.data["files_scanned"] == 1 and one.data["counts"]["high"] == 1
+    assert "main.py" not in one.data["findings"] and "more.py" not in one.data["findings"]
+    assert log.spoken()[-1].startswith("Found 2 security issues in 1 Python file: 1 high, 1 low. The worst is src/tool.py line 2, ")
+
+
+@needs_bandit
+def test_real_bandit_a_linked_file_outside_is_never_blamed_on_a_file_inside(tmp_path):
+    """A clean link.py at the top, and sub/link.py pointing at a risky file outside the project."""
+    root, log, run = real(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "link.py").write_text(RISKY)
+    (root / "link.py").write_text("print(1)\n")
+    (root / "sub").mkdir()
+    try:
+        (root / "sub" / "link.py").symlink_to(outside / "link.py")
+    except OSError:
+        pytest.skip("file symlinks need admin rights on Windows")
+    result = run()
+    assert result.data["counts"] == {"high": 0, "medium": 0, "low": 0}
+    assert result.data["files_scanned"] == 1
+    assert log.spoken()[-1] == "No security findings in 1 Python file."
+    assert not any("link.py line" in line for line in log.spoken())

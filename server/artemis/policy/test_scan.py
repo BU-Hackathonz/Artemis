@@ -79,7 +79,9 @@ def test_bandit_gets_no_secrets_in_its_environment(tmp_path, monkeypatch):
     assert seen["argv"][1:8] == ["-m", "bandit", "-r", str(tmp_path), "-f", "json", "-q"]
     # Virtual environments and node_modules are excluded, so a run isn't held up by them.
     assert seen["argv"][8] == "-x"
-    assert {str(tmp_path / ".venv"), str(tmp_path / "node_modules")} <= set(seen["argv"][9].split(","))
+    excluded = set(seen["argv"][9].split(","))
+    assert {str(tmp_path / ".venv"), str(tmp_path / "node_modules")} <= excluded
+    assert {"*/.venv/*", "*/node_modules/*"} <= excluded  # and the same names at any depth
     assert seen["timeout"] == 20 and "shell" not in seen
 
 

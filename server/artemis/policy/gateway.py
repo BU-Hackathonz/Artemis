@@ -55,6 +55,7 @@ from artemis.contracts import (
 from .hashing import approval_hash, run_payload, write_payload
 from .paths import (
     MAX_FILES_PER_BATCH,
+    SKIP_DIRS,
     PathRejected,
     check_read_size,
     check_write_size,
@@ -66,7 +67,8 @@ from .redact import redact, redact_obj
 from .rules import RULES
 
 # Scans a folder and returns findings with paths relative to it. None until M2 (Bandit).
-Scan = Callable[[Path], Awaitable[list[Finding]]]
+# scan_project also passes a second argument: the one file or folder inside it to read.
+Scan = Callable[..., Awaitable[list[Finding]]]
 
 MAX_LIST_ENTRIES = 200
 MAX_SCAN_FINDINGS = 50
@@ -406,14 +408,24 @@ class ToolGateway:
             if not top.exists():
                 raise _ToolError("not_found", f"There is no file or folder named {a.path}.")
             scope = top.relative_to(base).as_posix()
+            # The scan never reads these folders, so it must not answer "clean" for one.
+            skipped = {name.casefold() for name in SKIP_DIRS}
+            inside = next((part for part in scope.split("/") if part.casefold() in skipped), None)
+            if inside:
+                raise _ToolError(
+                    "invalid_args",
+                    f"{a.path} is inside {inside}, which the security scan never checks. "
+                    "Nothing was scanned.",
+                )
         if self._scan is None:
             message = "The security scanner isn't installed."
             await self._error(task_id, "scan_unavailable", message, "Nothing was scanned.")
             raise _ToolError("scan_unavailable", f"{message} Run: uv sync --group security")
 
-        # Links are not followed, so only files inside the project count.
+        # The files Bandit reads: Python files, not behind a link, not in a skipped folder at
+        # any depth. Findings for anything else are dropped, and this is the count we speak.
         listed = project_files(root, top) if top.is_dir() else [scope]
-        python = {name for name in listed if name.lower().endswith(".py")}
+        python = {name for name in listed if name.lower().endswith((".py", ".pyw"))}
         where = project.slug if not a.path else scope
         if not python:
             text = f"There are no Python files to scan in {where}. The scan only checks Python."
@@ -422,7 +434,8 @@ class ToolGateway:
 
         await self._say(task_id, f"Scanning {where} for security problems.")
         try:
-            found = await self._scan(root)
+            # Only the requested file or folder is read, so one file in a big project is quick.
+            found = await (self._scan(root, top) if a.path else self._scan(root))
         except Exception:
             message = "The security scan could not run."
             await self._error(task_id, "scan_unavailable", message, "Nothing was scanned.")
