@@ -379,11 +379,24 @@ class Session:
             else:
                 result = set_rate(decision.delta)
                 if inspect.isawaitable(result):
-                    await result
+                    result = await result
+                if result is False and not self._voice_ready():
+                    # The voice answers a rate change itself, except when it has no output at all
+                    # (no SAPI, or NVDA without its DLL). Then say it, so the client's live region
+                    # speaks it. With output, False means it already spoke (a limit, or NVDA).
+                    await self.say(tid, decision.say)
         elif decision.say:  # "say", and "queue" (the controller already kept the request)
             await self.say(tid, decision.say, decision.priority)
         if decision.reminder:
             await self.say(tid, decision.reminder)
+
+    def _voice_ready(self) -> bool:
+        """voice_ready as voice.status reports it; False if the voice can't tell us."""
+        announcer = getattr(self.voice, "announcer", None)
+        try:
+            return bool(announcer.status()[0])
+        except Exception:
+            return False
 
     def _speaking(self) -> bool:
         """True only when we know Artemis is speaking. NVDA can't tell us, so that is False."""

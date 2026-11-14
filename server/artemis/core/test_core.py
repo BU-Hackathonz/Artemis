@@ -541,6 +541,33 @@ async def test_diagnostics_need_the_token_and_a_session(client):
     assert (await client.post("/sessions/ses_x/diagnostics", headers=AUTH, json=body)).status_code == 404
 
 
+# ----- spoken rate change with conversation on (§5.4) -----
+
+
+async def say_slower(client, core, voice, monkeypatch, *, voice_ready):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    voice.announcer.state = (voice_ready, None)
+    voice.set_rate = lambda delta: False  # no change made (no output, or at a limit)
+    sid, session = await start(client, core)
+    before = len(session.bus.history)
+    voice.transcript = "slower"
+    await client.post("/voice/listen", headers=AUTH, json={"action": "start"})
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "transcript.final" for e in s.bus.history[before:]))
+    await asyncio.sleep(0.05)
+    return [e for e in session.bus.history[before:] if e.type == "agent.message"]
+
+
+async def test_slower_with_no_voice_output_is_still_answered(client, core, voice, monkeypatch):
+    lines = await say_slower(client, core, voice, monkeypatch, voice_ready=False)
+    assert [e.announce.text for e in lines] == ["I can't change how fast I speak yet."]
+
+
+async def test_slower_with_voice_output_is_not_answered_twice(client, core, voice, monkeypatch):
+    # With output, the voice already said its own line (e.g. "That's the slowest I go.").
+    assert await say_slower(client, core, voice, monkeypatch, voice_ready=True) == []
+
+
 # ----- ready line (§1) -----
 
 
