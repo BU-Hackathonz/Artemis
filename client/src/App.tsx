@@ -9,6 +9,7 @@ import type { Core, CoreEvent, Health } from './contracts';
 import {useVoiceInput} from './useVoiceInput';
 import {VoiceInput} from './VoiceInput';
 import { platform } from './platform';
+import { LiquidRing } from './LiquidRing';
 
 interface Connection {core: Core; sid: string; health: Health; demo: boolean}
 async function openConnection(core: Core, demo: boolean): Promise<Connection> {
@@ -47,6 +48,41 @@ export function App() {
   const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
   const ready = status === 'Connected' || status === 'Demo connected';
   const voiceInput = useVoiceInput(connection && !connection.demo ? connection.core : null, connection?.sid ?? null, ready, voiceReady);
+  // The liquid agent ring pictures the state the text announces; a finished task makes it splash.
+  const [ringKick, setRingKick] = useState(0);
+  const finishedTask = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.taskId && state.taskState === 'succeeded' && finishedTask.current !== state.taskId) {
+      finishedTask.current = state.taskId;
+      setRingKick(k => k + 1);
+    }
+  }, [state.taskId, state.taskState]);
+  // Desktop agent: the same ring in a small always-on-top window (see AgentWindow.tsx).
+  const ringInputs = {connected: ready, taskState: pendingTaskId ? 'queued' as const : state.taskId ? state.taskState : 'idle' as const, microphone: voiceInput.status.state, approval: state.approvals.length > 0};
+  // In memory only: the app keeps nothing in browser storage.
+  const [showAgent, setShowAgent] = useState(true);
+  const agentStatus = useRef({...ringInputs, kick: ringKick});
+  agentStatus.current = {...ringInputs, kick: ringKick};
+  const showAgentRef = useRef(showAgent);
+  showAgentRef.current = showAgent;
+  useEffect(() => { void platform.agent.sendStatus(agentStatus.current).catch(() => {}); },
+    [ringInputs.connected, ringInputs.taskState, ringInputs.microphone, ringInputs.approval, ringKick]);
+  useEffect(() => {
+    void platform.agent.setVisible(showAgent).catch(() => {});
+  }, [showAgent]);
+  useEffect(() => {
+    if (!platform.native) return;
+    const off: (() => void)[] = [];
+    let active = true;
+    const keep = (fn: () => void) => { if (active) off.push(fn); else fn(); };
+    void platform.agent.onReady(() => {
+      void platform.agent.sendStatus(agentStatus.current).catch(() => {});
+      void platform.agent.setVisible(showAgentRef.current).catch(() => {});
+    }).then(keep, () => {});
+    // Clicking the agent brings the controls back with focus in the request (unless a dialog owns it).
+    void platform.agent.onOpen(() => { if (!document.querySelector('[role="dialog"]')) input.current?.focus(); }).then(keep, () => {});
+    return () => { active = false; off.forEach(fn => fn()); };
+  }, []);
   useEffect(() => {
     if (!platform.native) return;
     let active = true;
@@ -137,7 +173,7 @@ export function App() {
     }
     finally {setBusy(false);}
   }
-  return <><a className="skip" href="#request">Skip to request</a><header><p>ARTEMIS · {platform.name}</p><h1>Build with words.</h1><p>Direct a change, review each action, and hear the result.</p></header>
+  return <><a className="skip" href="#request">Skip to request</a><header><LiquidRing kick={ringKick} inputs={ringInputs}/><p>ARTEMIS · {platform.name}</p><h1>Build with words.</h1><p>Direct a change, review each action, and hear the result.</p></header>
     <main>
       <section aria-labelledby="connection-heading"><h2 id="connection-heading">Core connection</h2>
         <p role="status">{status}</p>
@@ -150,6 +186,10 @@ export function App() {
           <button onClick={() => window.location.reload()}>Disconnect and reset</button>
           {!ready && <button onClick={() => {reconnectFocus.current = true; setConnection({...connection});}}>Reconnect event stream</button>}
         </>}
+        {platform.native && <div className="agent-settings">
+          <label className="check"><input type="checkbox" checked={showAgent} onChange={e => setShowAgent(e.target.checked)}/> Show the Artemis agent on the desktop</label>
+          <button type="button" disabled={!showAgent} onClick={() => void platform.agent.resetPosition().catch(() => {})}>Move the agent back to the corner</button>
+        </div>}
       </section>
       {error && <p role="alert">{error}</p>}
       <div className="workspace">

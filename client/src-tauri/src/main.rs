@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use tauri::Manager;
 
 #[derive(Clone, Serialize)]
 struct CoreConfig {
@@ -56,6 +57,14 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .invoke_handler(tauri::generate_handler![get_core_config])
+        // The desktop agent window must not keep Artemis running once the main window is gone.
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::Destroyed = event {
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("Could not start Artemis desktop client");
 }

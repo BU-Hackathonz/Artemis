@@ -12,9 +12,48 @@ function serialShortcut<T>(action: () => Promise<T>): Promise<T> {
   return result;
 }
 let configuration: Promise<NativeCoreConfig> | undefined;
+
+/** What the desktop agent ring shows (sent from the main window to the agent window). */
+export interface AgentStatus {connected: boolean; taskState: string; microphone: string; approval: boolean; kick: number}
+// Events between the main window and the desktop agent window (labels "main" and "agent").
+const AGENT = {status:'artemis:agent-status', ready:'artemis:agent-ready', open:'artemis:agent-open', visible:'artemis:agent-visible', reset:'artemis:agent-reset'};
+type Unlisten = () => void;
+async function on<T>(event: string, handler: (payload: T) => void): Promise<Unlisten> {
+  const {listen} = await import('@tauri-apps/api/event');
+  return listen<T>(event, e => handler(e.payload));
+}
+async function sendTo(target: string, event: string, payload?: unknown) {
+  const {emitTo} = await import('@tauri-apps/api/event');
+  await emitTo(target, event, payload);
+}
 export const platform = {
   name: native ? 'Desktop' : 'Browser',
   native,
+  /** Main-window side of the desktop agent ring (desktop app only; no-ops in the browser). */
+  agent: {
+    sendStatus(status: AgentStatus): Promise<void> { return native ? sendTo('agent', AGENT.status, status) : Promise.resolve(); },
+    setVisible(visible: boolean): Promise<void> { return native ? sendTo('agent', AGENT.visible, visible) : Promise.resolve(); },
+    resetPosition(): Promise<void> { return native ? sendTo('agent', AGENT.reset) : Promise.resolve(); },
+    onReady(handler: () => void): Promise<Unlisten> { return native ? on(AGENT.ready, handler) : Promise.resolve(() => {}); },
+    /** The agent was clicked: bring the controls back and focus them. */
+    onOpen(handler: () => void): Promise<Unlisten> {
+      if (!native) return Promise.resolve(() => {});
+      return on(AGENT.open, async () => {
+        const {getCurrentWindow} = await import('@tauri-apps/api/window');
+        const main = getCurrentWindow();
+        await main.unminimize(); await main.show(); await main.setFocus();
+        handler();
+      });
+    },
+  },
+  /** Agent-window side (the transparent ring window). */
+  agentWindow: {
+    onStatus(handler: (status: AgentStatus) => void): Promise<Unlisten> { return on(AGENT.status, handler); },
+    onVisible(handler: (visible: boolean) => void): Promise<Unlisten> { return on(AGENT.visible, handler); },
+    onReset(handler: () => void): Promise<Unlisten> { return on(AGENT.reset, handler); },
+    ready(): Promise<void> { return sendTo('main', AGENT.ready); },
+    open(): Promise<void> { return sendTo('main', AGENT.open); },
+  },
   async registerPushToTalk(shortcut: string, handler: (state: 'Pressed' | 'Released') => void): Promise<() => Promise<void>> {
     if (!native) throw new Error('Global voice shortcut requires the desktop app.');
     const {register, unregister, isRegistered} = await import('@tauri-apps/plugin-global-shortcut');

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Local main window launch configuration and push-to-talk shortcut only",
+  "description": "Main window: launch configuration, push-to-talk shortcut, and talking to the desktop agent window",
   "local": true,
   "windows": [
     "main"
@@ -10,6 +10,12 @@
     "allow-get-core-config",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "global-shortcut:allow-is-registered"
+    "global-shortcut:allow-is-registered",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit-to",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus"
   ]
 }
