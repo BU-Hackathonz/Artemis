@@ -59,13 +59,19 @@ fn main() {
         .manage(state)
         .manage(companion::CompanionState::default())
         .setup(|app| {
-            let compact_shown = companion::place(app.handle()).is_ok()
-                && app
-                    .get_webview_window("companion")
-                    .is_some_and(|status| status.show().is_ok());
-            if !compact_shown {
-                if let Some(main) = app.get_webview_window("main") {
-                    let _ = main.show();
+            let compact = companion::place(app.handle())
+                .ok()
+                .and_then(|_| app.get_webview_window("companion"));
+            if let Some(main) = app.get_webview_window("main") {
+                // Keep full controls in the taskbar/Alt+Tab even before they are first opened.
+                if compact.is_some() {
+                    let _ = main.minimize();
+                }
+                let _ = main.show();
+            }
+            if let Some(status) = compact {
+                if status.show().is_ok() {
+                    let _ = status.set_focus();
                 }
             }
             Ok(())
