@@ -7,7 +7,7 @@ npm ci
 npm run dev
 ```
 
-Open http://127.0.0.1:1420 and choose **Try in-memory demo**. Type any request (the demo always proposes Hello World), approve the file proposal, separately approve the run, and read the simulated output. Escape rejects the current proposal. Blocked actions default to Reject and require Shift+Enter on the focused Approve button; Enter or a click alone cannot approve them. The demo never writes files, executes code, or records audio.
+Open http://127.0.0.1:1420 and choose **Try in-memory demo**. After connecting, focus moves to the request field. Enter sends; Shift+Enter adds a newline. Type any request (the demo always proposes Hello World), approve the file proposal, separately approve the run, and read the simulated output. Escape rejects the current proposal. Blocked actions default to Reject and require Shift+Enter on the focused Approve button; Enter or a click alone cannot approve them. The demo never writes files, executes code, or records audio.
 
 For the Windows/NVDA hardware check, choose **Try blocked-action demo**, submit any text and approve the normal file proposal. The next dialog has `blocking=true` and a clearly labeled synthetic high-severity finding (`DEMO_HIGH`); no scanner ran and no executable file exists. Focus defaults to Reject. Focus **Approve blocked action (Shift+Enter)**: Enter alone and clicking must do nothing; Shift+Enter accepts the simulated run. Escape must reject. After either outcome, focus returns to the request field. Repeat with NVDA on to verify that the shortcut reaches the dialog.
 

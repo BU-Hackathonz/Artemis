@@ -29,6 +29,7 @@ export function App() {
   const requestRef = useRef<{text: string; id: string} | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const hadApproval = useRef(false);
+  const focusedSession = useRef<string | null>(null);
   const [submittedTask, setSubmittedTask] = useState<string | null>(null);
   const generation = useRef(0);
   const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
@@ -37,6 +38,22 @@ export function App() {
     if (!connection) return;
     return connection.core.subscribe(connection.sid, dispatch, setStatus);
   }, [connection]);
+  useEffect(() => {
+    if (!connection || !ready || focusedSession.current === connection.sid) return;
+    focusedSession.current = connection.sid;
+    const frame = requestAnimationFrame(() => {
+      if (!document.querySelector('[role="dialog"]')) input.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [connection, ready]);
+  useEffect(() => {
+    function restoreRequestFocus() {
+      const active = document.activeElement;
+      if (ready && state.approvals.length === 0 && (!active || active === document.body || active === document.documentElement)) input.current?.focus();
+    }
+    window.addEventListener('focus', restoreRequestFocus);
+    return () => window.removeEventListener('focus', restoreRequestFocus);
+  }, [ready, state.approvals.length]);
   useEffect(() => { if (state.transcript !== null) setText(state.transcript); }, [state.transcript]);
   useEffect(() => { if (state.taskId === submittedTask && terminal(state.taskState)) setSubmittedTask(null); }, [state.taskId, state.taskState, submittedTask]);
   useEffect(() => {
@@ -68,7 +85,7 @@ export function App() {
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!connection || !ready || busy || !text.trim()) return;
+    if (!connection || !ready || busy || !text.trim() || ((submittedTask !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')) return;
     setBusy(true); setError('');
     try {
       if (state.taskState === 'awaiting_reply' && state.taskId) await connection.core.reply(state.taskId, text.trim());
@@ -89,7 +106,7 @@ export function App() {
       <section aria-labelledby="connection-heading"><h2 id="connection-heading">Core connection</h2>
         <p role="status">{status}</p>
         {!connection ? <><form onSubmit={e => {e.preventDefault(); void connect(false);}}>
-          <label htmlFor="address">Core address</label><input id="address" type="url" value={address} onChange={e => setAddress(e.target.value)} required disabled={busy}/>
+          <label htmlFor="address">Core address</label><input autoFocus id="address" type="url" value={address} onChange={e => setAddress(e.target.value)} required disabled={busy}/>
           <label htmlFor="token">Launch token</label><input id="token" type="password" value={token} onChange={e => setToken(e.target.value)} required autoComplete="off" disabled={busy}/>
           <button disabled={busy}>Connect to core</button>
         </form><p>Launch the core first. Your token stays in memory for this connection.</p><button disabled={busy} onClick={() => void connect(true)}>Try in-memory demo</button> <button disabled={busy} onClick={() => void connect(true, true)}>Try blocked-action demo</button><p>The blocked-action demo adds a synthetic security finding for testing the approval shortcut. Both demos stay in memory.</p></> : <>
@@ -104,7 +121,12 @@ export function App() {
           <p>Task: {state.taskState.replaceAll('_', ' ')}</p>
           <form onSubmit={e => void submit(e)}>
             <label htmlFor="request">{state.taskState === 'awaiting_reply' ? 'Answer the clarification question' : 'What would you like to build?'}</label>
-            <textarea ref={input} id="request" rows={4} value={text} onChange={e => setText(e.target.value)} placeholder="Create a Python program that prints Hello World" disabled={!connection || !ready} required/>
+            <p id="request-keys">Enter sends your request. Shift+Enter adds a new line.</p>
+            <textarea ref={input} id="request" aria-describedby="request-keys" onKeyDown={event => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
+                event.preventDefault(); event.currentTarget.form?.requestSubmit();
+              }
+            }} rows={4} value={text} onChange={e => setText(e.target.value)} placeholder="Create a Python program that prints Hello World" disabled={!connection || !ready} required/>
             <button disabled={!connection || !ready || busy || !text.trim() || ((submittedTask !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')}>{state.taskState === 'awaiting_reply' ? 'Send reply' : 'Send request'}</button>
           </form>
           <div className="actions"><button disabled={!ready || !(submittedTask ?? state.taskId) || (!submittedTask && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((submittedTask ?? state.taskId)!))}>Cancel task</button>
