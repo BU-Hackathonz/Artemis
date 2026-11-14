@@ -16,6 +16,10 @@ from artemis.contracts import Finding, Severity
 from .paths import SKIP_DIRS
 
 TIMEOUT_S = 20
+# Our own (empty) Bandit settings. Without --ini, Bandit reads a .bandit file from the folder it
+# scans, so a project (or a planted file) could switch tests off; with it, only ours apply.
+_INI = Path(__file__).with_name("bandit.ini")
+OUTSIDE = "(outside the project) "
 # No API keys. The profile folders are needed: without them Python on Windows writes its
 # caches into a literal "~" folder under the current directory.
 _ENV_NAMES = ("SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA")
@@ -49,7 +53,9 @@ def parse_bandit(output: str, folder: Path) -> list[Finding]:
         try:
             return path.resolve().relative_to(folder.resolve()).as_posix()
         except ValueError:
-            return path.name
+            # A file behind a link that points outside the folder. Never give it the bare
+            # name, which could be a different, clean file in the project.
+            return OUTSIDE + path.name
 
     findings = []
     # A file Bandit couldn't parse was not scanned. Say so, rather than let the approval
@@ -89,7 +95,11 @@ def _run_bandit(folder: Path) -> str:
     excluded = ",".join(str(folder / name) for name in sorted(SKIP_DIRS))
     try:
         done = subprocess.run(
-            [sys.executable, "-m", "bandit", "-r", str(folder), "-f", "json", "-q", "-x", excluded],
+            [
+                sys.executable, "-m", "bandit", "-r", str(folder), "-f", "json", "-q", "-x", excluded,
+                # The project can't turn findings off: no .bandit from the folder, no `# nosec`.
+                "--ini", str(_INI), "--ignore-nosec",
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",

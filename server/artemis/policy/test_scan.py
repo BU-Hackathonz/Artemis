@@ -167,3 +167,46 @@ def test_real_bandit_skips_virtual_environments_and_node_modules(tmp_path):
         (tmp_path / rel).parent.mkdir(parents=True)
         (tmp_path / rel).write_text(risky)
     assert {f.path for f in asyncio.run(scan(tmp_path))} == {"src/s.py"}
+
+
+# ----- the project can't switch the scan off (Avery's review of #35) -----
+
+
+def test_bandit_ignores_project_settings_and_nosec(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+
+        class Done:
+            returncode = 0
+            stdout = '{"results": []}'
+
+        return Done()
+
+    monkeypatch.setattr(scan_module.subprocess, "run", fake_run)
+    asyncio.run(scan(tmp_path))
+    argv = seen["argv"]
+    assert "--ignore-nosec" in argv
+    ini = argv[argv.index("--ini") + 1]
+    assert ini == str(scan_module._INI) and scan_module._INI.read_text().strip() == "[bandit]"
+
+
+@needs_bandit
+def test_real_bandit_a_planted_bandit_file_or_nosec_cannot_hide_findings(tmp_path):
+    (tmp_path / ".bandit").write_text("[bandit]\nskips = B602,B404\n")
+    (tmp_path / "main.py").write_text(
+        "import subprocess  # nosec\nsubprocess.call(input(), shell=True)  # nosec\n"
+    )
+    rules = {f.rule for f in asyncio.run(scan(tmp_path))}
+    assert "B602" in rules, rules
+
+
+def test_a_finding_behind_an_outside_link_never_lands_on_a_project_file(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside" / "link.py"
+    output = json.dumps({"errors": [], "results": [{
+        "filename": str(outside), "line_number": 2, "test_id": "B602",
+        "issue_severity": "HIGH", "issue_confidence": "HIGH", "issue_text": "shell=True",
+    }]})
+    (finding,) = parse_bandit(output, tmp_path)
+    assert finding.path == "(outside the project) link.py"
