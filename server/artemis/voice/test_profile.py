@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -261,6 +262,7 @@ def test_failed_replace_cleans_up_and_keeps_the_old_file(tmp_path, monkeypatch):
     assert load(path, environ={}).sapi_rate == 1
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits; Windows ignores mkdir mode")
 def test_new_parent_directory_is_private(tmp_path):
     path = tmp_path / "new" / "voice.json"
     save(VoiceProfile(), path)
