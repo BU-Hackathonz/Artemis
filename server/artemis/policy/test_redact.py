@@ -205,3 +205,57 @@ def test_env_value_hidden_for_a_playwright_start_is_still_redacted(monkeypatch):
     monkeypatch.setenv("ARTEMIS_TOKEN", "zq81-plain-value")
     with secrets_hidden_from_environ():
         assert redact("saw zq81-plain-value in output") == f"saw {REDACTED} in output"
+
+
+def _record(msg, args, name="uvicorn.access"):
+    return logging.LogRecord(name, logging.INFO, __file__, 1, msg, args, None)
+
+
+def test_access_records_keep_their_args_for_uvicorns_formatter():
+    """uvicorn's access formatter unpacks five args; an emptied tuple raised on every request."""
+    from uvicorn.logging import AccessFormatter
+
+    record = _record('%s - "%s %s HTTP/%s" %d', ("127.0.0.1:5000", "GET", "/health", "1.1", 200))
+    assert RedactFilter().filter(record)
+    assert len(record.args) == 5
+    assert '"GET /health HTTP/1.1" 200' in AccessFormatter("%(message)s", use_colors=False).format(record)
+
+
+def test_a_secret_in_an_arg_is_redacted_and_the_args_kept():
+    key = "sk-ant-api03-FAKEfakeFAKE123"
+    record = _record('%s - "%s %s HTTP/%s" %d', ("127.0.0.1:5000", "GET", f"/x?k={key}", "1.1", 200))
+    RedactFilter().filter(record)
+    assert len(record.args) == 5 and key not in record.getMessage() and REDACTED in record.getMessage()
+
+
+def test_a_secret_split_across_msg_and_args_falls_back_to_the_redacted_text():
+    record = _record("token=%s", ("abc123secretvalue",), name="artemis.core")
+    RedactFilter().filter(record)
+    assert record.args == () and record.getMessage() == "token=[redacted]"
+
+
+def test_an_object_arg_whose_text_holds_a_key_is_redacted():
+    """A non-string arg is not redacted part by part, so the redacted whole must win."""
+    key = "sk-ant-api03-FAKEfakeFAKE123"
+
+    class Holder:
+        def __str__(self):
+            return f"holder with {key}"
+
+    record = _record("saw %s here", (Holder(),), name="artemis.core")
+    assert RedactFilter().filter(record)
+    assert key not in record.getMessage() and REDACTED in record.getMessage()
+    assert key not in str(record.msg) and all(key not in str(a) for a in record.args)
+
+
+def test_dict_args_keep_their_shape_and_are_redacted():
+    key = "sk-ant-api03-FAKEfakeFAKE123"
+    record = logging.LogRecord("artemis.core", logging.INFO, __file__, 1, "%(who)s sent %(what)s", ({"who": "me", "what": key},), None)
+    assert RedactFilter().filter(record)
+    assert isinstance(record.args, dict) and key not in record.getMessage() and REDACTED in record.getMessage()
+
+
+def test_plain_numbers_and_unredacted_text_pass_through_unchanged():
+    record = _record("%s answered %d in %0.1f s", ("health", 200, 0.5), name="artemis.core")
+    assert RedactFilter().filter(record)
+    assert record.args == ("health", 200, 0.5) and record.getMessage() == "health answered 200 in 0.5 s"

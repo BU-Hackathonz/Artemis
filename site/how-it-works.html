@@ -40,7 +40,7 @@
       <h2 id="flow-title">One request, start to finish</h2>
       <ol class="steps">
         <li class="step"><div><span class="k">Speak or type</span><h3>You hold the shortcut and talk.</h3><p>Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app. Artemis stops talking, plays a short rising tone, then starts listening. Release the keys and it transcribes on your own computer. No shortcut? Use the &ldquo;Start listening&rdquo; button in the app instead.</p></div></li>
-        <li class="step"><div><span class="k">Read back</span><h3>Artemis says what it heard.</h3><p>"Heard: create a Python program that prints Hello World." The text stays in an editable field, so a misheard word is easy to fix.</p></div></li>
+        <li class="step"><div><span class="k">Read back</span><h3>Artemis says what it heard.</h3><p>"Heard: create a Python program that prints Hello World." The text also lands in the editable request field, so you can cancel, fix a misheard word and send it again.</p></div></li>
         <li class="step"><div><span class="k">Plan</span><h3>The agent plans the work.</h3><p>The coding agent decides which files to create or edit. It can only ask for actions through a fixed set of tools. It has no shell and no tool for installing packages.</p></div></li>
         <li class="step"><div><span class="k">Review</span><h3>You review the exact change.</h3><p>Writes pause for approval. Artemis speaks a summary built from the real edit, such as "1 file, main.py, 1 line", and the full diff is there to step through. Enter approves, Escape rejects.</p></div></li>
         <li class="step"><div><span class="k">Scan</span><h3>The Python code is scanned.</h3><p>Python files are checked for security problems before each write or run (the launcher installs the scanner). A serious finding blocks it, and Artemis says what it found and where.</p></div></li>
@@ -59,7 +59,7 @@
         <dt>Voice</dt>
         <dd>Push-to-talk recording and speech recognition with Whisper, on your computer. Spoken output goes through NVDA when it runs, or the Windows voice when it doesn't.</dd>
         <dt>Agent</dt>
-        <dd>Claude plans and explains changes. Everything it reads from your project is treated as data, never as instructions.</dd>
+        <dd>Claude plans and explains changes. Everything it reads from your project is passed to it as untrusted data, not as instructions.</dd>
         <dt>Safety gate</dt>
         <dd>Checks every tool request, keeps paths inside your project, asks for approval and binds that approval to the exact edit or run you reviewed.</dd>
         <dt>Runner</dt>

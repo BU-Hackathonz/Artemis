@@ -7,6 +7,7 @@ import logging
 import pytest
 
 from artemis.voice import Announcer, StubVoice, strip_wake_word, vocabulary_prompt
+from artemis.voice.text import NATURAL_LEAD
 
 
 class FakeSpeaker:
@@ -46,18 +47,55 @@ def test_strip_wake_word_accepts_close_spellings():
     assert strip_wake_word("okay Artimis run it") == "run it"
 
 
+def test_strip_wake_word_accepts_a_clipped_artem():
+    # David's hardware run: "Hey Artemis, create a Python program..." came back as "Hey Artem, this is creative...".
+    assert strip_wake_word("Hey Artem, this is creative Python program") == "this is creative Python program"
+    for text in ["Artem, create a file", "artem. create a file", "ok Artem create a file", "Hey Ardem, create a file"]:
+        assert strip_wake_word(text) == "create a file", text
+
+
+def test_strip_wake_word_after_punctuated_greeting():
+    # Whisper often writes a comma or period after the greeting: "Hey, Artemis," / "Okay. Artemis".
+    for text in ["Hey, Artemis, run it.", "Hey, Artem, run it.", "Okay. Artemis run it.", "OK, Artemis. run it."]:
+        assert strip_wake_word(text) == "run it.", text  # trailing punctuation is kept, as for "Cancel."
+    for text in ["Hey, art is fun", "Okay, run it", "Temis, run it"]:
+        assert strip_wake_word(text) == text, text
+
+
+def test_strip_wake_word_leaves_a_possessive_or_file_name_alone():
+    # The optional -is ending made "Artem's code is broken" come back as "'s code is broken".
+    for text in ["Artem's code is broken", "Artemis's settings are wrong", "artemis.py is broken"]:
+        assert strip_wake_word(text) == text, text
+
+
 def test_strip_wake_word_leaves_other_words_alone():
     for text in ["artistic rendering", "art is hard", "If so, then create a program", "Artemisia is a plant",
-                 "run artemus.py", "Armis is a name"]:
+                 "run artemus.py", "Armis is a name", "Artemia live in salt lakes", "run Artem"]:
         assert strip_wake_word(text) == text, text
 
 
 def test_vocabulary_prompt_dedupes_and_caps():
+    # The default: the #98 word list, unchanged.
     assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm"]) == "Hey Artemis, Artemis, Python, main.py, LoginForm"
     assert vocabulary_prompt(["artemis", "PYTHON"]) == "Hey Artemis, Artemis, Python, main.py"
     assert vocabulary_prompt([]) == "Hey Artemis, Artemis, Python, main.py"
     p = vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=50)
     assert len(p) <= 50 and p.startswith("Hey Artemis, Artemis, Python, main.py, word0")
+
+
+def test_natural_vocabulary_prompt_reads_like_speech_then_project_words():
+    # Opt-in (ARTEMIS_WHISPER_PROMPT=natural).
+    assert NATURAL_LEAD == "Hey Artemis, create a Python program, print, run it, main.py."
+    assert "Hello World" not in NATURAL_LEAD  # primes words, never a whole demo sentence to copy
+    assert vocabulary_prompt([], natural=True) == NATURAL_LEAD
+    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm", "utils"], natural=True) == NATURAL_LEAD + " LoginForm, utils."
+    assert vocabulary_prompt(["artemis", "PYTHON", "Run"], natural=True) == NATURAL_LEAD  # already in the lead
+
+
+def test_natural_vocabulary_prompt_caps_its_length():
+    for cap in (len(NATURAL_LEAD) + 7, len(NATURAL_LEAD) + 50, 600):
+        p = vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=cap, natural=True)
+        assert len(p) <= cap and p.startswith(NATURAL_LEAD + " word0") and p.endswith(".")
 
 
 def router(nvda_up=True, sapi_up=True, running=False, busy=False):
