@@ -185,3 +185,21 @@ test('listening toggle retries after microphone start fails',async({page})=>{
     await expect.poll(()=>core.actions).toEqual(['start','stop','start','stop']);
   }finally{await core.close();}
 });
+
+test('Tab from the request field reaches the listening toggle before wrapping to the top',async({page})=>{
+  const core=await coreFixture();
+  try{
+    await bridge(page,core.url);await page.goto('/');
+    await expect(page.getByRole('status')).toHaveText('Connected');
+    const request=page.getByLabel('What would you like to build?');
+    await expect(request).toBeFocused();
+    const talk=page.getByRole('button',{name:'Start listening',exact:true});
+    for(let i=0;i<10 && !(await talk.evaluate(el=>el===document.activeElement));i++){
+      await page.keyboard.press('Tab');
+      await expect(page.getByRole('link',{name:'Skip to request'})).not.toBeFocused();
+    }
+    await expect(talk).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(talk).not.toBeFocused();
+  }finally{await core.close();}
+});
