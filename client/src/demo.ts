@@ -55,6 +55,7 @@ export function createDemoCore({blockedRun = false}: {blockedRun?: boolean} = {}
       emit('task.state', {state:'canceled'}, 'Demo canceled.');
     },
     async reply() { throw new Error('This demo does not ask clarification questions.'); },
+    async listen() { throw new Error('The in-memory demo does not record audio. Connect to the real core for voice input.'); },
     async speech() { throw new Error('Spoken output is provided by a connected core. Use your screen reader to read the demo log.'); },
     subscribe(_sid, receive, status) {
       listeners.add(receive);

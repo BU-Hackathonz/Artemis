@@ -5,8 +5,9 @@ async function mockNative(page: import('@playwright/test').Page, config: {core_u
   await page.addInitScript(value => {
     const calls: string[] = [];
     Object.defineProperty(window,'nativeCalls',{value:calls});
-    Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{invoke:async (command: string) => {
+    Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async (command: string) => {
       calls.push(command);
+      if (command !== 'get_core_config') return command.endsWith('is_registered') ? false : undefined;
       if (!value) throw new Error('untrusted error containing launch-test-token');
       return value;
     }}});
@@ -43,7 +44,7 @@ test('native auto-connect uses one config command and authenticated HTTP/SSE wit
     await expect(page.getByLabel('Launch token')).toHaveCount(0);
     await expect(page.getByRole('button',{name:'Try in-memory demo',exact:true})).toHaveCount(0);
     await expect(page.getByLabel('What would you like to build?')).toBeFocused();
-    expect(await page.evaluate(() => (window as unknown as {nativeCalls:string[]}).nativeCalls)).toEqual(['get_core_config']);
+    expect(await page.evaluate(() => (window as unknown as {nativeCalls:string[]}).nativeCalls.filter(c=>c==='get_core_config'))).toEqual(['get_core_config']);
     expect(paths).toEqual(['/health','/sessions','/sessions/ses_native/events']);
     expect(await page.locator('body').innerText()).not.toContain('launch-test-token');
     expect(page.url()).not.toContain('launch-test-token');

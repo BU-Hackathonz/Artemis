@@ -237,8 +237,10 @@ Environment variables, not command-line arguments: on Windows any process can li
 processes' command lines. Malware running as the same user is out of scope for the weekend.
 
 **Client (Jun)**
-- Reads `ARTEMIS_CORE_URL` and `ARTEMIS_TOKEN` once into native state, and exposes only one Tauri
-  command, `get_core_config`, to the main window. The capability file allows nothing else.
+- Reads `ARTEMIS_CORE_URL` and `ARTEMIS_TOKEN` once into native state, and exposes one application
+  command, `get_core_config`, to the main window. For push-to-talk, the local main window may also
+  use only the global-shortcut plugin's register, unregister and is-registered permissions; no shell,
+  filesystem, generic environment or other plugin permissions are granted (approved by Avery as acting lead).
 - Checks that the address is loopback, then connects automatically: no address or token form.
 - If either value is missing or partial, it shows an actionable launch error. It never falls back
   to a remote or unauthenticated connection.

@@ -15,7 +15,7 @@ export function createHttpCore(address: string, token: string): Core {
   const cursors = new Map<string, number>();
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   async function request<T>(path: string, body?: unknown): Promise<T> {
-    const response = await fetch(url.origin + path, { method: body === undefined ? 'GET' : 'POST', headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10000), cache: 'no-store', redirect: 'error' });
+    const response = await fetch(url.origin + path, { method: body === undefined ? 'GET' : 'POST', headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10000), keepalive: path === '/voice/listen' && typeof body === 'object' && body !== null && 'action' in body && body.action === 'stop', cache: 'no-store', redirect: 'error' });
     if (!response.ok) {
       if (response.status === 409 && path.endsWith('/tasks')) {
         const body: unknown = await response.json().catch(() => null);
@@ -33,6 +33,7 @@ export function createHttpCore(address: string, token: string): Core {
     cancel: tid => request(`/tasks/${encodeURIComponent(tid)}/cancel`, {}),
     reply: (tid, text) => request(`/tasks/${encodeURIComponent(tid)}/reply`, {text, source:'keyboard'}),
     speech: action => request('/speech', {action}),
+    listen: action => request('/voice/listen', {action}),
     subscribe(sid, receive, status) {
       const controller = new AbortController();
       let last = cursors.get(sid) ?? 0;
