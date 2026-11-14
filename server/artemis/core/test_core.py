@@ -12,7 +12,7 @@ from artemis.contracts import Approval, Decision, EventDraft, Failed, TaskReques
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
-from artemis.core.session import normalize
+from artemis.core.session import normalize, spoken_error
 from artemis.policy.testing import FakeRunner
 
 TOKEN = "test-token"
@@ -374,6 +374,19 @@ def test_normalize():
     assert normalize("  NEVER   mind. ") == "never mind"
 
 
+@pytest.mark.parametrize("message, recovery, line", [
+    ("Claude is busy", "Try again.", "Claude is busy. Try again."),  # no stop: one is added
+    ("Claude is busy.", "Try again.", "Claude is busy. Try again."),  # already ends with .
+    ("Is Claude busy?", "Try again.", "Is Claude busy? Try again."),  # keeps its own ?
+    ("Claude is busy!", "Try again.", "Claude is busy! Try again."),  # keeps its own !
+    ("Claude is busy", "", "Claude is busy."),  # empty recovery: no stray space or second stop
+    ("", "Try again.", "Try again."),  # no message: the recovery alone
+])
+def test_spoken_error_ends_each_sentence_once(message, recovery, line):
+    assert spoken_error(message, recovery) == line
+    assert ".." not in line
+
+
 # ----- SSE replay -----
 
 
@@ -710,6 +723,14 @@ async def test_ready_line_names_the_chord_and_is_spoken_once(client, core):
     assert lines[0].announce.text == "Artemis is ready. Hold Control Shift Space and speak, or type a request."
 
 
+async def test_ready_line_speaks_exactly_the_chord_the_client_sent(client, core):
+    sid, session = await start(client, core)
+    body = {"shortcut": "Control+Alt+Space"}
+    assert (await client.post(f"/sessions/{sid}/ready", headers=AUTH, json=body)).status_code == 204
+    [line] = [e for e in session.bus.history if e.type == "agent.message"]
+    assert line.announce.text == "Artemis is ready. Hold Control Alt Space and speak, or type a request."
+
+
 async def test_ready_line_without_a_chord_points_to_start_listening(client, core):
     sid, session = await start(client, core)
     assert (await client.post(f"/sessions/{sid}/ready", headers=AUTH, json={})).status_code == 204
@@ -793,7 +814,7 @@ async def test_voice_errors_are_spoken_and_bad_actions_rejected(client, core, vo
     assert [e["code"] for e in errors] == ["mic_error", "mic_error"]
     assert errors[0]["message"] == "No input device"
     assert errors[1]["message"] == "The microphone didn't work."
-    assert (("high", "No input device Check the microphone, or type the request.")) in voice.spoken
+    assert (("high", "No input device. Check the microphone, or type the request.")) in voice.spoken
     assert not [e for e in session.bus.history if e.type == "transcript.final"]  # no transcript came back
     assert not session.tasks
 

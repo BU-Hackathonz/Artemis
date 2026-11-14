@@ -138,7 +138,8 @@ def run_announcement(entry: str, result: RunResult, timeout_s: int) -> str:
     if result.timed_out:
         return f"{entry} was stopped after {timeout_s} seconds because it took too long."
     if result.exit_code == 0:
-        output = " ".join(result.stdout_tail.split())
+        # Redact before cutting to SPOKEN_OUTPUT_CHARS, or a secret the cut goes through survives.
+        output = " ".join(redact(result.stdout_tail).split())
         if not output:
             return f"{entry} ran successfully. It printed nothing."
         if result.truncated and len(output) > SPOKEN_OUTPUT_CHARS:
@@ -494,8 +495,12 @@ class ToolGateway:
             )
         await self._state(task_id, "awaiting_approval")
         await self._emit(task_id, "approval.requested", approval, approval.summary, "high")
+        # What the core holds is redacted too, as the events are; the hash stays the one computed from the real content.
+        held = Approval.model_validate(
+            {**redact_obj(approval.model_dump(mode="json")), "approval_hash": approval.approval_hash}
+        )
         try:
-            return await self._approvals.request(task_id, approval)
+            return await self._approvals.request(task_id, held)
         except asyncio.CancelledError:
             await self._resolved(task_id, approval, "reject", "invalidated")
             await self._say(task_id, f"Canceled. {nothing_done}", "high")
