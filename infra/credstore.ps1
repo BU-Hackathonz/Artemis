@@ -91,7 +91,8 @@ function Get-StoredSecret([string]$Target) {
 # (event 4103), Windows records the argument values of every function call, so a secret passed
 # as an argument would land in the event log. The value is read here and goes straight into the
 # .NET call, which is not logged.
-function Save-StoredSecretFromEnv([string]$Target, [string]$EnvName) {
+# Only these two may be copied into Credential Manager, so no other variable can be stored by mistake.
+function Save-StoredSecretFromEnv([string]$Target, [ValidateSet("ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID")][string]$EnvName) {
     if (-not $script:CredStoreAvailable) { return $false }
     if (-not [Environment]::GetEnvironmentVariable($EnvName)) {
         $script:CredStoreError = "$EnvName is not set"
