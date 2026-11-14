@@ -2,6 +2,8 @@
 
 import asyncio
 
+import pytest
+
 from artemis.voice import Announcer, StubVoice, strip_wake_word, vocabulary_prompt
 
 
@@ -162,6 +164,25 @@ def test_rate_is_bounded_and_says_when_at_the_limit():
     sapi.rate = RATE_MIN
     assert asyncio.run(a.set_rate(-1)) is False and sapi.rate == RATE_MIN
     assert [t for t, _ in sapi.said] == ["That's the fastest I go.", "That's the slowest I go."]
+
+
+@pytest.mark.parametrize("start, delta, end, said", [
+    (8, 1, 8, "That's the fastest I go."),     # above our max: "faster" must not slow it down
+    (8, -1, 6, "Speaking slower."),            # "slower" comes back into range
+    (-6, -1, -6, "That's the slowest I go."),  # below our min: "slower" must not speed it up
+    (-6, 1, -3, "Speaking faster."),
+])
+def test_rate_from_outside_our_range_never_steps_the_wrong_way(start, delta, end, said):
+    sapi = FakeSapi(rate=start)
+    a = Announcer(FakeSpeaker("nvda"), sapi, is_nvda_running=lambda: False)
+    asyncio.run(a.set_rate(delta))
+    assert sapi.rate == end and [t for t, _ in sapi.said] == [said]
+
+
+def test_a_zero_rate_step_changes_nothing():
+    sapi = FakeSapi(rate=2)
+    a = Announcer(FakeSpeaker("nvda"), sapi, is_nvda_running=lambda: False)
+    assert asyncio.run(a.set_rate(0)) is False and sapi.rate == 2 and sapi.said == []
 
 
 def test_rate_never_changes_under_nvda():
