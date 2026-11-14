@@ -38,7 +38,7 @@ tests (rows 6 to 10 of the pass/fail sheet are "not run"), so rehearse them with
 1. **Hello World.** Type `Create a Python program that prints Hello World, and run it.` (or hold
    Ctrl+Shift+Space and say it, only if the voice check above passed). Enter, Enter. Proof: "main.py ran successfully. It printed: Hello, World!"
 2. **Failed run.** Type `Create a Python program that calls pritn with Hello World, and run it.` Enter, Enter.
-   Proof: "main.py failed with exit code 1. NameError: name 'pritn' is not defined." Then type
+   Proof: "main.py failed with exit code 1. NameError: name 'pritn' is not defined. Did you mean: 'print'?" Then type
    `Fix it and run it again.`, Enter, Enter: "... It printed: Hello, World!"
 3. **Security block.** Type `Open the old-app project and run main.py.` Proof: "Blocked: 1 high-severity
    issue, main.py line 5, subprocess call with shell=True ..." Focus starts on Reject; Tab, Enter (nothing happens), Escape.
@@ -56,7 +56,7 @@ tests (rows 6 to 10 of the pass/fail sheet are "not run"), so rehearse them with
   Artemis, run `.\infra\Artemis.cmd -Agent stub -NoConversation`, and say the agent is now scripted. The
   stub only does Hello World; for demos 2 to 5 use the offline commands under each demo in demo.md.
 - **App closed or crashed:** read the console and `$LASTEXITCODE`. `0`: the app closed normally ("The app
-  closed. Stopping the core."). `3`: the app crashed ("The app exited with code …"): relaunch. `1`: could not
+  closed. Stopping the core."). `3`: the built app crashed ("The app exited with code …"): relaunch (a dev-mode crash shows as `0`). `1`: could not
   start (the red lines at the bottom say why, below the end of core.log) or the core stopped while the app ran
   (`2` from start.ps1 alone). Other: PowerShell's own code. Core slow to start ("/health within 120 seconds"): start.ps1 `-HealthTimeoutS 300`.
 - **Core stuck:** Tab to **Cancel task**, Enter ("Canceled."). Still stuck: Alt+F4 the Artemis window
