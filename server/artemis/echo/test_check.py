@@ -102,21 +102,34 @@ def _browser_available() -> bool:
         return False
     if os.environ.get("ARTEMIS_CHROME"):
         return True
+    # Playwright reads PLAYWRIGHT_BROWSERS_PATH itself in _launch, so look in the same places.
     cache = Path.home() / ".cache" / "ms-playwright"
     local = Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"
-    return cache.exists() or local.exists() or bool(shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("msedge"))
+    custom = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"]) if os.environ.get("PLAYWRIGHT_BROWSERS_PATH") else None
+    return (
+        (custom is not None and custom.exists())
+        or cache.exists()
+        or local.exists()
+        or bool(shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("msedge"))
+    )
 
 
 @pytest.mark.skipif(not _browser_available(), reason="needs the echo group and a Chromium/Chrome/Edge")
 async def test_fixture_before_and_after_in_a_real_browser():
     from artemis.echo import echo_check
 
+    # The site says "7 problems before, none after": guard those numbers.
     before = await echo_check(str(FIXTURE / "before.html"))
-    rules = {f.rule for f in before.findings}
-    assert {"button-name", "image-alt", "html-has-lang", "color-contrast"} <= rules
+    assert len(before.findings) == 7, before.findings
+    assert sorted(f.rule for f in before.findings) == [
+        "button-name", "color-contrast", "html-has-lang", "image-alt",
+        "landmark-one-main", "page-has-heading-one", "region",
+    ]
+    assert len(before.needs_review) == 1, before.needs_review
     assert "button (no name)" in before.outline
     after = await echo_check(str(FIXTURE / "after.html"))
-    assert after.findings == []
+    assert len(after.findings) == 0, after.findings
+    assert len(after.needs_review) == 0, after.needs_review
     assert '    button "Sign up"' in after.outline
 
 
@@ -204,3 +217,54 @@ async def test_websockets_never_reach_a_server(tmp_path):
     finally:
         httpd.shutdown()
     assert hits == [], f"WebSocket reached {hits}"
+
+
+async def test_playwright_driver_and_browser_get_no_secrets(tmp_path, monkeypatch):
+    """No browser is needed: the Node driver starts without the key or token, and the launch env has neither
+    (audit finding 2). The launch is faked, so this checks the env the real code builds."""
+    pw_api = pytest.importorskip("playwright.async_api")  # the echo group isn't in CI's sync
+
+    from artemis.echo import check
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-leak")
+    monkeypatch.setenv("ARTEMIS_TOKEN", "token-should-not-leak")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
+    page = tmp_path / "index.html"
+    page.write_text('<!doctype html><html lang="en"><title>x</title><body></body></html>')
+    seen: dict = {}
+
+    class Boom(Exception):
+        pass
+
+    class Browser:
+        async def new_context(self, **kwargs):
+            raise Boom()
+
+        async def close(self):
+            seen["browser_closed"] = True
+
+    class Chromium:
+        async def launch(self, **kwargs):
+            seen["launch_env"] = kwargs["env"]
+            return Browser()
+
+    class FakePlaywright:
+        chromium = Chromium()
+
+        async def stop(self):
+            seen["stopped"] = True
+
+    class Manager:
+        async def start(self):
+            seen["driver_env"] = dict(os.environ)
+            return FakePlaywright()
+
+    monkeypatch.setattr(pw_api, "async_playwright", lambda: Manager())
+    with pytest.raises(Boom):
+        await check.echo_check(str(page))
+
+    for env in (seen["driver_env"], seen["launch_env"]):
+        assert "ANTHROPIC_API_KEY" not in env and "ARTEMIS_TOKEN" not in env
+    assert seen["launch_env"]["PLAYWRIGHT_BROWSERS_PATH"] == "/opt/pw-browsers"
+    assert seen["browser_closed"] and seen["stopped"]
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-should-not-leak"

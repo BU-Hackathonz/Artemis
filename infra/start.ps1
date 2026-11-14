@@ -120,9 +120,11 @@ $token = New-LaunchToken
 $port = Get-FreePort
 $url = "http://127.0.0.1:$port"
 
-$groups = ""
+# security: Bandit is small and is the gate for every write and run, so it's always installed,
+# also for the scripted stub agent (its risky-code demo needs the block to be real).
+$groups = " --group security"
 if ($Voice -eq "whisper") { $groups += " --group voice" }
-if ($Agent -eq "claude") { $groups += " --group agent --group security --group echo" }  # echo: inspect_page
+if ($Agent -eq "claude") { $groups += " --group agent --group echo" }  # echo: inspect_page
 
 $core = $null
 $app = $null

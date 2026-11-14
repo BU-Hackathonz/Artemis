@@ -1,7 +1,8 @@
 # Artemis architecture, risks and build order
 
-Nothing is implemented yet. This doc separates what the team has **confirmed**, what is
-**proposed**, and what is **not started** (everything, as of kickoff). API shapes are in
+Most of this plan is built and merged on `main` (status: [`demo.md`](demo.md)). This doc still
+separates what the team has **confirmed**, what is **proposed**, and what was **not started** at
+kickoff. API shapes are in
 [`contracts.md`](contracts.md); the reasoning behind each technology pick is in
 [`decisions.md`](decisions.md).
 
@@ -15,8 +16,9 @@ Nothing is implemented yet. This doc separates what the team has **confirmed**, 
 | Tauri 2 + React + TS + Tailwind; Python + FastAPI core | Proposed by team (treated as the plan) |
 | Whisper STT, SAPI TTS, Semgrep, UI Automation, axe-core + Playwright | Proposed by team |
 | NVDA speech via its controller API, push-to-talk, Bandit fallback, SSE, approval hashing | Proposed here |
-| Security Guardian, debugging, editing existing code | Not started, after MVP |
-| Echo Check | Not started, after MVP (web projects only) |
+| Security Guardian (Bandit gate, `scan_project`), editing existing code (`edit_file`) | Merged (#11, #12, #35, #37) |
+| Debugging | Not started, after MVP |
+| Echo Check | Merged (#25, #26), web projects only |
 
 ## Feasibility
 
@@ -62,11 +64,11 @@ a CLI or a VS Code extension later.
 2. The core announces "Heard: create a Python program that prints Hello World" and starts a task.
 3. The agent (Claude) plans the work and calls `create_project` and `write_file`. Writes need
    approval, so the policy gate pauses the task and emits `approval.requested`: "Create project
-   hello-world with one file, main.py, 1 line: print Hello World. Press Enter to approve, Escape
-   to reject."
+   hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to
+   reject."
 4. The user presses Enter. The runner writes the file and the task resumes.
-5. The agent calls `run_program`. The policy gate scans the file (Bandit or Semgrep), then asks for
-   approval again: "Run main.py with Python. No security findings. Enter to run."
+5. The agent calls `run_program`. The policy gate scans the file (Bandit), then asks for
+   approval again: "Run main.py with Python. No security findings. Enter to run, Escape to reject."
 6. The runner executes it with a 10 s timeout and a scrubbed environment. The `run.result` event
    carries the exit code and the output.
 7. The agent explains the result. `announce()` speaks through NVDA if it's running (SAPI if not),
@@ -85,7 +87,7 @@ Every pause, failure and completion is spoken. Silence longer than about 3 secon
 | 4 | **Generated programs inherit the core's environment**, including `ANTHROPIC_API_KEY` | Secret leak through generated code | Runner starts children with an explicit minimal env, never `os.environ` |
 | 5 | **"Restricted environment" on Windows without Docker** | Overclaiming in the pitch | Approval before every run + static scan + separate interpreter + timeout + Job Object kill. Call it "gated and limited", not "sandboxed" |
 | 6 | **Workspace management is undefined** (where projects go, how a spoken name becomes a folder) | Agent writes in random places | `%USERPROFILE%\ArtemisProjects\<slug>`; `create_project` slugs the name and `git init`s it; all paths resolve under it |
-| 7 | **Which Python runs user code** | Generated code imports core dependencies | Runner uses a dedicated interpreter (`uv python find` result or the system `py`), with `-I` isolated mode, never the core's venv |
+| 7 | **Which Python runs user code** | Generated code imports core dependencies | Runner uses a dedicated interpreter (`uv python find`, else `py -3`, else `python3`), with `-I` isolated mode, never the core's venv |
 | 8 | **Approval by voice** can misfire on a misheard "yes" | Unwanted writes or runs | MVP approval is keyboard: Enter or Escape on the focused dialog. Voice "approve" is post-MVP and needs a read-back |
 | 9 | **Latency with no feedback** (STT, then model, then run) | User thinks it froze | Announce state changes; earcon heartbeat; stream agent progress |
 | 10 | **Errors softened by summaries** | Violates "don't conceal errors" | Failure events are high priority, interrupt speech, and always speak the exit code and the first error line verbatim before any explanation |
@@ -109,8 +111,8 @@ multi-project management, Echo Check.
 - Avery: `uv` project in `server/`, FastAPI health endpoint, SSE endpoint emitting a test event.
 
 **Phase 1: walking skeleton, keyboard only, stubs (target about hour 8).** This is the most
-important milestone. Type the request → `POST /tasks` → **stub agent** that always proposes
-`hello-world/main.py` → approval dialog → write → stub run → `run.result` → spoken and in the log.
+important milestone. Type the request → `POST /sessions/{sid}/tasks` → **stub agent** that
+always proposes `hello-world/main.py` → approval dialog → write → stub run → `run.result` → spoken and in the log.
 This proves the client, core, approvals, events and speech before any AI or audio is live.
 **End Phase 1 with an eyes-closed rehearsal** (monitor off, NVDA on) of this stub flow. It catches
 focus, speech-overlap, cancel and approval problems while there is still time to fix them.
@@ -143,5 +145,7 @@ instead of describing the screen.
 - One Python process with internal interfaces; no microservices, no message broker.
 - One HTTP API for every UI. Tauri-only calls go behind `client/src/platform.ts`.
 - Pydantic contracts are the only shared types; TS types are generated from them.
-- Every subsystem gets a stub first (`agent/stub.py`, `runner/stub.py`, `voice/stub.py`), so each owner can work alone and the skeleton never breaks.
+- Every subsystem gets a stub first (`agent/stub.py`, `voice/stub.py`, and `FakeRunner` in
+  `policy/testing.py`, selected with `ARTEMIS_RUNNER=fake`), so each owner can work alone and the
+  skeleton never breaks.
 - No plugin system, no config framework, no DB until a feature actually needs one.

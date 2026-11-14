@@ -14,8 +14,8 @@ function fakeCore() {
   return {announceReady: vi.fn(async () => {}), listen: vi.fn(async () => {}), reportShortcutFailure: vi.fn(async () => {})} as unknown as Core & {announceReady: ReturnType<typeof vi.fn>; reportShortcutFailure: ReturnType<typeof vi.fn>};
 }
 let latest: ReturnType<typeof useVoiceInput> | undefined;
-function Probe({core, sessionId, voiceReady = true}: {core: Core; sessionId: string | null; voiceReady?: boolean}) {
-  latest = useVoiceInput(core, sessionId, true, voiceReady);
+function Probe({core, sessionId, voiceReady = true, ready = true}: {core: Core; sessionId: string | null; voiceReady?: boolean; ready?: boolean}) {
+  latest = useVoiceInput(core, sessionId, ready, voiceReady);
   return null;
 }
 async function flush() {for (let i = 0; i < 12; i++) await act(async () => {await Promise.resolve();});}
@@ -133,6 +133,52 @@ describe('startup announcement ordering', () => {
       await flush();
       expect(core.announceReady).toHaveBeenCalledTimes(1);
       expect(latest?.noticeFailed).toBe(true);
+    } finally {act(() => root.unmount());}
+  });
+
+  it('does not re-announce a shortcut failure after a reconnect in the same session', async () => {
+    registerPushToTalk.mockReset();
+    registerPushToTalk.mockRejectedValue(new Error('taken'));
+    const core = fakeCore();
+    core.announceReady.mockRejectedValueOnce(new Error('offline'));
+    const root = createRoot(document.createElement('div'));
+    try {
+      await act(async () => root.render(<Probe core={core} sessionId="ses_reconnect"/>));
+      await flush();
+      expect(core.announceReady).toHaveBeenCalledTimes(1);
+      expect(core.reportShortcutFailure.mock.calls).toEqual([['ses_reconnect', 'Control+Shift+Space']]);
+      expect(latest?.noticeFailed).toBe(false);
+      await act(async () => root.render(<Probe core={core} sessionId="ses_reconnect" ready={false}/>));
+      await flush();
+      await act(async () => root.render(<Probe core={core} sessionId="ses_reconnect"/>));
+      await flush();
+      expect(core.announceReady).toHaveBeenCalledTimes(2);
+      expect(core.reportShortcutFailure).toHaveBeenCalledTimes(1);
+      expect(latest?.noticeFailed).toBe(false);
+    } finally {act(() => root.unmount());}
+  });
+
+  it('announces a shortcut failure exactly once when core voice becomes ready later', async () => {
+    registerPushToTalk.mockReset();
+    registerPushToTalk.mockRejectedValue(new Error('taken'));
+    const core = fakeCore();
+    const root = createRoot(document.createElement('div'));
+    try {
+      await act(async () => root.render(<Probe core={core} sessionId="ses_late" voiceReady={false}/>));
+      await flush();
+      expect(core.announceReady.mock.calls).toEqual([['ses_late', undefined]]);
+      expect(core.reportShortcutFailure).not.toHaveBeenCalled();
+      await act(async () => root.render(<Probe core={core} sessionId="ses_late" voiceReady/>));
+      await flush();
+      expect(core.reportShortcutFailure.mock.calls).toEqual([['ses_late', 'Control+Shift+Space']]);
+      expect(latest?.noticeFailed).toBe(false);
+      await act(async () => root.render(<Probe core={core} sessionId="ses_late" voiceReady={false}/>));
+      await flush();
+      await act(async () => root.render(<Probe core={core} sessionId="ses_late" voiceReady/>));
+      await flush();
+      expect(core.announceReady).toHaveBeenCalledTimes(1);
+      expect(core.reportShortcutFailure).toHaveBeenCalledTimes(1);
+      expect(latest?.noticeFailed).toBe(false);
     } finally {act(() => root.unmount());}
   });
 });

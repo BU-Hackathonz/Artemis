@@ -43,9 +43,9 @@ def test_happy_path_event_order(tmp_path):
     assert [a.kind for a in approvals.requests] == ["write_files", "run_program"]
     assert log.spoken() == [
         "Starting project hello-world.",
-        "Create project hello-world with 1 file: main.py, 1 line. Enter to approve, Escape to reject.",
+        "Create project hello-world with 1 file: main.py, 1 line. Not scanned: the security scanner isn't installed. Enter to approve, Escape to reject.",
         "Created main.py, 1 line.",
-        "Run main.py with Python. Enter to run, Escape to reject.",
+        "Run main.py with Python. Not scanned: the security scanner isn't installed. Enter to run, Escape to reject.",
         "Running main.py.",
         "main.py ran successfully. It printed: Hello, World!",
         "I created hello-world with main.py and ran it. It printed Hello, World!",

@@ -13,6 +13,9 @@ from artemis.contracts import Style
 
 from .intents import match, simplify
 
+# The one NVDA sentence: the controller uses it, and the core speaks it when a rate change reports NVDA.
+NVDA_RATE_LINE = "I'm speaking through NVDA, so its own speech rate setting controls how fast I talk."
+
 Action = Literal[
     "none",  # nothing to do (an empty transcript or only the wake word, no approval open)
     "submit",  # start a task with `text`
@@ -195,7 +198,7 @@ class Controller:
             return Decision(intent, "say", said, reminder=reminder)
         if intent in ("slower", "faster"):
             if self.screen_reader == "nvda":
-                said = "I'm speaking through NVDA, so its own speech rate setting controls how fast I talk."
+                said = NVDA_RATE_LINE
                 return Decision(intent, "say", said, reminder=reminder)
             return Decision(
                 intent, "rate", "I can't change how fast I speak yet.",

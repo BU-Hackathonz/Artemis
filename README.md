@@ -22,7 +22,7 @@ tools/board unread
 
 ## Run Artemis (Windows)
 
-Needs: `uv`, Node 20+, and for the desktop app Rust + MSVC Build Tools (Tauri 2). NVDA is optional; without it the core speaks through SAPI.
+Needs: `uv`, Node 22+, and for the desktop app Rust + MSVC Build Tools (Tauri 2). NVDA is optional; without it the core speaks through SAPI.
 
 ```powershell
 cd server; uv sync --group voice --group dev; cd ..      # first time only

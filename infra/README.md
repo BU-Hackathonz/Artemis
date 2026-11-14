@@ -15,13 +15,32 @@ powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly       # just 
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `-Dev` | on | Run the app with `npm run tauri dev` in `client/` |
+| `-Dev` | (no effect) | Not read by the script. Without `-AppPath`, the app runs with `npm run tauri dev` in `client/` |
 | `-AppPath <exe>` | | Run a built app instead |
 | `-CoreOnly` | | Start only the core and print its address |
-| `-Agent stub\|claude` | `stub` | Sets `ARTEMIS_AGENT`; `claude` also syncs the `agent` and `security` groups |
+| `-Agent stub\|claude` | `stub` | Sets `ARTEMIS_AGENT`; `claude` also syncs the `agent`, `security` and `echo` groups |
 | `-Voice whisper\|stub` | `whisper` | Sets `ARTEMIS_VOICE`; `whisper` syncs the `voice` group |
 | `-Conversation` | off | Sets `ARTEMIS_CONVERSATION=on`: built-in spoken phrases ("what are you doing", "keep it brief") and one waiting follow-up request (contracts.md §5.4). Rehearse with it before using it in the demo |
 | `-HealthTimeoutS` | `120` | How long to wait for the core's `/health` |
+
+## Speech voice and rate (Windows voice only)
+
+These apply when Artemis speaks through Windows SAPI. Set them in the PowerShell window you launch
+from, before `start.ps1`; the core inherits them.
+
+- `ARTEMIS_SAPI_VOICE`: part of an installed voice's name, such as `Zira`. An unknown name keeps
+  the Windows default voice.
+- `ARTEMIS_SAPI_RATE`: a whole number from `-3` to `6`; other numbers are clamped to that range.
+  Unset or invalid keeps your own Windows speech rate.
+- Both are ignored while NVDA is speaking. NVDA's own voice and rate are never changed.
+- With conversation mode (`-Conversation`), saying "faster" or "slower" steps the Windows voice
+  rate within `-3` to `6`.
+
+```powershell
+$env:ARTEMIS_SAPI_VOICE = "Zira"
+$env:ARTEMIS_SAPI_RATE = "2"
+powershell -ExecutionPolicy Bypass -File infra\start.ps1
+```
 
 What it does:
 1. Makes a 32-byte random launch token (base64url) and picks a free port on `127.0.0.1`.
@@ -67,12 +86,44 @@ powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets 
    `client\src-tauri\target\release\`. If it is missing it says where to get it: GitHub Actions,
    "Windows exe (manual)", download the `artemis-client-windows` artifact.
 2. Asks for your Anthropic API key with a hidden prompt. Press Enter to use the scripted stub
-   agent instead. If `ANTHROPIC_API_KEY` is already set in the window, it uses that.
+   agent instead. If `ANTHROPIC_API_KEY` is already in the environment (set in that window, or
+   saved in your Windows settings), it uses that.
 3. Runs `start.ps1 -Agent <stub|claude> -AppPath <exe>`. Closing the Artemis window stops the core.
 
 The key lives only in the launcher's process environment: never in a file, on a command line, in a
-log or in the exe, and it ends with the launcher process (no managed string copy can be zeroed). Options: `-Agent stub|claude`, `-Voice whisper|stub`,
-`-AppPath <exe>`, `-NoConversation`, `-NoPause` (scripts: never wait for Enter). The launcher turns conversation mode on by default (built-in spoken phrases and one waiting follow-up, contracts.md §5.4); `start.ps1` itself still defaults to off.
+log or in the exe. It is removed from the environment when the launcher exits, and any in-memory
+copies end with the process.
+
+Options: `-Agent stub|claude`, `-Voice whisper|stub`, `-AppPath <exe>`, `-NoConversation`,
+`-ForgetKey`, and `-NoPause` (for scripts: never wait for a key press). The launcher turns
+conversation mode on by default (built-in spoken phrases and one waiting follow-up, contracts.md
+§5.4); `start.ps1` itself still defaults to off.
+
+### The window never closes unread
+
+Whenever the launcher stops for any reason other than you closing Artemis, the console window
+stays open with the reason as its last lines and waits for a key press, so a screen reader can
+read it. `-NoPause` turns the waiting off for scripts.
+
+| `Artemis.cmd` exit code | Meaning |
+|---|---|
+| `0` | The app was closed normally (or `-ForgetKey` finished) |
+| `1` | Could not start, or the core stopped while the app was running. The window says which |
+| other | PowerShell's or `start.ps1`'s own code, passed through unchanged |
+
+### If the launcher will not start
+
+"Windows PowerShell could not run the launcher" means `launch.ps1` itself never ran. The lines
+above that message are PowerShell's own explanation. The usual causes:
+
+- `powershell.exe` is not on `PATH`, or your organization blocks it.
+- A policy (AppLocker, or an antivirus) blocks scripts from this folder. Move the repository to
+  a folder you are allowed to run scripts from, or ask whoever manages the laptop.
+- `infra\launch.ps1` is missing or damaged. Restore it with `git checkout -- infra`.
+
+"The launcher hit an unexpected error" means `launch.ps1` started and then failed in a way it
+has no specific message for; the line above it is the error. `Artemis.cmd -Agent stub` avoids
+the key prompt and Credential Manager, which is a quick way to tell whether those are involved.
 
 This is **not** one-click packaging: it still needs this repository, `uv` and the synced
 dependencies above, because the Python core is started from the repository (decisions.md #3).
@@ -82,7 +133,7 @@ It still shows a console window.
 
 After you type the key, the launcher asks whether to save it (and the workspace ID) in Windows
 Credential Manager. Say yes and later launches skip the prompt. It is stored as a generic
-credential for your Windows user only, protected by DPAPI; no file is written and nothing is
-printed. See or delete it in Credential Manager under "Artemis/AnthropicApiKey", or run
-`infra\launch.ps1 -ForgetKey`. Anyone signed in as you on this laptop could read it, so don't save
+credential for your Windows user only, protected by DPAPI. The launcher writes no file and
+prints nothing; Windows keeps it encrypted in your profile. See or delete it in Credential
+Manager under "Artemis/AnthropicApiKey", or run `infra\Artemis.cmd -ForgetKey`. Anyone signed in as you on this laptop could read it, so don't save
 it on a shared account. `-NoPause` never prompts or saves; it only reads what is already saved.

@@ -9,8 +9,10 @@
   started by start.ps1 from the repository. It does not bundle the core.
 
   The Anthropic API key, if you type one, is read as a hidden prompt into this process's
-  environment only. It is never written to a file, a command line or a log, and it is removed when
-  the launcher exits. Press Enter at the prompt to use the scripted stub agent instead.
+  environment only. The launcher never writes it to a file, a command line or a log. It is removed
+  from the environment when the launcher exits, and any in-memory copies end with the process.
+  Saving it in Windows Credential Manager is a separate, optional step (infra\README.md).
+  Press Enter at the prompt to use the scripted stub agent instead.
 
 .EXAMPLE
   infra\Artemis.cmd                      # double-click, or run from any shell
@@ -28,6 +30,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Artemis.cmd made this empty file and checks for it afterwards: gone means this script ran,
+# still there means PowerShell never got this far (blocked or damaged), and Artemis.cmd says so.
+if ($env:ARTEMIS_LAUNCH_MARKER) {
+    Remove-Item -LiteralPath $env:ARTEMIS_LAUNCH_MARKER -Force -ErrorAction SilentlyContinue
+}
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = Split-Path -Parent $Here
 
@@ -43,17 +50,27 @@ function Finish([int]$Code, [string]$Message = "") {
     exit $Code
 }
 
+# Anything unexpected below is explained and waited on like every other failure, so a
+# double-click window never closes with only a raw error in it. The finally block further down
+# has already run by the time this does, so a typed key is gone from the environment.
+trap {
+    Write-Host ""
+    Write-Host ("Unexpected error: " + $_.Exception.Message) -ForegroundColor Red
+    Finish 1 "Artemis could not start: the launcher hit an unexpected error. The line above says what."
+}
+
 . (Join-Path $Here "credstore.ps1")
 
 if ($ForgetKey) {
     $r1 = Remove-StoredSecret $ApiKeyTarget
     $r2 = Remove-StoredSecret $WorkspaceTarget
     if ($r1 -eq "failed" -or $r2 -eq "failed") {
-        Write-Host "Could not change Windows Credential Manager ($script:CredStoreError). Delete 'Artemis/AnthropicApiKey' and 'Artemis/AnthropicWorkspaceId' by hand in Credential Manager." -ForegroundColor Red
-        exit 1
+        Finish 1 "Could not change Windows Credential Manager ($script:CredStoreError). Delete 'Artemis/AnthropicApiKey' and 'Artemis/AnthropicWorkspaceId' by hand in Credential Manager."
     }
     if ($r1 -eq "none" -and $r2 -eq "none") { Write-Host "Nothing was saved by Artemis, so nothing was removed." }
     else { Write-Host "Removed the Anthropic key and workspace ID saved by Artemis from Windows Credential Manager." }
+    # From a shortcut the window would close before this could be read.
+    if (-not $NoPause) { Read-Host "Press Enter to close this window" | Out-Null }
     exit 0
 }
 
@@ -97,10 +114,10 @@ try {
             $env:ANTHROPIC_API_KEY = $savedKey
             $keyFromPrompt = $true
             $chosen = "claude"
-            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. No internet? Run launch.ps1 -Agent stub. Run launch.ps1 -ForgetKey to remove the saved key."
+            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. No internet? Run Artemis.cmd -Agent stub. Run Artemis.cmd -ForgetKey to remove the saved key."
         } else {
             Write-Host "Artemis demo launcher"
-            Write-Host "Type your Anthropic API key (it is hidden and kept only in this window), or press Enter for the scripted stub agent."
+            Write-Host "Type your Anthropic API key (it is hidden as you type), or press Enter for the scripted stub agent."
             $secure = Read-Host -AsSecureString "Anthropic API key"
             if ($secure.Length -gt 0) {
                 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
@@ -116,7 +133,7 @@ try {
         if ($savedKey) {
             $env:ANTHROPIC_API_KEY = $savedKey
             $keyFromPrompt = $true
-            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. No internet? Run launch.ps1 -Agent stub. Run launch.ps1 -ForgetKey to remove the saved key."
+            Write-Host "Using the Anthropic API key saved in Windows Credential Manager. No internet? Run Artemis.cmd -Agent stub. Run Artemis.cmd -ForgetKey to remove the saved key."
         } else {
             if ($NoPause) { Finish 1 "Artemis could not start: -Agent claude needs ANTHROPIC_API_KEY in this window." }
             $secure = Read-Host -AsSecureString "Anthropic API key"
@@ -141,11 +158,9 @@ try {
     if ($offerSave -and -not $NoPause -and $script:CredStoreAvailable) {
         $answer = Read-Host "Save this in Windows Credential Manager (encrypted for your Windows account) so you don't retype it? (y/N)"
         if ($answer -match "^(y|yes)$") {
-            $savedOk = $true
-            if ($keyFromPrompt -and $secure) { $savedOk = (Set-StoredSecret $ApiKeyTarget $env:ANTHROPIC_API_KEY) }
-            if ($savedOk -and $env:ANTHROPIC_WORKSPACE_ID) { $savedOk = (Set-StoredSecret $WorkspaceTarget $env:ANTHROPIC_WORKSPACE_ID) }
-            if ($savedOk) { Write-Host "Saved. Run launch.ps1 -ForgetKey to remove it." }
-            else { Write-Host "Nothing was saved ($script:CredStoreError). You will be asked again next time." -ForegroundColor Red }
+            # Only a key typed just now is saved; one that came from the store already is there.
+            $saved = Save-TypedSecrets ([bool]($keyFromPrompt -and $secure))
+            if ($saved.Ok) { Write-Host $saved.Message } else { Write-Host $saved.Message -ForegroundColor Red }
         }
     } elseif ($offerSave -and -not $script:CredStoreAvailable) {
         Write-Host "Saving is not available on this laptop ($script:CredStoreError). You will be asked again next time."
