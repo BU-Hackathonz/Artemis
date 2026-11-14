@@ -265,8 +265,14 @@ class Announcer:
             return False
         if not hasattr(speaker, "set_rate"):
             return False  # no voice output at all; there is nothing to make faster or slower
+        if not delta:
+            return False
+        step = 1 if delta > 0 else -1
         before = speaker.rate
-        after = speaker.set_rate(before + (1 if delta > 0 else -1))
+        # The user's own Windows rate can sit outside our range (we keep it unless asked). Stepping
+        # from there must never go the wrong way: "faster" from 8 would clamp down to 6.
+        at_limit = before >= RATE_MAX if step > 0 else before <= RATE_MIN
+        after = before if at_limit else speaker.set_rate(before + step)
         if after == before:
             await self.announce("That's the fastest I go." if delta > 0 else "That's the slowest I go.", "normal")
             return False
