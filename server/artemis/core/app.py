@@ -17,7 +17,12 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from artemis.contracts import ApprovalResponse, ClientDiagnostic, TaskRequest
+from artemis.contracts import (
+    ApprovalResponse,
+    ClientDiagnostic,
+    ClientReady,
+    TaskRequest,
+)
 from artemis.runner.local import NoInterpreter
 
 from .approvals import ApprovalNotFound, ApprovalStale
@@ -311,6 +316,17 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             await session.error(body.code, message, recovery)
         return Response(status_code=204)
 
+    @app.post("/sessions/{sid}/ready", status_code=204)
+    async def ready(sid: str, body: ClientReady):
+        """The client finished setting up: say so once per session, naming the push-to-talk chord
+        it registered, so the first thing a blind user hears is how to start. Fixed text, like the
+        diagnostics; normal priority, so it never talks over an error."""
+        session = core.session(sid)
+        if not session.greeted:
+            session.greeted = True
+            await session.say(None, ready_text(body.shortcut))
+        return Response(status_code=204)
+
     @app.post("/speech", status_code=204)
     async def speech(body: SpeechBody):
         if body.action == "stop":
@@ -344,6 +360,12 @@ def diagnostic_text(d: ClientDiagnostic) -> tuple[str, str]:
             "Use the Start listening button in Artemis, or choose a different shortcut.",
         )
     raise AssertionError(d.code)  # unreachable: the model only accepts known codes
+
+
+def ready_text(shortcut: str | None) -> str:
+    if shortcut:
+        return f"Artemis is ready. Hold {shortcut.replace('+', ' ')} and speak, or type a request."
+    return "Artemis is ready. Use the Start listening button and speak, or type a request."
 
 
 def mic_message(exc: Exception) -> str:
