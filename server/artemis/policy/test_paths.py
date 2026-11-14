@@ -156,3 +156,23 @@ def test_write_size_limit():
     check_write_size("x" * MAX_WRITE_BYTES, "a.py")
     with pytest.raises(PathRejected):
         check_write_size("x" * (MAX_WRITE_BYTES + 1), "a.py")
+
+
+def test_project_files_skips_links_caches_and_env(root, tmp_path):
+    from artemis.policy.paths import project_files
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x")
+    for rel in ["main.py", "src/b.py", "src/a.py", ".git/config", ".venv/lib/x.py", ".env.local"]:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x")
+    link = root / "link"
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(link))
+    else:
+        os.symlink(outside, link, target_is_directory=True)
+    assert project_files(root) == ["main.py", "src/a.py", "src/b.py"]
+    assert project_files(root, root / "src") == ["src/a.py", "src/b.py"]

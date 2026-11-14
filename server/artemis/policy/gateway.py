@@ -56,6 +56,7 @@ from .paths import (
     check_read_size,
     check_write_size,
     is_reserved_name,
+    project_files,
     safe_resolve,
 )
 from .redact import redact, redact_obj
@@ -65,7 +66,6 @@ from .rules import RULES
 Scan = Callable[[Path], Awaitable[list[Finding]]]
 
 MAX_LIST_ENTRIES = 200
-SKIP_DIRS = frozenset({".git", "__pycache__", ".venv", "node_modules"})
 SPOKEN_OUTPUT_CHARS = 200
 _SEVERITY_ORDER = ("high", "medium", "low")
 
@@ -195,6 +195,18 @@ class ToolGateway:
             return ToolResult(ok=False, error="path_rejected", message=redact(exc.reason))
         except _ToolError as exc:
             return ToolResult(ok=False, error=exc.code, message=redact(exc.message))
+        except Exception as exc:
+            # Nothing unexpected may escape as a crash or as silence. Only the exception type
+            # is reported: its message can hold absolute paths or file contents.
+            # (CancelledError is not an Exception, so a cancel still propagates.)
+            kind = type(exc).__name__
+            await self._error(
+                task_id,
+                "tool_failed",
+                f"Something went wrong with {name}.",
+                "Nothing else was changed.",
+            )
+            return ToolResult(ok=False, error="tool_failed", message=f"{name} failed: {kind}.")
         return ToolResult(ok=True, data=redact_obj(data))
 
     # ----- events -----
@@ -285,13 +297,7 @@ class ToolGateway:
             return {"files": wrap("file names", ""), "count": 0, "truncated": False}
         if not top.is_dir():
             raise _ToolError("not_found", f"There is no folder named {a.dir}.")
-        base = root.resolve()
-        names: list[str] = []
-        for folder, dirs, files in os.walk(top):
-            dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
-            for file in sorted(files):
-                if not file.lower().startswith(".env"):
-                    names.append(Path(folder, file).resolve().relative_to(base).as_posix())
+        names = project_files(root, top)
         return {
             "files": wrap("file names", "\n".join(names[:MAX_LIST_ENTRIES])),
             "count": min(len(names), MAX_LIST_ENTRIES),
