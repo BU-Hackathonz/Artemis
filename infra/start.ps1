@@ -75,7 +75,27 @@ function Start-Child([string]$FileName, [string]$Arguments, [string]$WorkingDire
 # ----- preflight -----
 
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Fail "uv is not installed. Install it from https://docs.astral.sh/uv/ and open a new terminal."
+    # Not on PATH: look where the uv installers and `pip install uv` put it (Yaovi's Windows run).
+    $uvCandidates = @(
+        (Join-Path $env:USERPROFILE ".local\bin\uv.exe"),
+        (Join-Path $env:USERPROFILE ".cargo\bin\uv.exe")
+    )
+    if ($env:APPDATA) {
+        $uvCandidates += @(Get-ChildItem -Path (Join-Path $env:APPDATA "Python\Python3*\Scripts\uv.exe") -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    }
+    if ($env:LOCALAPPDATA) {
+        $uvCandidates += @(Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "Programs\Python\Python3*\Scripts\uv.exe") -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    }
+    $uvFound = $null
+    foreach ($candidate in $uvCandidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) { $uvFound = $candidate; break }
+    }
+    if (-not $uvFound) {
+        Fail "uv is not installed or not on PATH. Install it from https://docs.astral.sh/uv/ and open a new terminal."
+    }
+    # For this script and the processes it starts only; the user's PATH is not changed.
+    $env:PATH = (Split-Path -Parent $uvFound) + ";" + $env:PATH
+    Write-Host "Using uv at $uvFound (not on PATH)."
 }
 if ($Agent -eq "claude" -and -not $env:ANTHROPIC_API_KEY) {
     Fail "ANTHROPIC_API_KEY is not set, and -Agent claude needs it. Set it, or run with -Agent stub."
