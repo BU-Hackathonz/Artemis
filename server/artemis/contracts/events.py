@@ -20,6 +20,7 @@ EventType = Literal[
     "run.result",
     "security.findings",
     "error",
+    "voice.status",
 ]
 
 # `awaiting_reply` is reserved and unused in the MVP (design A4).
@@ -92,6 +93,11 @@ class ErrorData(BaseModel):
     recovery: str  # one sentence the user can act on
 
 
+class VoiceStatusData(BaseModel):
+    voice_ready: bool
+    screen_reader: Literal["nvda"] | None = None
+
+
 DATA_MODELS: dict[str, type[BaseModel]] = {
     "transcript.partial": TranscriptData,
     "transcript.final": TranscriptData,
@@ -103,6 +109,7 @@ DATA_MODELS: dict[str, type[BaseModel]] = {
     "run.result": RunResult,
     "security.findings": SecurityFindings,
     "error": ErrorData,
+    "voice.status": VoiceStatusData,
 }
 
 

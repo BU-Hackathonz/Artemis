@@ -17,8 +17,18 @@ voice = [
     "sounddevice",
     "pywin32; sys_platform == 'win32'",
 ]
+# Agent (David): the Claude tool loop.
+agent = [
+    "anthropic>=2.8",
+]
+# Security (David): the static scan before every write and run approval.
+security = [
+    "bandit>=1.9",
+]
 dev = [
     "pytest",
+    "pytest-asyncio",
+    "httpx",
 ]
 
 [build-system]
@@ -30,3 +40,5 @@ packages = ["artemis"]
 
 [tool.pytest.ini_options]
 testpaths = ["artemis"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

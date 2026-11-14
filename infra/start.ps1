@@ -1,0 +1,161 @@
+<#
+.SYNOPSIS
+  Starts Artemis: the core on a free loopback port with a fresh launch token, then the desktop app.
+  Implements docs/contracts.md section 6. Windows PowerShell 5.1 or PowerShell 7.
+
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File infra\start.ps1                  # core + npm run tauri dev
+  powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude    # real agent (needs ANTHROPIC_API_KEY)
+  powershell -ExecutionPolicy Bypass -File infra\start.ps1 -AppPath C:\path\artemis-client.exe
+  powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly        # just the core
+#>
+[CmdletBinding()]
+param(
+    [switch]$Dev,
+    [string]$AppPath = "",
+    [switch]$CoreOnly,
+    [ValidateSet("stub", "claude")][string]$Agent = "stub",
+    [ValidateSet("whisper", "stub")][string]$Voice = "whisper",
+    [int]$HealthTimeoutS = 120
+)
+
+$ErrorActionPreference = "Stop"
+$Repo = Split-Path -Parent $PSScriptRoot
+$Server = Join-Path $Repo "server"
+$Client = Join-Path $Repo "client"
+$LogDir = Join-Path $env:LOCALAPPDATA "Artemis\logs"
+$CoreLog = Join-Path $LogDir "core.log"
+
+function Fail([string]$Message) {
+    Write-Host ""
+    Write-Host "Artemis could not start: $Message" -ForegroundColor Red
+    exit 1
+}
+
+function Stop-Tree($Process) {
+    if ($null -ne $Process -and -not $Process.HasExited) {
+        try { & taskkill.exe /T /F /PID $Process.Id 2>&1 | Out-Null } catch { }
+    }
+}
+
+function Show-CoreLog {
+    if (Test-Path $CoreLog) {
+        Write-Host "Last lines of the core log ($CoreLog):"
+        Get-Content -Path $CoreLog -Tail 20 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function New-LaunchToken {
+    # 32 random bytes, base64url without padding.
+    $bytes = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return [Convert]::ToBase64String($bytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+}
+
+function Get-FreePort {
+    $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    try { return $listener.LocalEndpoint.Port } finally { $listener.Stop() }
+}
+
+function Start-Child([string]$FileName, [string]$Arguments, [string]$WorkingDirectory, [hashtable]$Environment) {
+    # Secrets go in the child's environment only: never in argv (any process can list command lines).
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FileName
+    $psi.Arguments = $Arguments
+    $psi.WorkingDirectory = $WorkingDirectory
+    $psi.UseShellExecute = $false
+    foreach ($key in $Environment.Keys) {
+        $psi.EnvironmentVariables[$key] = [string]$Environment[$key]
+    }
+    return [System.Diagnostics.Process]::Start($psi)
+}
+
+# ----- preflight -----
+
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Fail "uv is not installed. Install it from https://docs.astral.sh/uv/ and open a new terminal."
+}
+if ($Agent -eq "claude" -and -not $env:ANTHROPIC_API_KEY) {
+    Fail "ANTHROPIC_API_KEY is not set, and -Agent claude needs it. Set it, or run with -Agent stub."
+}
+if (-not $CoreOnly -and -not $AppPath -and -not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Fail "npm is not installed, and dev mode runs the app with npm run tauri dev. Install Node.js, or pass -AppPath."
+}
+if ($AppPath -and -not (Test-Path $AppPath)) {
+    Fail "the app was not found at $AppPath."
+}
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+
+$token = New-LaunchToken
+$port = Get-FreePort
+$url = "http://127.0.0.1:$port"
+
+$groups = ""
+if ($Voice -eq "whisper") { $groups += " --group voice" }
+if ($Agent -eq "claude") { $groups += " --group agent --group security" }
+
+$core = $null
+$app = $null
+try {
+    # ----- core -----
+    Write-Host "Starting the Artemis core on $url (agent: $Agent, voice: $Voice)..."
+    $coreArgs = "/d /c uv run --project `"$Server`"$groups uvicorn artemis.core.main:app --host 127.0.0.1 --port $port > `"$CoreLog`" 2>&1"
+    $core = Start-Child "cmd.exe" $coreArgs $Server @{
+        "ARTEMIS_TOKEN" = $token
+        "ARTEMIS_AGENT" = $Agent
+        "ARTEMIS_VOICE" = $Voice
+    }
+
+    $headers = @{ "Authorization" = "Bearer $token" }
+    $ready = $false
+    $deadline = (Get-Date).AddSeconds($HealthTimeoutS)
+    while ((Get-Date) -lt $deadline) {
+        if ($core.HasExited) { break }
+        try {
+            $response = Invoke-WebRequest -UseBasicParsing -Uri "$url/health" -Headers $headers -TimeoutSec 2
+            if ($response.StatusCode -eq 200) { $ready = $true; break }
+        } catch {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    if (-not $ready) {
+        Show-CoreLog
+        if ($core.HasExited) { Fail "the core exited before it answered /health." }
+        Fail "the core did not answer /health within $HealthTimeoutS seconds."
+    }
+    Write-Host "Core is ready."
+
+    # ----- app -----
+    if ($CoreOnly) {
+        Write-Host "Core only: $url (the launch token is in the core's environment and is not shown). Ctrl+C to stop."
+        while (-not $core.HasExited) { Start-Sleep -Milliseconds 500 }
+        Show-CoreLog
+        Fail "the core stopped."
+    }
+
+    $appEnv = @{ "ARTEMIS_CORE_URL" = $url; "ARTEMIS_TOKEN" = $token }
+    if ($AppPath) {
+        Write-Host "Starting the app: $AppPath"
+        $app = Start-Child $AppPath "" (Split-Path -Parent $AppPath) $appEnv
+    } else {
+        Write-Host "Starting the app in dev mode (npm run tauri dev). The first build takes a few minutes."
+        $app = Start-Child "cmd.exe" "/d /c npm run tauri dev" $Client $appEnv
+    }
+
+    # Polling instead of WaitForExit, so Ctrl+C reaches the finally block.
+    while (-not $app.HasExited) {
+        if ($core.HasExited) {
+            Show-CoreLog
+            Write-Host "The core stopped while the app was running." -ForegroundColor Red
+            break
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    Write-Host "The app closed. Stopping the core."
+} finally {
+    Stop-Tree $app
+    Stop-Tree $core
+    $token = $null
+}

@@ -27,6 +27,7 @@ from .events import (
     TaskState,
     TaskStateData,
     TranscriptData,
+    VoiceStatusData,
 )
 from .interfaces import Agent, Approvals, Emit, Runner, ToolGateway
 from .tasks import (
