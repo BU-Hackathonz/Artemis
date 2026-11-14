@@ -281,6 +281,10 @@ mod tests {
         let state = CompanionState::default();
         let first = state.update(approval_status(), true, false).unwrap();
         assert!(!first.show && first.focus_reject);
+        let mut offline = approval_status();
+        offline.connection = Connection::Disconnected;
+        let disconnected = state.update(offline, false, false).unwrap();
+        assert!(!disconnected.show && disconnected.focus_reject);
         let reconnect = state.update(approval_status(), false, false).unwrap();
         assert!(!reconnect.show && reconnect.focus_reject);
         assert!(state.acknowledge().unwrap());
