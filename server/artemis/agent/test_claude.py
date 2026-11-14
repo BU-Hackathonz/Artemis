@@ -1,0 +1,596 @@
+"""ClaudeAgent against a fake client that returns real SDK message objects. Offline.
+
+One live test at the bottom runs the real Hello World; it is skipped without an API key.
+"""
+
+import asyncio
+import copy
+import json
+import os
+import time
+
+import pytest
+
+anthropic = pytest.importorskip("anthropic")
+import httpx2  # noqa: E402  (the SDK's HTTP library; only used to build fake error responses)
+from anthropic.types.beta import BetaMessage  # noqa: E402
+
+from artemis.agent import make_agent  # noqa: E402
+from artemis.agent import claude as claude_module  # noqa: E402
+from artemis.agent.claude import ClaudeAgent  # noqa: E402
+from artemis.agent.config import Config  # noqa: E402
+from artemis.agent.context import task_message, vocabulary  # noqa: E402
+from artemis.agent.prompts import SYSTEM_PROMPT, strict_schema, tool_definitions  # noqa: E402
+from artemis.agent.stub import StubAgent  # noqa: E402
+from artemis.contracts import TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
+from artemis.policy.gateway import ToolGateway  # noqa: E402
+from artemis.policy.testing import EventLog, FakeApprovals, FakeRunner  # noqa: E402
+
+HELLO = 'print("Hello, World!")\n'
+REQUEST = "create a Python program that prints Hello World"
+
+
+def message(*blocks, stop_reason="end_turn", **extra):
+    return BetaMessage.model_validate(
+        {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": list(blocks), "stop_reason": stop_reason, "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 5}, **extra,
+        }
+    )
+
+
+def thinking(signature="sig_1"):
+    return {"type": "thinking", "thinking": "", "signature": signature}
+
+
+def text(value):
+    return {"type": "text", "text": value}
+
+
+def tool(id, name, /, **input):
+    return {"type": "tool_use", "id": id, "name": name, "input": input}
+
+
+def dump(messages) -> str:
+    """The conversation as the SDK would send it, for byte-for-byte comparison."""
+    def plain(value):
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        if isinstance(value, list):
+            return [plain(v) for v in value]
+        if isinstance(value, dict):
+            return {k: plain(v) for k, v in value.items()}
+        return value
+
+    return json.dumps(plain(messages), sort_keys=True)
+
+
+class FakeClient:
+    """Stands in for AsyncAnthropic: `client.beta.messages.create(...)`. Each script step is
+    a message to return or an exception to raise."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.calls: list[dict] = []
+        self.sent: list[str] = []  # the conversation as sent on each call
+        self.beta = self
+        self.messages = self
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        self.sent.append(dump(kwargs["messages"]))
+        step = self.script.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        return step
+
+
+def api_error(cls, status):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls("simulated", response=httpx2.Response(status, request=request), body=None)
+
+
+def hello_script():
+    return [
+        message(thinking(), tool("toolu_1", "create_project", name="hello world"), stop_reason="tool_use"),
+        message(
+            thinking("sig_2"),
+            tool("toolu_2", "write_files", files=[{"path": "main.py", "content": HELLO}]),
+            stop_reason="tool_use",
+        ),
+        message(tool("toolu_3", "run_program", entry="main.py", args=[]), stop_reason="tool_use"),
+        message(text("I created **hello-world** with `main.py` and ran it. It printed Hello, World!")),
+    ]
+
+
+class World:
+    def __init__(self, tmp_path, script, approvals=None, max_iterations=12):
+        self.projects = tmp_path
+        self.log = EventLog()
+        self.approvals = FakeApprovals(approvals)
+        self.runner = FakeRunner(tmp_path)
+        self.gateway = ToolGateway(self.runner, self.approvals, self.log, projects_dir=tmp_path)
+        self.client = FakeClient(script)
+        self.agent = ClaudeAgent(Config(max_iterations=max_iterations), client=self.client)
+
+    async def run(self, request=REQUEST, task_id="tsk_1"):
+        task = TaskContext(task_id=task_id, request=request, project=self.gateway.project)
+        return await self.agent.run(task, self.gateway, self.log)
+
+
+@pytest.fixture(autouse=True)
+def no_retry_delay(monkeypatch):
+    monkeypatch.setattr(claude_module, "RETRY_DELAY_S", 0)
+
+
+# ----- the loop -----
+
+
+def test_hello_world_tool_loop(tmp_path):
+    w = World(tmp_path, hello_script())
+    outcome = asyncio.run(w.run())
+    assert isinstance(outcome, Answered)
+    assert (tmp_path / "hello-world" / "main.py").read_text() == HELLO
+    assert w.runner.runs == [("main.py", [], 10)]
+    assert len(w.client.calls) == 4
+    # The answer is spoken without markdown; the log keeps the original.
+    answer = w.log.events[-1]
+    assert answer.announce.text == "I created hello-world with main.py and ran it. It printed Hello, World!"
+    assert answer.data == {"text": outcome.text, "kind": "answer"}
+    assert "**hello-world**" in outcome.text
+    # The deterministic run result is spoken before the model's explanation.
+    spoken = w.log.spoken()
+    assert spoken.index("main.py ran successfully. It printed: Hello, World!") < len(spoken) - 1
+
+
+def test_request_shape(tmp_path):
+    w = World(tmp_path, [message(text("Hello."))])
+    asyncio.run(w.run())
+    call = w.client.calls[0]
+    assert call["model"] == "claude-opus-5-5"
+    assert call["max_tokens"] == 16000
+    assert call["output_config"] == {"effort": "medium"}
+    assert call["cache_control"] == {"type": "ephemeral"}
+    assert call["fallbacks"] == "default" and call["betas"] == ["server-side-fallback-2026-07-01"]
+    assert call["system"] == SYSTEM_PROMPT
+    # Thinking is always on for this model, forced tool choice is a 400, and we don't stream.
+    assert not {"thinking", "tool_choice", "stream", "temperature"} & set(call)
+    assert [t["name"] for t in call["tools"]] == list(TOOL_ARGS)
+
+
+def test_model_and_effort_come_from_config(tmp_path):
+    w = World(tmp_path, [message(text("Hello."))])
+    w.agent = ClaudeAgent(Config(model="claude-sonnet-5-5", effort="low"), client=w.client)
+    asyncio.run(w.run())
+    assert w.client.calls[0]["model"] == "claude-sonnet-5-5"
+    assert w.client.calls[0]["output_config"] == {"effort": "low"}
+
+
+def test_response_content_is_appended_exactly_as_returned(tmp_path):
+    script = hello_script()
+    w = World(tmp_path, list(script))
+    asyncio.run(w.run())
+    assistant = [m for m in w.agent.messages if m["role"] == "assistant"]
+    assert [m["content"] for m in assistant] == [s.content for s in script]
+    assert assistant[0]["content"][0].type == "thinking"  # thinking blocks go back unchanged
+    roles = [m["role"] for m in w.agent.messages]
+    assert roles == ["user", "assistant", "user", "assistant", "user", "assistant", "user", "assistant"]
+
+
+def test_tool_results_are_json_with_untrusted_output(tmp_path):
+    w = World(tmp_path, hello_script())
+    asyncio.run(w.run())
+    results = [m["content"] for m in w.agent.messages if m["role"] == "user" and isinstance(m["content"], list)]
+    run_result = results[2][0]
+    assert run_result["type"] == "tool_result" and run_result["tool_use_id"] == "toolu_3"
+    assert run_result["is_error"] is False
+    body = json.loads(run_result["content"])
+    assert body["ok"] is True and body["data"]["exit_code"] == 0
+    assert body["data"]["stdout"].startswith('<untrusted source="program:main.py stdout">')
+
+
+def test_parallel_tool_calls_run_in_order_and_return_in_one_message(tmp_path):
+    script = [
+        message(
+            tool("toolu_a", "create_project", name="multi"),
+            tool("toolu_b", "write_files", files=[{"path": "a.py", "content": "x = 1\n"}]),
+            tool("toolu_c", "read_file", path="a.py", start_line=None, end_line=None),
+            stop_reason="tool_use",
+        ),
+        message(text("Done.")),
+    ]
+    w = World(tmp_path, script)
+    asyncio.run(w.run())
+    results = w.agent.messages[2]["content"]
+    assert [r["tool_use_id"] for r in results] == ["toolu_a", "toolu_b", "toolu_c"]
+    assert all(r["is_error"] is False for r in results)  # the read saw the file the write made
+    assert len(w.approvals.requests) == 1
+    assert len(w.agent.messages) == 4
+
+
+# ----- stop reasons -----
+
+
+def test_refusal(tmp_path):
+    refused = message(stop_reason="refusal", stop_details={"type": "refusal", "category": "cyber", "explanation": "x"})
+    w = World(tmp_path, [refused])
+    outcome = asyncio.run(w.run())
+    assert outcome == Failed(code="refused", message="I can't help with that request.")
+    assert w.log.spoken() == ["I can't help with that request."]
+    assert w.agent.messages == []  # the refused request is not replayed on the next task
+    assert w.approvals.requests == []
+
+
+def test_refusal_after_tool_calls_keeps_the_answered_history(tmp_path):
+    w = World(tmp_path, hello_script()[:1] + [message(stop_reason="refusal")])
+    outcome = asyncio.run(w.run())
+    assert outcome.code == "refused"
+    assert [m["role"] for m in w.agent.messages] == ["user", "assistant", "user"]
+
+
+def test_max_tokens(tmp_path):
+    cut_off = message(text("Here is a very long"), stop_reason="max_tokens")
+    w = World(tmp_path, [cut_off])
+    outcome = asyncio.run(w.run())
+    assert outcome == Failed(code="too_long", message="That got too long. Try a smaller request.")
+    assert w.log.spoken() == ["That got too long. Try a smaller request."]
+
+
+def test_max_tokens_with_a_cut_off_tool_call_runs_nothing(tmp_path):
+    cut_off = message(tool("toolu_1", "create_project", name="x"), stop_reason="max_tokens")
+    w = World(tmp_path, [cut_off])
+    assert asyncio.run(w.run()).code == "too_long"
+    assert w.gateway.project is None and w.agent.messages == []
+
+
+def test_unknown_tool_is_an_error_result_and_the_loop_continues(tmp_path):
+    script = [
+        message(tool("toolu_1", "delete_everything", path="."), stop_reason="tool_use"),
+        message(text("I can't delete files.")),
+    ]
+    w = World(tmp_path, script)
+    outcome = asyncio.run(w.run())
+    result = w.agent.messages[2]["content"][0]
+    assert result["is_error"] is True
+    assert json.loads(result["content"])["error"] == "not_found"
+    assert outcome == Answered(text="I can't delete files.")
+
+
+@pytest.mark.parametrize(
+    "bad_input",
+    [{}, {"files": "main.py"}, {"files": [{"path": "main.py"}]}, {"files": [{"path": "a.py", "content": "", "x": 1}]}],
+)
+def test_malformed_args_are_an_error_result(tmp_path, bad_input):
+    script = [
+        message(tool("toolu_1", "create_project", name="x"), stop_reason="tool_use"),
+        message({"type": "tool_use", "id": "toolu_2", "name": "write_files", "input": bad_input}, stop_reason="tool_use"),
+        message(text("Sorry, let me try again.")),
+    ]
+    w = World(tmp_path, script)
+    asyncio.run(w.run())
+    result = w.agent.messages[4]["content"][0]
+    assert result["is_error"] is True
+    assert json.loads(result["content"])["error"] == "invalid_args"
+    assert w.approvals.requests == [] and list(tmp_path.iterdir()) == []
+
+
+def test_rejection_goes_back_to_the_model(tmp_path):
+    script = hello_script()[:2] + [message(text("Okay, I didn't create anything."))]
+    w = World(tmp_path, script, approvals=[Decision.reject])
+    outcome = asyncio.run(w.run())
+    result = w.agent.messages[4]["content"][0]
+    assert json.loads(result["content"])["error"] == "rejected_by_user"
+    assert outcome == Answered(text="Okay, I didn't create anything.")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_iteration_limit(tmp_path):
+    endless = [message(tool(f"toolu_{i}", "list_files", dir=None), stop_reason="tool_use") for i in range(5)]
+    w = World(tmp_path, endless, max_iterations=3)
+    outcome = asyncio.run(w.run())
+    assert outcome.code == "too_many_steps" and len(w.client.calls) == 3
+
+
+def test_empty_answer_still_says_something(tmp_path):
+    w = World(tmp_path, [message(thinking())])
+    assert asyncio.run(w.run()) == Answered(text="Done.")
+
+
+# ----- conversation -----
+
+
+def test_conversation_is_append_only_across_two_tasks(tmp_path):
+    second = [
+        message(
+            thinking("sig_3"),
+            tool("toolu_4", "write_files", files=[{"path": "main.py", "content": 'print("Goodbye")\n'}]),
+            stop_reason="tool_use",
+        ),
+        message(text("main.py now prints Goodbye.")),
+    ]
+    w = World(tmp_path, hello_script() + second)
+
+    async def go():
+        await w.run()
+        after_first = copy.deepcopy(dump(w.agent.messages))
+        count = len(w.agent.messages)
+        outcome = await w.run("now make it say goodbye", task_id="tsk_2")
+        return after_first, count, outcome
+
+    after_first, count, outcome = asyncio.run(go())
+    assert outcome == Answered(text="main.py now prints Goodbye.")
+    # Everything from the first task is still there, byte for byte, and only new messages
+    # were added after it.
+    assert dump(w.agent.messages[:count]) == after_first
+    assert len(w.agent.messages) == count + 4
+    # Every request sent the previous request's conversation as an unchanged prefix.
+    for earlier, later in zip(w.client.sent, w.client.sent[1:]):
+        assert later.startswith(earlier[:-1])
+    # The second task knows the project and its files.
+    second_request = w.agent.messages[count]["content"]
+    assert '<task id="tsk_2" project="hello-world">' in second_request
+    assert "main.py" in second_request and second_request.endswith("now make it say goodbye")
+    assert (tmp_path / "hello-world" / "main.py").read_text() == 'print("Goodbye")\n'
+    assert w.approvals.requests[-1].files[0].action == "modified"
+
+
+def test_system_prompt_and_tools_are_identical_on_every_call(tmp_path):
+    w = World(tmp_path, hello_script())
+    asyncio.run(w.run())
+    first = w.client.calls[0]
+    for call in w.client.calls[1:]:
+        assert call["system"] == first["system"] and call["tools"] == first["tools"]
+    assert tool_definitions() == tool_definitions()
+
+
+def test_reset_starts_a_new_conversation(tmp_path):
+    w = World(tmp_path, [message(text("Hi.")), message(text("Hi again."))])
+    asyncio.run(w.run())
+    w.agent.reset()
+    asyncio.run(w.run())
+    assert len(w.agent.messages) == 2
+
+
+def test_cancel_during_a_tool_call_leaves_a_valid_conversation(tmp_path):
+    async def go():
+        waiting = asyncio.Event()
+
+        async def never(approval):
+            waiting.set()
+            await asyncio.Event().wait()
+
+        script = [
+            message(
+                tool("toolu_1", "create_project", name="x"),
+                tool("toolu_2", "write_files", files=[{"path": "a.py", "content": "1\n"}]),
+                tool("toolu_3", "list_files", dir=None),
+                stop_reason="tool_use",
+            )
+        ]
+        w = World(tmp_path, script, approvals=[never])
+        running = asyncio.create_task(w.run())
+        await waiting.wait()
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        return w
+
+    w = asyncio.run(go())
+    assert list(tmp_path.iterdir()) == []
+    results = w.agent.messages[-1]["content"]
+    assert [r["tool_use_id"] for r in results] == ["toolu_1", "toolu_2", "toolu_3"]
+    assert [r["is_error"] for r in results] == [False, True, True]
+
+
+# ----- API errors -----
+
+
+def test_authentication_error_never_echoes_the_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-FAKEfakeFAKE")
+    w = World(tmp_path, [api_error(anthropic.AuthenticationError, 401)])
+    outcome = asyncio.run(w.run())
+    assert outcome == Failed(code="auth", message="The Claude API key is missing or invalid.")
+    assert "FAKEfake" not in json.dumps([e.model_dump(mode="json") for e in w.log.events])
+    assert w.agent.messages == []
+
+
+def test_missing_credentials_are_a_spoken_failure(tmp_path):
+    w = World(tmp_path, [anthropic.AnthropicError("Could not resolve authentication method")])
+    assert asyncio.run(w.run()).code == "auth"
+
+
+@pytest.mark.parametrize(
+    "error", [(anthropic.RateLimitError, 429), (anthropic.OverloadedError, 529), (anthropic.InternalServerError, 500)]
+)
+def test_busy_is_spoken_and_retried_once(tmp_path, error):
+    w = World(tmp_path, [api_error(*error), message(text("Hello."))])
+    outcome = asyncio.run(w.run())
+    assert outcome == Answered(text="Hello.")
+    assert w.log.spoken() == ["Claude is busy, retrying.", "Hello."]
+    assert len(w.client.calls) == 2
+
+
+def test_busy_twice_fails(tmp_path):
+    w = World(tmp_path, [api_error(anthropic.RateLimitError, 429), api_error(anthropic.RateLimitError, 429)])
+    outcome = asyncio.run(w.run())
+    assert outcome.code == "busy" and len(w.client.calls) == 2
+    assert w.log.spoken() == ["Claude is busy, retrying.", "Claude is still busy. Try again in a minute."]
+
+
+def test_connection_error(tmp_path):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    w = World(tmp_path, [anthropic.APIConnectionError(request=request)])
+    outcome = asyncio.run(w.run())
+    assert outcome == Failed(code="offline", message="No internet connection to Claude.")
+
+
+def test_other_api_errors_fail_without_a_retry(tmp_path):
+    w = World(tmp_path, [api_error(anthropic.BadRequestError, 400)])
+    outcome = asyncio.run(w.run())
+    assert outcome.code == "api_error" and len(w.client.calls) == 1
+
+
+# ----- prompts, schemas, context -----
+
+
+def test_tool_schemas_are_strict(tmp_path):
+    unsupported = {"minLength", "maxLength", "minimum", "maximum", "minItems", "default", "title"}
+
+    def check(node):
+        if isinstance(node, dict):
+            assert not unsupported & (set(node) - set(node.get("properties", {})))
+            if node.get("type") == "object":
+                assert node["additionalProperties"] is False
+                assert node["required"] == list(node["properties"])
+            for key, value in node.items():
+                check(list(value.values()) if key == "properties" else value)
+        elif isinstance(node, list):
+            for item in node:
+                check(item)
+
+    tools = tool_definitions()
+    for definition in tools:
+        assert definition["strict"] is True and definition["description"]
+        check(definition["input_schema"])
+    names = [t["name"] for t in tools]
+    assert names == ["create_project", "open_project", "list_files", "read_file", "write_files", "run_program"]
+    assert not {"shell", "delete_file", "ask_user", "scan", "install"} & set(names)
+
+
+def test_strict_schema_keeps_a_property_named_like_a_keyword():
+    schema = {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}}}
+    assert strict_schema(schema) == {
+        "type": "object", "properties": {"title": {"type": "string"}},
+        "required": ["title"], "additionalProperties": False,
+    }
+
+
+def test_system_prompt_is_frozen_and_covers_the_rules():
+    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network"]:
+        assert phrase in SYSTEM_PROMPT
+    assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
+
+
+def test_task_message_without_and_with_a_project(tmp_path):
+    none = task_message(TaskContext(task_id="tsk_1", request="hello"))
+    assert none == '<task id="tsk_1" project="none">\nNo project is open.\n</task>\n\nhello'
+
+    root = tmp_path / "calc"
+    for rel in ["main.py", "src/ops.py", ".git/config", ".env", "__pycache__/x.pyc", "</untrusted>.txt"]:
+        try:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text("x")
+        except OSError:
+            pass  # that file name isn't allowed on Windows
+    task = TaskContext(task_id="tsk_2", request="explain it", project=ProjectRef(slug="calc", root=str(root)))
+    text_ = task_message(task)
+    assert "main.py\nsrc/ops.py" in text_
+    assert ".git" not in text_ and ".env" not in text_ and "pycache" not in text_
+    assert text_.count("</untrusted>") == 1 and text_.endswith("explain it")
+
+
+def test_task_message_tree_is_capped(tmp_path):
+    root = tmp_path / "big"
+    root.mkdir()
+    for i in range(205):
+        (root / f"f{i:03}.txt").write_text("")
+    text_ = task_message(TaskContext(task_id="t", request="r", project=ProjectRef(slug="big", root=str(root))))
+    assert "f199.txt" in text_ and "f200.txt" not in text_ and "5 more files" in text_
+
+
+def test_vocabulary_puts_file_stems_first(tmp_path):
+    root = tmp_path / "calc"
+    root.mkdir()
+    (root / "main.py").write_text("class Calculator:\n    def add_numbers(self):\n        pass\n\nasync def fetch_total():\n    pass\n")
+    (root / "notes.md").write_text("def not_code(): pass")
+    words = vocabulary(ProjectRef(slug="calc", root=str(root)))
+    assert words[:2] == ["main", "notes"]
+    assert {"main.py", "Calculator", "add_numbers", "fetch_total"} <= set(words)
+    assert "not_code" not in words and len(words) == len({w.casefold() for w in words})
+
+
+def test_make_agent_switches_on_one_setting():
+    assert isinstance(make_agent(Config(agent="stub")), StubAgent)
+    assert isinstance(make_agent(Config(agent="claude")), ClaudeAgent)
+
+
+# ----- live -----
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="needs ANTHROPIC_API_KEY")
+def test_live_hello_world(tmp_path):
+    """The real model, the real gateway, a fake runner. Costs a few cents."""
+    log, approvals, runner = EventLog(), FakeApprovals(), FakeRunner(tmp_path)
+    gateway = ToolGateway(runner, approvals, log, projects_dir=tmp_path)
+    agent = ClaudeAgent(Config.from_env())
+    stamps: list[float] = []
+    start = time.monotonic()
+
+    async def emit(event):
+        stamps.append(time.monotonic() - start)
+        await log(event)
+
+    task = TaskContext(task_id="tsk_live", request=REQUEST)
+    outcome = asyncio.run(agent.run(task, gateway, emit))
+    total = time.monotonic() - start
+    print(f"\nlive: first spoken progress {stamps[0]:.1f}s, total {total:.1f}s, model calls {len(agent.messages) // 2}")
+    assert isinstance(outcome, Answered), outcome
+    assert [a.kind for a in approvals.requests] == ["write_files", "run_program"]
+    assert len(list(tmp_path.rglob("*.py"))) == 1
+    assert runner.runs and "run.result" in log.types()
+
+
+# ----- the real SDK client, with the network replaced -----
+
+
+def test_real_sdk_client_builds_the_request_and_replays_thinking_blocks(tmp_path):
+    """Everything except the network: the real AsyncAnthropic serializes our request, and the
+    second request carries the first response's blocks back unchanged."""
+    bodies, headers = [], []
+    replies = [
+        {
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [thinking("sig_real"), tool("toolu_1", "create_project", name="hello world")],
+            "stop_reason": "tool_use", "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+        {
+            "id": "msg_2", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [text("Started hello-world.")],
+            "stop_reason": "end_turn", "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+    ]
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        headers.append(request.headers)
+        return httpx2.Response(200, json=replies[len(bodies) - 1])
+
+    async def go():
+        client = anthropic.AsyncAnthropic(
+            api_key="test-key-not-real",
+            max_retries=0,
+            http_client=anthropic.DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handler)),
+        )
+        w = World(tmp_path, [])
+        w.agent = ClaudeAgent(Config(), client=client)
+        return await w.run()
+
+    assert asyncio.run(go()) == Answered(text="Started hello-world.")
+    first, second = bodies
+    assert first["model"] == "claude-opus-5-5" and first["max_tokens"] == 16000
+    assert first["fallbacks"] == "default"
+    assert "server-side-fallback-2026-07-01" in headers[0]["anthropic-beta"]
+    assert first["output_config"] == {"effort": "medium"}
+    assert first["cache_control"] == {"type": "ephemeral"}
+    assert "thinking" not in first and "tool_choice" not in first and "stream" not in first
+    assert all(t["strict"] is True for t in first["tools"])
+    assistant = second["messages"][1]["content"]
+    assert assistant[0] == {"type": "thinking", "thinking": "", "signature": "sig_real"}
+    assert assistant[1]["type"] == "tool_use" and assistant[1]["id"] == "toolu_1"
+    result = second["messages"][2]["content"][0]
+    assert result["type"] == "tool_result" and result["tool_use_id"] == "toolu_1"
+    assert second["messages"][0] == first["messages"][0]
