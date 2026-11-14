@@ -417,6 +417,7 @@ def test_server_string_literals_have_no_run_ons():
 
 
 def test_mic_errors_end_a_sentence_before_the_recovery_tip():
+    pytest.importorskip("numpy")  # listen.py needs numpy; CI's server job has no voice group
     from artemis.voice.listen import _sentence
     from artemis.voice.speechlint import run_ons
 
