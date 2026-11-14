@@ -60,6 +60,7 @@ def test_findings_are_spoken_wrapped_and_need_no_approval(tmp_path, monkeypatch)
     outline = result.data["outline"]
     assert outline.count("</untrusted>") == 1 and outline.endswith("</untrusted>")  # page text can't escape
     assert w.approvals.requests == []
+    assert result.data["needs_review"].startswith('<untrusted source="page:index.html needs manual review">')
     assert w.calls == [str(w.root / "index.html")]
     spoken = w.log.spoken()
     assert "Checking index.html for accessibility." in spoken

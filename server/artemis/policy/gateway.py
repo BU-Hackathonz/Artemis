@@ -363,6 +363,12 @@ class ToolGateway:
             "problems": len(report.findings),
             "findings": wrap(f"page:{a.path} axe findings", findings or "none"),
             "outline": wrap(f"page:{a.path} accessibility tree", "\n".join(report.outline)),
+            # Checks axe couldn't decide (e.g. text over a gradient): a person has to look.
+            "needs_review": wrap(
+                f"page:{a.path} needs manual review",
+                "\n".join(f"{f.rule} at {f.target}: {f.message}" for f in getattr(report, "needs_review", []))
+                or "none",
+            ),
         }
 
     # ----- approvals -----
