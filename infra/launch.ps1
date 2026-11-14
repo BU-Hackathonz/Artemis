@@ -172,7 +172,8 @@ try {
     $startArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Here "start.ps1"),
         "-Agent", $chosen, "-Voice", $Voice, "-AppPath", $exe)
     if (-not $NoConversation) { $startArgs += "-Conversation" }  # on by default here (contracts.md 5.4)
-    # start.ps1 exit codes: 0 normal close, 1 could not start, 2 the core stopped while the app ran.
+    # start.ps1 exit codes: 0 normal close, 1 could not start, 2 the core stopped while the app ran,
+    # 3 the app exited with an error code.
     # Anything but 0 keeps the window open: a double-click user must be able to read why it stopped.
     & powershell.exe @startArgs
     $code = $LASTEXITCODE
