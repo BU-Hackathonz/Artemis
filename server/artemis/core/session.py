@@ -93,6 +93,18 @@ def _default_earcon() -> Callable[[str], float] | None:
     return play
 
 
+MAX_CUE_WAIT = 0.3  # seconds: the longest a result tone may hold back its spoken line
+
+
+def _cue_wait(duration: object) -> float:
+    """How long to wait for an earcon before the line: its duration, capped; 0 for bad values."""
+    if isinstance(duration, bool) or not isinstance(duration, int | float):
+        return 0.0
+    if duration != duration or duration <= 0:  # NaN or negative
+        return 0.0
+    return min(float(duration), MAX_CUE_WAIT)
+
+
 def _result_cue(draft: EventDraft) -> str | None:
     """The earcon for a spoken run result or approval request; None for every other event."""
     if draft.type == "run.result":
@@ -179,13 +191,18 @@ class Session:
             # Said by the task itself while it is being canceled: the gateway's report of what
             # the cancel stopped ("Canceled. Nothing was written.", "Canceled while running main.py.").
             task.cancel_reported = True
-        if self._earcon and draft.announce and not getattr(self.voice, "listening", False):
+        if self._earcon and draft.announce and not getattr(
+            self.voice, "busy_listening", getattr(self.voice, "listening", False)
+        ):
             cue = _result_cue(draft)
             if cue:
                 try:
-                    self._earcon(cue)  # plays in the background; the spoken line follows on the bus
+                    duration = self._earcon(cue)  # starts the tone; returns its length in seconds
                 except Exception:  # a cue failing must never stop the event
                     log.exception("result earcon %s failed", cue)
+                    duration = 0.0
+                # Let the tone finish (capped) so the spoken line does not talk over it.
+                await asyncio.sleep(_cue_wait(duration))
         await self.bus.emit(draft)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
