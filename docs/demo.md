@@ -257,7 +257,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 
 | # | Check | How | Pass means | Owner | Status |
 |---|---|---|---|---|---|
-| 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | not run |
+| 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | pass, Sat Nov 14, verified on Yaovi's and David's laptops (registration only; the NVDA line was not checked) |
 | 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
 | 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` is "create a Python program that prints Hello World, and run it" word for word (the wake word is stripped), or the misses are posted | Yaovi | not run |
 | 4 | Keyboard path to Start listening | NVDA on, Tab from the request field | Reaches **Start listening** past the enabled buttons (Repeat, Stop) and the activity log (Send and Cancel are disabled when idle) | Yaovi | not run |
