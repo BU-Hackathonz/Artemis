@@ -74,6 +74,14 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
      the user's NVDA voice. If the DLL is missing, the core goes silent and the app's activity log
      speaks through NVDA instead.
    - Off: the core speaks with Windows SAPI. Never both at once.
+   - **Clearer voice (NVDA on).** What you hear is NVDA's own synthesizer; Artemis never changes its
+     voice or rate (in conversation mode "faster" and "slower" only say so), so tune NVDA first: NVDA
+     menu (NVDA+N) → Preferences → Settings → Speech (NVDA+Control+V). **Change...** picks the
+     synthesizer: Windows OneCore voices (NVDA's default) or eSpeak NG (built into NVDA). Then try
+     each **Voice**, set **Rate** (0 to 100) to a pace judges can follow, and leave **Rate boost**
+     off. More OneCore voices: Windows Settings → Time & language → Speech → Manage voices →
+     Add voices, then restart NVDA. Without NVDA the core uses SAPI: the Windows default voice and
+     rate unless `ARTEMIS_SAPI_VOICE` / `ARTEMIS_SAPI_RATE` are set (`infra/README.md`).
 4. **Global shortcut.** Quit apps that may take Ctrl+Shift+Space as a global shortcut (desktop
    assistants' quick-entry keys are likely suspects). Start Artemis and listen: if it says the
    push-to-talk shortcut couldn't be registered, apply another chord (see Keys above) before the
