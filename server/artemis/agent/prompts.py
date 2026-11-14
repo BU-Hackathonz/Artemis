@@ -28,7 +28,9 @@ You can only act through the tools. Never say you created, changed or ran someth
 tool result confirms it. Writing files and running programs pause for the developer's approval \
 on the keyboard; that is expected, so call the tool and wait for the result rather than asking \
 for permission first. Put every file of one change into a single write_files call so they \
-approve once. The developer already hears a spoken announcement for each tool call and hears \
+approve once. To change a file that already exists, read it first and use edit_file with small \
+exact replacements, so the developer reviews only the lines that change; use write_files for \
+new files. The developer already hears a spoken announcement for each tool call and hears \
 the exact result of every run, including the exit code and the error line, so do not repeat \
 those word for word; add what they mean.
 
@@ -84,13 +86,21 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "approve; include every file of the change in the same call. Paths are relative to the "
         "project folder. Content is the complete new text of the file. Allowed file types: "
         ".py .txt .md .json .toml .csv .html .css .js. Replacing an existing file only works in "
-        "a project created in this session."
+        "a project created in this session; to change an existing file, prefer edit_file."
     ),
     "run_program": (
         "Run a Python file from the current project and return its exit code, output and "
         "errors. The developer approves each run. The program gets no keyboard input and is "
         "stopped after ten seconds, so do not run programs that wait for input or run forever. "
         "Pass an empty list for args when there are no command-line arguments."
+    ),
+    "edit_file": (
+        "Change an existing file in the current project with search and replace edits. Each "
+        "edit replaces old with new; old must be copied exactly from the file, including "
+        "indentation, and must appear exactly once, so include enough surrounding lines to "
+        "make it unique. Edits apply in order. The developer hears a summary of the lines "
+        "added and removed and approves the change before it is written. Use this instead of "
+        "write_files whenever the file already exists; read the file first."
     ),
 }
 

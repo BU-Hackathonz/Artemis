@@ -28,6 +28,7 @@ from artemis.contracts import (
     Approvals,
     CreateProjectArgs,
     Decision,
+    EditFileArgs,
     Emit,
     ErrorData,
     EventDraft,
@@ -466,7 +467,12 @@ class ToolGateway:
             raise _ToolError(
                 "invalid_args", f"At most {MAX_FILES_PER_BATCH} files can be written at once."
             )
-        plan = self._plan_write(project, a.files)
+        return await self._commit(task_id, project, lambda: self._plan_write(project, a.files))
+
+    async def _commit(self, task_id: str, project: ProjectRef, make_plan) -> dict:
+        """Scan, ask, re-validate and write. `make_plan` checks the change against the disk as
+        it is at that moment; it is called before asking and again right before writing."""
+        plan = make_plan()
         findings = await self._scan_proposed(task_id, plan)
 
         for _attempt in range(2):
@@ -476,7 +482,7 @@ class ToolGateway:
                 await self._rejected(task_id, approval, "Nothing was written.")
             # Re-validate right before executing: the files may have changed while the
             # user was deciding.
-            plan = self._plan_write(project, a.files)
+            plan = make_plan()
             if decision is Decision.approve and self._write_hash(project, plan) == approval.approval_hash:
                 await self._resolved(task_id, approval, "approve", "user")
                 break
@@ -518,6 +524,54 @@ class ToolGateway:
             "files": [c.model_dump(exclude={"op_id"}) for c in changes],
             "findings": [f.model_dump() for f in findings],
         }
+
+    # ----- edit_file -----
+
+    def _plan_edit(self, project: ProjectRef, a: EditFileArgs) -> list[_Write]:
+        """Apply search/replace edits to the file as it is on disk right now. Each `old` must
+        match exactly once, so the developer approves an unambiguous change."""
+        root = Path(project.root)
+        target = safe_resolve(root, a.path, for_write=True)
+        if not target.is_file():
+            raise _ToolError("not_found", f"There is no file named {a.path}.")
+        check_read_size(target, a.path)
+        rel = target.relative_to(root.resolve()).as_posix()
+        old = target.read_bytes()
+        try:
+            text = old.decode("utf-8")
+        except UnicodeDecodeError:
+            raise PathRejected(f"{rel} is not a UTF-8 text file, so I can't edit it.") from None
+        # Match the file's own line endings, whichever the model used.
+        crlf = "\r\n" in text
+
+        def endings(value: str) -> str:
+            value = value.replace("\r\n", "\n")
+            return value.replace("\n", "\r\n") if crlf else value
+
+        for number, edit in enumerate(a.edits, start=1):
+            find, replacement = endings(edit.old), endings(edit.new)
+            count = text.count(find) if find else 0
+            if count == 0:
+                raise _ToolError(
+                    "invalid_args",
+                    f"Edit {number}: the old text was not found in {rel}. "
+                    "Read the file again and copy the text exactly.",
+                )
+            if count > 1:
+                raise _ToolError(
+                    "invalid_args",
+                    f"Edit {number}: the old text appears {count} times in {rel}. "
+                    "Include more surrounding lines so it matches once.",
+                )
+            text = text.replace(find, replacement)
+        if text.encode("utf-8") == old:
+            raise _ToolError("invalid_args", f"The edits don't change {rel}.")
+        check_write_size(text, rel)
+        return [_Write(path=rel, old=old, content=text)]
+
+    async def _edit_file(self, task_id: str, a: EditFileArgs) -> dict:
+        project = self._require_project()
+        return await self._commit(task_id, project, lambda: self._plan_edit(project, a))
 
     # ----- run_program -----
 

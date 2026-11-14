@@ -334,7 +334,7 @@ def test_cancel_after_the_write_reports_what_was_written(tmp_path):
 # ----- unknown tool, malformed args -----
 
 
-@pytest.mark.parametrize("name", ["delete_file", "shell", "install_package", "ask_user", "edit_file", ""])
+@pytest.mark.parametrize("name", ["delete_file", "shell", "install_package", "ask_user", "scan", ""])
 def test_unknown_tool(tmp_path, name):
     w = World(tmp_path)
     result = asyncio.run(w.gateway.call("tsk_1", name, {"command": "rm -rf /"}))

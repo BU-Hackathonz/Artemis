@@ -454,7 +454,7 @@ def test_tool_schemas_are_strict(tmp_path):
         assert definition["strict"] is True and definition["description"]
         check(definition["input_schema"])
     names = [t["name"] for t in tools]
-    assert names == ["create_project", "open_project", "list_files", "read_file", "write_files", "run_program"]
+    assert names == ["create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file"]
     assert not {"shell", "delete_file", "ask_user", "scan", "install"} & set(names)
 
 
