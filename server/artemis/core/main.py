@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from artemis.agent.config import Config
+from artemis.policy.redact import install_log_redaction
 
 from .app import Core, create_app
 
@@ -74,6 +75,7 @@ def runner_factory():
 
 
 def build():
+    install_log_redaction()  # core.log gets tracebacks too; uvicorn has configured logging by now
     config = Config.from_env()
     log_dir = Path(os.environ.get("ARTEMIS_LOG_DIR") or Path.home() / ".artemis" / "logs")
     core = Core(
