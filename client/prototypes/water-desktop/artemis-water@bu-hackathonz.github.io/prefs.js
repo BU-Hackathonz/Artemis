@@ -40,6 +40,11 @@ export default class ArtemisWaterPrefs extends ExtensionPreferences {
         agentLook.selected = Math.max(looks.indexOf(settings.get_string('agent-look')), 0);
         agentLook.connect('notify::selected', () => settings.set_string('agent-look', looks[agentLook.selected]));
         group.add(agentLook);
+        const fonts = ['Inter', 'Space Grotesk', 'Manrope', 'Outfit', 'Sora', 'Ubuntu Sans'];
+        const font = new Adw.ComboRow({title: 'Font', subtitle: 'For the island\'s panel and board', model: Gtk.StringList.new(fonts)});
+        font.selected = Math.max(fonts.indexOf(settings.get_string('ui-font')), 0);
+        font.connect('notify::selected', () => settings.set_string('ui-font', fonts[font.selected]));
+        group.add(font);
         const motion = new Adw.SwitchRow({
             title: 'Animate the orb while it rests',
             subtitle: 'It slowly morphs and tumbles. Off: it holds still until a command runs (lighter on the GPU).',

@@ -26,6 +26,7 @@ import {LensEffect} from './lensEffect.js';
 import {OrbEffect} from './orbEffect.js';
 import {RingEffect} from './ringEffect.js';
 import {Island} from './island.js';
+import {CaretTracker} from './caret.js';
 import {CommandRunner, COMMANDS} from './presets.js';
 
 // Loop.
@@ -111,7 +112,7 @@ export default class ArtemisWaterExtension extends Extension {
             if (!this._coverAll()) this._reattachSoon();
         });
         this._homeId = this._settings.connect('changed::orb-home', () => { if (!this._drag) this._agentGoHome(false); });
-        this._settingIds = ['cover-everything', 'style', 'driver', 'orb-size', 'agent-look'].map((k) =>
+        this._settingIds = ['cover-everything', 'style', 'driver', 'orb-size', 'agent-look', 'ui-font'].map((k) =>
             this._settings.connect(`changed::${k}`, () => { this._drops = []; this._lens = null; this._orb = null; this._morph = null; this._setupAgent(); this._reattachSoon(); }));
         this._workAreaId = global.display.connect('workareas-changed', () => this._agentGoHome(true));
 
@@ -123,6 +124,8 @@ export default class ArtemisWaterExtension extends Extension {
 
     disable() {
         this._runner?.destroy();
+        this._caret?.destroy();
+        this._caret = null;
         this._runner = null;
         this._teardownAgentUI();
         this._button?.destroy();
@@ -246,6 +249,7 @@ export default class ArtemisWaterExtension extends Extension {
                 onRun: (cmd) => this._runCommand(cmd),
                 onStop: () => this._runner.stop(),
                 onSettings: () => this.openPreferences(),
+                font: this._settings.get_string('ui-font'),
                 // the pill resizes with its status: follow its ring, but never mid-flight
                 onMoved: () => { if (!this._agent?.awake && !this._homeTimer) this._agentGoHome(true); },
             });
@@ -275,6 +279,7 @@ export default class ArtemisWaterExtension extends Extension {
                 this._wake();
             },
             flyHome: () => this._agentGoHome(false),
+            caret: () => (this._caret ??= new CaretTracker()).position(),
             // ms a command waits before moving, so the ring can collapse into its droplet first
             startDelay: () => (this._isRing() ? MORPH_SECONDS * 1000 + 80 : 0),
         };
@@ -393,7 +398,10 @@ export default class ArtemisWaterExtension extends Extension {
         this._runner.run(cmd.name, (r) => cmd.run(r), () => {
             if (this._runner?.running) return; // another command took over
             this._stopItems?.forEach((i) => { i.visible = false; });
-            this._island?.setState('done');
+            const err = this._runner.lastError;
+            this._island?.setState('done', '', err ? `Stopped: ${err}` : (cmd.summary ?? `Finished: ${cmd.name}`));
+            if (!err) this._doneGlow = 1; // the ball lights up green as it comes home
+            this._wake();
         });
     }
 
@@ -544,7 +552,7 @@ export default class ArtemisWaterExtension extends Extension {
         // trail) and opens back into the ring at home.
         const morph = this._isRing() ? this._tickMorph(now, A) : {value: 0, busy: false};
         // Top-edge island: at home the droplet hides behind the pill's ring; it only shows in flight.
-        const tucked = this._isIsland() && !A.awake;
+        const tucked = false; // island: the ring rests, small, in the pill's slot
         const orb = this._tickOrb(now, A.x, A.y, hidden || tucked, s, morph);
         if (this._sphereButton) this._sphereButton.visible = !hidden && !A.awake && morph.value === 0;
 
@@ -630,6 +638,8 @@ export default class ArtemisWaterExtension extends Extension {
         // Moving fast churns it; otherwise any wobble calms down.
         O.energy = Math.max(O.energy * Math.exp(-dt * ORB_ENERGY_DECAY), Math.min(speed / 2500, 0.45));
         O.flash *= Math.exp(-dt * RING_FLASH_DECAY);
+        this._doneGlow = (this._doneGlow ?? 0) * Math.exp(-dt * 0.7);
+        if (this._doneGlow < 0.01) this._doneGlow = 0;
         if (O.flash < 0.01) O.flash = 0;
         // Held: while its menu is open the ring stays lively: a steady jiggle, more glow, and
         // little random pokes to its jelly spring so the physics keeps going.
@@ -653,7 +663,7 @@ export default class ArtemisWaterExtension extends Extension {
 
         const live = s.get_boolean('orb-motion') && this._interface.enable_animations;
         const settled = speed < 1 && Math.hypot(x - O.x, y - O.y) < 0.5 && O.stretch < 0.002 &&
-            Math.abs(O.scale - 1) < 0.002 && Math.abs(O.sv) < 0.01 && O.energy < 0.02 && O.flash === 0 && !O.hold && O.vis === 1 &&
+            Math.abs(O.scale - 1) < 0.002 && Math.abs(O.sv) < 0.01 && O.energy < 0.02 && O.flash === 0 && !this._doneGlow && !O.hold && O.vis === 1 &&
             !morph.busy;
         if (live || !settled) {
             // The slow life of the orb: its outline morphs and it tumbles, both faster when stirred.
@@ -662,15 +672,17 @@ export default class ArtemisWaterExtension extends Extension {
             O.spin += dt * (0.4 + O.energy * 1.4 + speed / 900) * (this._agent?.awake ? 3 : 1);
         }
         if (live || !settled || !this._lensOn) {
-            const radius = s.get_double('orb-size') / 2 * Math.max(O.scale, 0.3);
+            const radius = s.get_double('orb-size') / 2 * Math.max(O.scale, 0.3) * (this._isIsland() && !this._agent?.awake ? 0.42 : 1);
             const shape = [O.dir[0], O.dir[1], O.stretch, live ? O.energy : O.energy * (settled ? 0 : 1)];
             const light = [s.get_double('highlights'), ORB_DISPERSION, O.morph % 1000, O.spin % 6283.1853];
-            const glow = RING_GLOW + RING_FLASH_GLOW * O.flash + HOLD_GLOW * O.hold + 0.1 * Math.min(O.energy, 1);
+            const working = this._agent?.awake ? 0.45 : 0; // shines while it works
+            const glow = RING_GLOW + working + RING_FLASH_GLOW * O.flash + HOLD_GLOW * O.hold + 0.1 * Math.min(O.energy, 1);
             const wobble = Math.max(O.flash, HOLD_WOBBLE * O.hold);
             for (const {actor, rect} of this._targets()) {
                 const orb = this._effects.get(actor)?.lens;
                 if (!orb) continue;
-                orb.update([rect.width, rect.height], [O.x - rect.x, O.y - rect.y, radius, O.vis], shape, light, glow, morph.value, wobble, O.seed ?? 0, O.flash);
+                orb.update([rect.width, rect.height], [O.x - rect.x, O.y - rect.y, radius, O.vis], shape, light, glow, morph.value, wobble, O.seed ?? 0, O.flash,
+                    this._agent?.awake ? [0.85, 0.6, 1.0, 0.3] : [1, 1, 1, 0]);
             }
         }
         this._setLens(true);

@@ -60,12 +60,14 @@ export class CommandRunner {
         const job = {cancelled: false, timers: new Set(), wake: null};
         this._job = job;
         this._body.setAwake(true);
+        this.lastError = null;
         try {
             const delay = this._body.startDelay?.() ?? 0;
             if (delay > 0) await this.sleep(delay);
             await command(this);
         } catch (e) {
             if (!(e instanceof Cancelled)) {
+                this.lastError = e.message;
                 logError(e, `Artemis command "${name}"`);
                 Main.notify('Artemis', `"${name}" stopped: ${e.message}`);
             }
@@ -140,9 +142,21 @@ export class CommandRunner {
             this._press(keyval);
             await this.sleep(35);
             this._release(keyval);
-            this.tap(ch === ' ' ? 0.25 : 0.4);
+            this._followCaret(ch);
+            this.tap(ch === ' ' ? 0.15 : 0.25);
             await this.sleep(perChar + Math.round((Math.random() - 0.5) * perChar * 0.6));
         }
+    }
+
+    /** The ball rides the text cursor: the app's real caret if it reports one, else a pen that
+     *  writes along the line (pen is set where typing starts). */
+    _followCaret(ch) {
+        const real = this._body.caret?.();
+        if (real) { this._body.moveTo(real.x, real.y); return; }
+        const pen = this.pen;
+        if (!pen) return;
+        if (ch === '\n') { pen.x = pen.x0; pen.y += 22; } else pen.x += 9;
+        this._body.moveTo(pen.x, pen.y);
     }
 
     /** Wait until fn() returns something truthy (polling), or fail after ms. */
@@ -228,7 +242,9 @@ async function typeInto(r, win, text, settleMs = 900) {
     await r.sleep(settleMs);
     const p = centreOf(win, 0.3, 0.25);
     await r.fly(p.x, p.y, 450, 0.1);
+    r.pen = {x: p.x, y: p.y, x0: p.x};
     await r.type(text, safe);
+    r.pen = null;
 }
 
 // --- Commands -----------------------------------------------------------------------------------
@@ -236,6 +252,7 @@ async function typeInto(r, win, text, settleMs = 900) {
 export const COMMANDS = [
     {
         name: 'VS Code: type "Hello world"',
+        summary: 'Opened VS Code and typed “Hello world”.',
         async run(r) {
             const appId = 'com.microsoft.VSCode.desktop';
             if (!Shell.AppSystem.get_default().lookup_app(appId)) throw new Error('Visual Studio Code is not installed');
@@ -252,6 +269,7 @@ export const COMMANDS = [
     },
     {
         name: 'Terminal: run echo "Hello from Artemis"',
+        summary: 'Opened a terminal and ran echo “Hello from Artemis”.',
         async run(r) {
             const appId = 'org.gnome.Ptyxis.desktop';
             await visitIcon(r, appId);
@@ -264,6 +282,7 @@ export const COMMANDS = [
     },
     {
         name: 'Text Editor: write a short note',
+        summary: 'Wrote a short note in Text Editor.',
         async run(r) {
             const appId = 'org.gnome.TextEditor.desktop';
             await visitIcon(r, appId);
@@ -276,6 +295,7 @@ export const COMMANDS = [
     },
     {
         name: 'Files: open your Home folder',
+        summary: 'Opened your Home folder in Files.',
         async run(r) {
             await visitIcon(r, 'org.gnome.Nautilus.desktop');
             const win = await openWindow(r, ['nautilus', '--new-window', GLib.get_home_dir()], /nautilus/i, 'Files');
@@ -289,6 +309,7 @@ export const COMMANDS = [
     },
     {
         name: 'Browser: open example.com',
+        summary: 'Opened example.com in your browser.',
         async run(r) {
             const {w, h} = r.screen();
             await r.fly(w * 0.5, h * 0.12, 650, 0.25);
@@ -301,6 +322,7 @@ export const COMMANDS = [
     },
     {
         name: 'Tour the screen',
+        summary: 'Toured the screen: every corner and the middle.',
         async run(r) {
             const {w, h} = r.screen();
             const stops = [[0.08, 0.12], [0.92, 0.12], [0.92, 0.85], [0.5, 0.5], [0.08, 0.85], [0.5, 0.25]];
@@ -313,6 +335,7 @@ export const COMMANDS = [
     },
     {
         name: 'Peek at Activities',
+        summary: 'Opened Activities for a moment, then closed it.',
         async run(r) {
             await r.fly(40, 40, 600, 0.25);
             r.tap(1);

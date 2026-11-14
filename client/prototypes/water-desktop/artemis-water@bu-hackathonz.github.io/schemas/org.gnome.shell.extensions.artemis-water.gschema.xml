@@ -8,6 +8,12 @@
       <summary>Driver</summary>
       <description>agent: a liquid-glass sphere rests in the bottom-left corner and zips through commands; the mouse stirs nothing. pointer: the effect follows the mouse pointer (see Style).</description>
     </key>
+    <key name="ui-font" type="s">
+      <choices><choice value="Inter"/><choice value="Space Grotesk"/><choice value="Manrope"/><choice value="Outfit"/><choice value="Sora"/><choice value="Ubuntu Sans"/></choices>
+      <default>'Inter'</default>
+      <summary>Font</summary>
+      <description>Font for the island's panel and board.</description>
+    </key>
     <key name="agent-look" type="s">
       <choices><choice value="island"/><choice value="ring"/><choice value="orb"/></choices>
       <default>'island'</default>

@@ -23,6 +23,7 @@ uniform vec4 uOrb;      // ring centre x, y (px), radius (px), visibility 0..1
 uniform vec4 uShape;    // ring motion direction x, y, stretch (0 = still), energy (0 = calm)
 uniform vec4 uLight;    // highlights, dispersion, morph time (s), spin angle (rad)
 uniform float uGlow;    // halo strength (0 = none)
+uniform vec4 uTint;     // rgb, amount: recolours the liquid and its glow (working shine, done green)
 uniform float uMorph;   // 0 = ring, 1 = collapsed into one droplet (smoothed in JS)
 uniform vec4 uPress;    // x: how wobbly (click, or held while its menu is open); y: random seed per click;
                         // z: splash (droplets flung out right after a click, fading to 0)
@@ -156,6 +157,7 @@ if (uOrb.w > 0.0 && dot(q, q) < 2.0) {
     float lip = smoothstep(0.0, 0.03, depth) * (1.0 - smoothstep(0.03, 0.09, depth));
     liq += vec3(0.9, 0.78, 1.0) * lip * 0.24 * hl;
 
+    liq = mix(liq, vec3(dot(liq, vec3(0.3, 0.5, 0.2))) * uTint.rgb * 1.9 + uTint.rgb * 0.12, uTint.a);
     col = mix(col, liq, inside * uOrb.w);
   }
   // A soft halo around the liquid that slowly breathes (brighter as a travelling droplet).
@@ -166,6 +168,7 @@ if (uOrb.w > 0.0 && dot(q, q) < 2.0) {
                * (1.0 - smoothstep(1.15, 1.41, length(q)));
     vec3 gcol = mix(vec3(0.7, 0.42, 1.0), spectral(0.5 + 0.45 * sin(ang - spin + t * 0.3)), 0.2);
     float breathe = 0.82 + 0.18 * sin(t * 1.4);
+    gcol = mix(gcol, uTint.rgb, uTint.a);
     col += gcol * halo * (1.0 - 0.5 * inside) * g * breathe * uOrb.w;
   }
 }
@@ -183,6 +186,7 @@ class RingEffect extends Shell.GLSLEffect {
             light: this.get_uniform_location('uLight'),
             glow: this.get_uniform_location('uGlow'),
             morph: this.get_uniform_location('uMorph'),
+            tint: this.get_uniform_location('uTint'),
             press: this.get_uniform_location('uPress'),
         };
     }
@@ -199,7 +203,8 @@ class RingEffect extends Shell.GLSLEffect {
      * @param {number} seed  random per click (each splash looks different)
      * @param {number} splash  droplets flung out (1 right after a click, fading to 0)
      */
-    update(view, orb, shape, light, glow = 0, morph = 0, press = 0, seed = 0, splash = 0) {
+    update(view, orb, shape, light, glow = 0, morph = 0, press = 0, seed = 0, splash = 0, tint = [1, 1, 1, 0]) {
+        this.set_uniform_float(this._loc.tint, 4, tint);
         this.set_uniform_float(this._loc.press, 4, [press, seed, splash, 0]);
         this.set_uniform_float(this._loc.view, 2, view);
         this.set_uniform_float(this._loc.orb, 4, orb);

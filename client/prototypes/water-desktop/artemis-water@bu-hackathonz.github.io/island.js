@@ -11,13 +11,14 @@ import GLib from 'gi://GLib';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import Cairo from 'gi://cairo';
+import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const PURPLE = [0.66, 0.33, 0.97];
-const GAP = 3;          // logical px between the top bar and the top of the pill
+const GAP = -4;          // logical px between the top bar and the top of the pill
 const SHOULDER = 46;     // logical px the edge line takes to curve into the pill
-const DONE_MS = 4000;    // how long "Done" stays
+const DONE_MS = 7000;    // how long "Done" stays
 
 const words = (s) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
 
@@ -49,8 +50,26 @@ export class Island {
         this._chevron = new St.Button({style_class: 'artemis-island-chevron', can_focus: true, accessible_name: 'Open Artemis', child: chevronIcon});
         this._chevron.connect('clicked', () => this.toggle());
         const sep = () => new St.Widget({style_class: 'artemis-island-sep', y_align: Clutter.ActorAlign.CENTER});
-        for (const child of [this._ring, sep(), this._name, sep(), this._waveButton, this._status, this._chevron]) this._pill.add_child(child);
+        for (const child of [this._ring, sep(), this._waveButton, this._chevron]) this._pill.add_child(child);
         Main.layoutManager.addChrome(this._pill, {trackFullscreen: true});
+        // The summary tab: what the last command did, beside the pill.
+        this._tab = new St.BoxLayout({style_class: 'artemis-island-tab', vertical: true, visible: false, reactive: true});
+        this._tabTitle = new St.Label({style_class: 'artemis-island-tab-title'});
+        this._tabText = new St.Label({style_class: 'artemis-island-tab-text'});
+        this._tabText.clutter_text.line_wrap = true;
+        this._tabStop = new St.Button({style_class: 'artemis-island-tab-stop', label: 'Stop', can_focus: true, x_align: Clutter.ActorAlign.START});
+        this._tabStop.connect('clicked', () => this._opts.onStop());
+        for (const c of [this._tabTitle, this._tabText, this._tabStop]) this._tab.add_child(c);
+        // The board is never put on screen (removed by request); kept only so old calls stay harmless.
+        try { this._tab.add_effect(new Shell.BlurEffect({mode: Shell.BlurMode.BACKGROUND, brightness: 0.75})); } catch { /* no blur */ }
+        this._tab.connect('notify::width', () => this._layout());
+        // Frosted glass: blur what's behind the pill (like Windows acrylic), tinted by the CSS.
+        try {
+            const blur = new Shell.BlurEffect({mode: Shell.BlurMode.BACKGROUND, brightness: 0.75});
+            if ('radius' in blur) blur.radius = 24; else blur.sigma = 12;
+            if ('corner_radius' in blur) blur.corner_radius = 20;
+            this._pill.add_effect(blur);
+        } catch (e) { console.warn(`Artemis: no blur (${e.message})`); }
         this._pill.connect('destroy', () => { this._dead = true; }); // GNOME can destroy chrome first at shutdown
 
         // The panel: a popup menu under the pill (keyboard focus, Escape and modality as GNOME's own).
@@ -74,6 +93,7 @@ export class Island {
         this._pill.connect('notify::height', () => this._layout());
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._layout());
         this._panelId = Main.layoutManager.panelBox.connect('notify::height', () => this._layout());
+        if (opts.font) for (const a of [this._tab, this._menu.actor]) a.style = `font-family: "${opts.font}";`;
         this._layout();
     }
 
@@ -84,12 +104,13 @@ export class Island {
         if (this._monitorsId) Main.layoutManager.disconnect(this._monitorsId);
         if (this._panelId) Main.layoutManager.panelBox.disconnect(this._panelId);
         this._menu?.destroy();
+        this._tab?.destroy();
         for (const actor of [this._pill, this._edge]) {
             if (!actor) continue;
             Main.layoutManager.removeChrome(actor);
             actor.destroy();
         }
-        this._menu = this._pill = this._edge = null;
+        this._menu = this._pill = this._edge = this._tab = null;
     }
 
     /** Where the ring sits (stage px): the droplet leaves from and returns to here. */
@@ -106,16 +127,22 @@ export class Island {
     toggle() { this._menu?.toggle(); }
 
     /** 'idle' | 'working' | 'done' */
-    setState(state, text = '') {
+    setState(state, text = '', summary = '') {
         if (!this._pill || this._dead) return;
         if (this._doneTimer) { GLib.source_remove(this._doneTimer); this._doneTimer = 0; }
         this._state = state;
-        for (const pc of ['working', 'done']) this._ring.remove_style_pseudo_class(pc);
-        if (state !== 'idle') this._ring.add_style_pseudo_class(state);
+        for (const pc of ['working', 'done']) { this._ring.remove_style_pseudo_class(pc); this._pill.remove_style_pseudo_class(pc); }
+        if (state !== 'idle') { this._ring.add_style_pseudo_class(state); this._pill.add_style_pseudo_class(state); }
         this._status.text = state === 'working' ? `Working · ${text}` : state === 'done' ? 'Done' : '';
         this._status.visible = state !== 'idle';
         this._pill.accessible_name = state === 'idle' ? 'Artemis' : `Artemis: ${this._status.text}`;
         this._stopItem.visible = state === 'working';
+        // The board under the widget: what Artemis is doing, then what it did.
+        this._tabTitle.text = state === 'working' ? 'WORKING' : 'DONE';
+        this._tabText.text = state === 'working' ? text : summary;
+        this._tabStop.visible = state === 'working';
+        this._tab.visible = false; // no board: the widget goes straight back to its initial look
+        if (state === 'done') this._tab.add_style_pseudo_class('done'); else this._tab.remove_style_pseudo_class('done');
         if (state === 'done') {
             this._doneTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, DONE_MS, () => {
                 this._doneTimer = 0;
@@ -171,9 +198,11 @@ export class Island {
         if (!m) return;
         const s = this._scale;
         const panelBottom = m.y + Main.layoutManager.panelBox.height;
-        const px = Math.round(m.x + (m.width - this._pill.width) / 2);
+        if (this._state === 'idle' || !this._idleWidth) this._idleWidth = this._pill.width;
+        const px = Math.round(m.x + (m.width - this._idleWidth) / 2); // the ring's slot never moves
         const py = Math.round(panelBottom + GAP * s);
         this._pill.set_position(px, py);
+        if (this._tab) this._tab.set_position(px + Math.round((this._idleWidth - this._tab.width) / 2), py + this._pill.height + Math.round(8 * s)); // under the widget
         // The edge strip runs from the top of the screen (so it reserves space as a top strut) to
         // just below the pill; only the line along the bar's bottom edge is drawn in it.
         const h = Math.round(py + this._pill.height + 12 * s - m.y);
@@ -238,22 +267,24 @@ export class Island {
         }
     }
 
+    // Style B: mirrored bars. Short and quiet at rest; alive while working.
     _paintWave(area) {
         const cr = area.get_context();
         const [w, h] = area.get_surface_size();
         const active = this._state === 'working';
-        const amp = active ? 0.36 : 0.22;
-        cr.setLineWidth(2 * this._scale);
-        cr.setLineCap(Cairo.LineCap.ROUND);
-        cr.setSourceRGBA(0.80, 0.70, 0.98, active ? 0.95 : 0.6);
-        const steps = 48;
-        for (let i = 0; i <= steps; i++) {
-            const x = 3 + (w - 6) * (i / steps);
-            const env = Math.sin(Math.PI * i / steps); // calm at both ends
-            const y = h / 2 + Math.sin(i / steps * Math.PI * 4 + this._phase * 6) * h * amp * (0.55 + 0.45 * env);
-            if (i === 0) cr.moveTo(x, y); else cr.lineTo(x, y);
+        const n = 8, bw = 3 * this._scale, gap = (w - n * bw) / (n - 1);
+        cr.setSourceRGBA(0.85, 0.75, 0.99, active ? 0.95 : 0.55);
+        for (let i = 0; i < n; i++) {
+            const rest = (i % 2 ? 6 : 4) * this._scale;
+            const live = h * (0.25 + 0.7 * Math.abs(Math.sin(this._phase * 5 + i * 1.3) * Math.sin(this._phase * 2.1 + i * 0.7)));
+            const bh = active ? Math.max(rest, live) : rest;
+            const x = i * (bw + gap), y = (h - bh) / 2, r = bw / 2;
+            cr.newSubPath();
+            cr.arc(x + r, y + r, r, Math.PI, 0);
+            cr.arc(x + r, y + bh - r, r, 0, Math.PI);
+            cr.closePath();
+            cr.fill();
         }
-        cr.stroke();
         cr.$dispose();
     }
 
