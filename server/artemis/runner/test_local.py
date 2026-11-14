@@ -158,6 +158,18 @@ def test_run_python_override_must_not_be_the_core_interpreter(monkeypatch):
         find_python()
 
 
+def test_a_separate_venv_override_is_allowed(tmp_path, monkeypatch):
+    """A separate venv's python links to the same base interpreter as the core's; that's not ours."""
+    other = tmp_path / "other-venv" / "bin" / "python"
+    other.parent.mkdir(parents=True)
+    try:
+        other.symlink_to(Path(sys.executable).resolve())
+    except (OSError, NotImplementedError):
+        pytest.skip("can't create a symlink here")
+    monkeypatch.setenv("ARTEMIS_RUN_PYTHON", str(other))
+    assert find_python() == other
+
+
 # ----- Windows branches, exercised on Linux by monkeypatching IS_WINDOWS -----
 
 
