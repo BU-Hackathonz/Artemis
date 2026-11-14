@@ -44,6 +44,7 @@ class WhisperVoice:
         self._earcon = earcon
         self._stream = None
         self._wanted = False  # key is held; cleared by stop, even while the start earcon plays
+        self._gen = 0  # bumped by every press and release, so a stale start never opens the mic
         self._chunks: list[np.ndarray] = []
         self._frames = 0
         self._lock = threading.Lock()  # the audio callback runs on PortAudio's thread
@@ -70,10 +71,12 @@ class WhisperVoice:
         if self._wanted:
             return  # key repeat while held
         self._wanted = True
+        self._gen += 1
+        gen = self._gen
         await self.announcer.stop_speech()
         await asyncio.sleep(self._earcon("listening"))  # let the beep finish before the mic opens
-        if not self._wanted:
-            return  # key released during the earcon
+        if not self._wanted or gen != self._gen:
+            return  # key released (and maybe pressed again) during the earcon: a newer press owns the mic
         with self._lock:
             self._chunks, self._frames = [], 0
         try:
@@ -86,6 +89,7 @@ class WhisperVoice:
 
     async def stop_listening(self, client_request_id: str) -> str:
         self._wanted = False
+        self._gen += 1
         if self._stream is None:
             return ""
         stream, self._stream = self._stream, None

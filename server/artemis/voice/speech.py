@@ -176,9 +176,12 @@ class Announcer:
             now = self.status()
             if now != last:
                 last = now
-                result = callback(*now)
-                if inspect.isawaitable(result):
-                    await result
+                try:
+                    result = callback(*now)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:  # one failed emit must not end status updates for the session
+                    log.exception("voice status callback failed")
             await asyncio.sleep(interval_s)
 
     async def announce(self, text: str, priority: Priority) -> None:

@@ -111,6 +111,26 @@ def test_watch_reports_at_start_and_on_change_only():
     assert seen == [(True, None), (True, "nvda"), (False, None)]
 
 
+def test_watch_survives_a_failing_callback():
+    a, _, _, state = router()
+    seen = []
+
+    def cb(ready, reader):
+        seen.append(reader)
+        if len(seen) == 1:
+            raise RuntimeError("emit failed")
+
+    async def run():
+        task = asyncio.create_task(a.watch(cb, interval_s=0.01))
+        await asyncio.sleep(0.05)
+        state["running"] = True
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+    asyncio.run(run())
+    assert seen == [None, "nvda"]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

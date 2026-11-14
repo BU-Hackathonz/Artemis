@@ -91,6 +91,23 @@ def test_key_released_during_earcon_never_opens_mic():
     assert streams == [] and not v.listening and "mic_open" not in log
 
 
+def test_release_and_repress_during_earcon_opens_one_mic():
+    log = []
+    v, _, streams = make(1, earcon_s=0.14, log=log)
+
+    async def bounce():
+        first = asyncio.create_task(v.start_listening())
+        await asyncio.sleep(0.05)
+        await v.stop_listening("cr_1")  # key up mid-beep
+        await asyncio.sleep(0.02)
+        second = asyncio.create_task(v.start_listening())  # key down again
+        await asyncio.gather(first, second)
+        await v.stop_listening("cr_2")
+
+    asyncio.run(bounce())
+    assert len(streams) == 1 and streams[0].closed and not v.listening  # no leaked, still-open mic
+
+
 def test_transcribes_and_strips_wake_word():
     v, model, streams = make(2)
     v.set_vocabulary(["main.py", "LoginForm"])
