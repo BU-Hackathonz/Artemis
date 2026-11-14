@@ -54,10 +54,11 @@ footer { color: var(--muted); text-align: center; font-size: .85rem; }
 .agent-ring-fallback { width: 50%; height: 50%; margin: 25%; border-radius: 50%; border: 10px solid #a78bfa80; box-shadow: 0 0 2.5rem #7c3aed66; }
 @media (max-width: 800px) { header,main,footer { padding: 1rem; } .agent-ring { width: 12rem; height: 12rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
-.companion-page {font-size:14px; background:#0b1220;}
+/* Compact status window: same liquid palette; the window edge keeps 3:1 against the page. */
+.companion-page {font-size:14px; background:var(--bg);}
 .companion-page body {min-width:0;}
-.companion {padding:12px 16px; display:flex; align-items:center; gap:12px; min-height:96px; max-width:none; border:1px solid #52617a; border-radius:0 0 18px 18px;}
+.companion {padding:12px 16px; display:flex; align-items:center; gap:12px; min-height:96px; max-width:none; border:1px solid var(--field-line); border-radius:0 0 18px 18px;}
 .companion-copy {min-width:0; flex:1;}
-.companion h1 {font-size:16px; margin:0; letter-spacing:.03em;}
+.companion h1 {font-size:16px; font-weight:600; margin:0; letter-spacing:.03em;}
 .companion p {font-size:12px; line-height:1.4; margin:4px 0 0;}
 .companion button {font-size:12px; min-height:44px; padding:6px 10px; margin:0; flex-shrink:0;}
