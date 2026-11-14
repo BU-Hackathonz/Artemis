@@ -434,6 +434,69 @@ def test_result_earcons_have_their_own_shape():
     knock = SOUNDS["approval"]
     third = len(knock) // 3
     assert float(np.abs(knock[third:2 * third]).max()) == 0.0  # the silent gap between the two knocks
+class FakeDll:
+    def __init__(self):
+        self.calls = []
+
+    def nvdaController_cancelSpeech(self):
+        self.calls.append("cancel")
+
+    def nvdaController_speakText(self, text):
+        self.calls.append(("speak", text))
+
+    def nvdaController_brailleMessage(self, text):
+        self.calls.append(("braille", text))
+
+
+def nvda_with_clock():
+    from pathlib import Path as _P
+
+    from artemis.voice.speech import NvdaSpeaker
+
+    now = [100.0]
+    speaker = NvdaSpeaker(dll_path=_P("missing.dll"), clock=lambda: now[0])
+    speaker._dll = FakeDll()
+    return speaker, now
+
+
+def test_nvda_busy_estimates_from_word_count():
+    s, now = nvda_with_clock()
+    assert not s.busy()
+    s.speak("one two three four five six seven", interrupt=False)  # 7 words at 3.5 a second: 2 s
+    now[0] += 1.9
+    assert s.busy()
+    now[0] += 0.2
+    assert not s.busy()
+
+
+def test_nvda_queued_lines_add_up_and_interrupt_restarts():
+    s, now = nvda_with_clock()
+    s.speak("a b c d e f g", interrupt=False)  # 2 s
+    s.speak("h i j k l m n", interrupt=False)  # queued behind it: done at 4 s
+    now[0] += 3.0
+    assert s.busy()
+    s.speak("stop", interrupt=True)  # a high line cuts both off: about 0.3 s from now
+    assert s._dll.calls[-3] == "cancel"
+    now[0] += 0.5
+    assert not s.busy()
+
+
+def test_nvda_cancel_clears_busy():
+    s, now = nvda_with_clock()
+    s.speak("a long line of words that takes a while to say out loud", interrupt=False)
+    s.cancel()
+    assert not s.busy()
+
+
+def test_low_line_dropped_while_nvda_still_talking():
+    s, now = nvda_with_clock()
+    a = Announcer(nvda=s, sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: True)
+    s.available = lambda: True
+    asyncio.run(a.announce("main.py ran successfully. It printed: Hello, World!", "high"))
+    asyncio.run(a.announce("Still working.", "low"))  # dropped: the result is still being read
+    asyncio.run(a.announce("Created main.py, 1 line.", "normal"))  # normal is never dropped
+    spoken = [c[1] for c in s._dll.calls if isinstance(c, tuple) and c[0] == "speak"]
+    assert spoken == ["main.py ran successfully. It printed: Hello, World!", "Created main.py, 1 line."]
 
 if __name__ == "__main__":
     for name, fn in list(globals().items()):

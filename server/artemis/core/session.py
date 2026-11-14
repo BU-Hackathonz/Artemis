@@ -63,6 +63,18 @@ STILL_WORKING = "Still working."
 EMPTY_PAIR_S = 1.5  # a second empty transcript this soon after the first is the same tap
 
 
+def spoken_error(message: str, recovery: str) -> str:
+    """The spoken line for an error: the message and the recovery hint, each sentence ended.
+
+    The two are joined with a space, so a message without its own full stop would run on into
+    the hint; end it here unless it already ends with ., ? or !.
+    """
+    message = message.rstrip()
+    if message and message[-1] not in ".?!":
+        message += "."
+    return f"{message} {recovery}".strip()
+
+
 def normalize(text: str) -> str:
     return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
 
@@ -468,7 +480,7 @@ class Session:
             EventDraft(
                 task_id=task_id,
                 type="error",
-                announce=Announce(text=f"{message} {recovery}", priority="high"),
+                announce=Announce(text=spoken_error(message, recovery), priority="high"),
                 data=ErrorData(code=code, message=message, recovery=recovery).model_dump(),
             )
         )
