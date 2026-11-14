@@ -30,7 +30,7 @@ agrees on the board; record any change here.
 | 13 | UI components | Semantic HTML first; React Aria for dialogs/listboxes; Tailwind for styling only | Proposed | Jun |
 | 14 | Security scanning | Bandit (pure Python), run before every write and run approval. Semgrep: not implemented; revisit after the MVP | Proposed | David |
 | 15 | Windows UI Automation | Not needed for the MVP (WebView2 already exposes UIA to NVDA); revisit for inspecting native apps | Deferred | Jun |
-| 16 | Ubuntu demo (2026-11-14) | Demo on Ubuntu 24.04 + GNOME 46 (Wayland): Jun's GNOME Shell island, wake word, Orca, "Firefly" speech (engine pending); Windows code kept for later | Decided | David |
+| 16 | Ubuntu demo (2026-11-14) | Demo on Ubuntu 24.04 + GNOME 46 (Wayland): Jun's GNOME Shell island, wake word, Orca, ElevenLabs speech; Windows code kept for later | Decided | David |
 
 The confirmed MVP is "create a Python program that prints Hello World, run it, hear the result".
 The architecture, risks and build order are in [`architecture.md`](architecture.md); the API is in
@@ -225,7 +225,7 @@ PowerShell launchers) stays in the repo for the Windows build that comes later.
 | Demo machine | Ubuntu 24.04, GNOME Shell 46, Wayland (David's laptop) | Windows 11 |
 | UI | Jun's GNOME Shell extension at `686f157` (`client/prototypes/water-desktop` on `client/desktop-island`): a small notch at the top edge, where only Settings expands. The typed-request panel stays as the fallback | Tauri 2 app (§1) |
 | Starting a request | Wake word, hands-free ("Hey Artemis"); push-to-talk stays | Global push-to-talk (§6) |
-| Spoken output | "Firefly" (David's word). **Which engine that is still needs David's confirmation.** Until then Avery builds an offline Linux voice (Piper), plus ElevenLabs when a key is set | NVDA controller, SAPI fallback (§5) |
+| Spoken output | ElevenLabs (#129; David confirmed 2026-11-14, replacing the earlier "Firefly" placeholder). When ElevenLabs is unreachable or has no key, an offline Linux voice speaks instead. Spoken text goes to ElevenLabs; #129 redacts it before sending. Yaovi builds the Linux side | NVDA controller, SAPI fallback (§5) |
 | Screen reader | Orca | NVDA (§2) |
 | Launcher | `infra/start.sh` + `infra/setup-ubuntu.sh` (Avery) | `infra/start.ps1` (§3) |
 

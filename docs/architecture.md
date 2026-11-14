@@ -165,7 +165,7 @@ GNOME Shell extension (Jun, client/prototypes/water-desktop)
    │  address + token read from a 0600 file under $XDG_RUNTIME_DIR
    ▼
 FastAPI core (server/artemis/)       same process and routes as on Windows
-   voice/   wake word, mic capture, faster-whisper, Linux speech ("Firefly", engine pending)  (Avery)
+   voice/   wake word, mic capture, faster-whisper, Linux speech (ElevenLabs, offline fallback)  (Yaovi)
    agent/, policy/, conversation/  unchanged, platform-aware where it matters             (David)
    runner/  same argv presets; Linux interpreter lookup (#139)                              (Avery)
    │
@@ -183,7 +183,7 @@ Ubuntu-specific risks:
 
 | # | Risk | Fix |
 |---|---|---|
-| U1 | Speech engine for "Firefly" not confirmed | Avery builds offline Piper, with ElevenLabs when a key is set; David confirms the engine |
+| U1 | ElevenLabs is a cloud voice: venue Wi-Fi can drop, and spoken text leaves the laptop | An offline fallback voice (Yaovi) when ElevenLabs is unreachable; spoken text is redacted before it is sent (#129) |
 | U2 | Orca and Artemis speaking at once | One voice at a time, as on Windows (§ risk 3); Avery's voice lane owns detection |
 | U3 | Wake word hears Artemis's own speech | The mic is muted while Artemis speaks (Avery, voice lane) |
 | U4 | Shell extension crashes take the UI down | The typed-request panel is the fallback; the core keeps running |
