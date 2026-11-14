@@ -1,7 +1,8 @@
-"""Linux speech tests: the platform is patched to linux; spd-say, HTTP and the audio device are fakes."""
+"""Linux speech tests: the platform is patched to linux; speech-dispatcher, HTTP and audio are fakes."""
 
 import asyncio
-import subprocess
+import queue
+import time
 import urllib.error
 
 import pytest
@@ -17,33 +18,57 @@ def linux(monkeypatch, tmp_path):  # tmp_path first: pytest builds it with the r
     monkeypatch.setattr(speech.sys, "platform", "linux")
 
 
-class FakeChild:
-    def __init__(self, argv, **kwargs):
-        self.argv, self.kwargs, self.done, self.killed = argv, kwargs, False, False
+class FakeSpeechd:
+    """A socket that answers like speech-dispatcher's SSIP server and logs every command in order."""
 
-    def poll(self):
-        return 0 if (self.done or self.killed) else None
-
-    def kill(self):
-        self.killed = True
-
-
-class FakePopen:
     def __init__(self):
-        self.children = []
+        self.commands, self.spoken, self._out = [], [], queue.Queue()
+        self._data, self._next_id, self.closed = None, 1, False
 
-    def __call__(self, argv, **kwargs):
-        child = FakeChild(argv, **kwargs)
-        self.children.append(child)
-        return child
+    def _reply(self, *lines):
+        self._out.put("".join(line + "\r\n" for line in lines).encode())
 
-    def spoken(self):
-        return [c.argv[-1] for c in self.children if "--wait" in c.argv]
+    def sendall(self, data):
+        for line in data.decode().split("\r\n")[:-1]:
+            if self._data is not None:
+                if line == ".":
+                    msg_id, self._next_id = str(self._next_id), self._next_id + 1
+                    self.spoken.append("\n".join(self._data))
+                    self._data = None
+                    self._reply(f"225-{msg_id}", "225 OK MESSAGE QUEUED")
+                else:
+                    self._data.append(line)
+                continue
+            self.commands.append(line)
+            if line == "SPEAK":
+                self._data = []
+                self._reply("230 OK RECEIVING DATA")
+            elif line.startswith("CANCEL"):
+                self._reply("210 OK CANCELED")
+            else:
+                self._reply("208 OK")
+
+    def event(self, code, msg_id, word):
+        self._reply(f"{code}-{msg_id}", f"{code}-7", f"{code} {word}")
+
+    def recv(self, n):
+        return self._out.get()
+
+    def close(self):
+        self.closed = True
+        self._out.put(b"")
 
 
-def offline(popen=None, installed=True):
-    popen = popen or FakePopen()
-    return SpeechDispatcherSpeaker(which=lambda name: "/usr/bin/spd-say" if installed else None, popen=popen), popen
+def wait_for(check, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while not check():
+        assert time.monotonic() < deadline
+        time.sleep(0.005)
+
+
+def speechd():
+    fake = FakeSpeechd()
+    return SpeechDispatcherSpeaker(connect=lambda: fake), fake
 
 
 class NoNvda:
@@ -65,9 +90,6 @@ class FakeResponse:
 
 
 class FakeOutput:
-    def __init__(self):
-        self.aborted = False
-
     def start(self):
         pass
 
@@ -78,7 +100,7 @@ class FakeOutput:
         pass
 
     def abort(self):
-        self.aborted = True
+        pass
 
     def close(self):
         pass
@@ -88,88 +110,122 @@ def eleven(opener):
     return ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", opener=opener, output=FakeOutput)
 
 
+def offline_opener(request, timeout):
+    raise urllib.error.URLError("offline")
+
+
 # ----- router -----
 
 
-def test_linux_order_is_elevenlabs_then_offline_then_silence():
-    spd, _ = offline()
+def test_linux_order_is_elevenlabs_then_speechd_then_silence():
+    spd, _ = speechd()
     e = eleven(lambda req, t: FakeResponse([b"ok"]))
     a = Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=speech.nvda_running, eleven=e)
     assert speech.nvda_running() is False
     assert a.current() is e
     e.gave_up = True
     assert a.current() is spd and a.status() == (True, None)
-    gone, _ = offline(installed=False)
-    a = Announcer(nvda=NoNvda(), sapi=gone, is_nvda_running=speech.nvda_running, eleven=e)
+
+    def refuse():
+        raise FileNotFoundError("speech-dispatcher")
+
+    a = Announcer(nvda=NoNvda(), sapi=SpeechDispatcherSpeaker(connect=refuse), is_nvda_running=speech.nvda_running, eleven=e)
     assert a.current().name == "none" and a.status() == (False, None)
 
 
-def test_default_local_voice_on_linux_is_speech_dispatcher(monkeypatch):
-    monkeypatch.setattr(speech.shutil, "which", lambda name: None)
+def test_default_local_voice_on_linux_is_speech_dispatcher():
     a = Announcer(nvda=NoNvda(), is_nvda_running=lambda: False)
-    assert isinstance(a.sapi, SpeechDispatcherSpeaker)
+    assert isinstance(a.sapi, SpeechDispatcherSpeaker) and a.sapi.name == "speechd"
 
 
-# ----- the offline speaker -----
+# ----- the speech-dispatcher speaker -----
 
 
-def test_spd_say_gets_argv_only_and_dashes_are_text():
-    spd, popen = offline()
-    spd.speak("-rf is not an option here", interrupt=False)
-    child = popen.children[0]
-    assert child.argv == ["/usr/bin/spd-say", "--wait", "--", "-rf is not an option here"]
-    assert "shell" not in child.kwargs and child.kwargs["stdin"] == subprocess.DEVNULL
+def test_connects_with_a_client_name_and_events_on():
+    spd, fake = speechd()
+    assert spd.available()
+    assert fake.commands == ["SET self CLIENT_NAME user:artemis:voice", "SET self NOTIFICATION all on"]
 
 
-def test_busy_is_exact_while_the_line_plays():
-    spd, popen = offline()
-    assert not spd.busy()
+def test_busy_and_speaking_follow_speech_dispatchers_events():
+    spd, fake = speechd()
     spd.speak("main.py ran successfully.", interrupt=False)
-    assert spd.busy() and spd.speaking() and spd.name == "speechd"
-    popen.children[0].done = True
-    assert not spd.busy() and not spd.speaking()
+    assert fake.spoken == ["main.py ran successfully."]
+    assert spd.busy() and not spd.speaking()  # queued, not audible yet
+    fake.event("701", "1", "BEGIN")
+    wait_for(spd.speaking)
+    fake.event("702", "1", "END")
+    wait_for(lambda: not spd.busy() and not spd.speaking())
 
 
-def test_cancel_stops_speech_dispatcher_and_kills_our_child():
-    spd, popen = offline()
-    spd.speak("A long answer.", interrupt=False)
-    spd.cancel()
-    assert popen.children[0].killed and not spd.busy()
-    assert popen.children[1].argv == ["/usr/bin/spd-say", "--cancel"]
-
-
-def test_high_line_cuts_off_the_current_one():
-    spd, popen = offline()
+def test_a_high_line_cancels_only_our_messages_and_the_cancel_lands_first():
+    spd, fake = speechd()
     spd.speak("A long answer.", interrupt=False)
     spd.speak("main.py failed with exit code 1.", interrupt=True)
-    assert popen.children[0].killed
-    assert popen.spoken() == ["A long answer.", "main.py failed with exit code 1."]
+    assert fake.commands[-3:] == ["SPEAK", "CANCEL self", "SPEAK"]  # answered before the next line goes in
+    assert "CANCEL all" not in fake.commands  # Orca and every other client keep talking
+    assert fake.spoken[-1] == "main.py failed with exit code 1."
 
 
-def test_push_to_talk_stop_speech_cancels_the_offline_voice():
-    spd, popen = offline()
-    a = Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=lambda: False, eleven=eleven(lambda r, t: urllib.error.URLError("x")))
-    a.eleven.gave_up = True
+def test_cancel_and_push_to_talk_stop_only_artemis():
+    spd, fake = speechd()
+    e = eleven(offline_opener)
+    e.gave_up = True
+    a = Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=lambda: False, eleven=e)
     asyncio.run(a.announce("A long answer.", "normal"))
-    asyncio.run(a.stop_speech())
-    assert popen.children[0].killed
+    fake.event("701", "1", "BEGIN")
+    wait_for(spd.speaking)
+    asyncio.run(a.stop_speech())  # what WhisperVoice.start_listening does before the listening earcon
+    assert fake.commands[-1] == "CANCEL self" and not spd.busy() and not spd.speaking()
+
+
+def test_a_dot_line_is_escaped():
+    spd, fake = speechd()
+    spd.speak("first\n.hidden", interrupt=False)
+    assert fake.spoken == ["first\n..hidden"]  # dot-stuffed, so it can't end the message early
+
+
+def test_unreachable_speechd_is_unavailable_and_not_retried_every_line():
+    calls = []
+    now = [0.0]
+
+    def refuse():
+        calls.append(1)
+        raise FileNotFoundError("speech-dispatcher")
+
+    spd = SpeechDispatcherSpeaker(connect=refuse, clock=lambda: now[0])
+    assert not spd.available() and not spd.available()
+    assert len(calls) == 1
+    now[0] += 6
+    assert not spd.available() and len(calls) == 2
+
+
+def test_a_lost_connection_reconnects_on_the_next_line():
+    fakes = []
+
+    def connect():
+        fakes.append(FakeSpeechd())
+        return fakes[-1]
+
+    spd = SpeechDispatcherSpeaker(connect=connect)
+    spd.speak("one", interrupt=False)
+    fakes[0].close()  # speech-dispatcher restarted
+    wait_for(lambda: spd._sock is None)
+    spd.speak("two", interrupt=False)
+    assert len(fakes) == 2 and fakes[1].spoken == ["two"]
 
 
 # ----- fallback and wording -----
 
 
-def test_a_failed_elevenlabs_line_is_spoken_offline():
-    spd, popen = offline()
-
-    def opener(request, timeout):
-        raise urllib.error.URLError("offline")
-
-    e = eleven(opener)
-    Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=lambda: False, eleven=e)
-    e.fallback = speech._Fallback(Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=lambda: False, eleven=e))
+def test_a_failed_elevenlabs_line_is_spoken_by_speechd():
+    spd, fake = speechd()
+    e = eleven(offline_opener)
+    a = Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=lambda: False, eleven=e)
+    e.fallback = speech._Fallback(a)
     e.speak("Created main.py, 1 line.", interrupt=False)
     assert e.wait_idle(2)
-    assert popen.spoken() == ["Created main.py, 1 line."]
+    assert fake.spoken == ["Created main.py, 1 line."]
 
 
 def test_linux_never_names_windows_sapi_or_nvda():
@@ -185,7 +241,7 @@ def test_three_failures_give_the_offline_notice():
     def opener(request, timeout):
         raise urllib.error.HTTPError("u", 503, "busy", {}, None)
 
-    spd, _ = offline()
+    spd, _ = speechd()
     e = eleven(opener)
     e.on_give_up = notices.append
     Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=lambda: False, eleven=e)

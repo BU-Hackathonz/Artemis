@@ -579,51 +579,182 @@ def orca_running(proc: Path = Path("/proc")) -> bool:
 
 
 class SpeechDispatcherSpeaker:
-    """Offline Linux voice through speech-dispatcher's spd-say, which ships with Ubuntu and Orca.
+    """Offline Linux voice: speech-dispatcher (ships with Ubuntu and Orca), spoken to directly over its
+    SSIP socket with the standard library, no new dependency.
 
-    argv only, never a shell, and "--" before the text so a line starting with "-" is never read as an
-    option. --wait keeps each child alive until its line is spoken, so busy() is exact. cancel() asks
-    speech-dispatcher to stop and kills our children, so push-to-talk cuts it off at once.
+    Why not spd-say: its --cancel cancels every client's speech, Orca's included, and as a separate
+    process it can land after the next line and wipe that out. On our own connection, CANCEL self stops
+    only Artemis's messages, and commands are handled in order, so a cancel always lands before the
+    line that follows it. busy() and speaking() come from speech-dispatcher's own BEGIN/END events.
     """
 
     name = "speechd"  # what Announcer.speaking_engine() reports (#141, the wake word)
+    REPLY_TIMEOUT_S = 1.0
+    RETRY_S = 5.0  # after a failed connect, don't try again on every announce
 
-    def __init__(self, which=shutil.which, popen=subprocess.Popen) -> None:
-        self._spd = which("spd-say")
-        self._popen = popen
-        self._children: list = []
+    def __init__(self, connect=None, clock: Callable[[], float] = time.monotonic) -> None:
+        self._connect = connect or _speechd_connect
+        self._clock = clock
+        self._sock = None
+        self._failed_at: float | None = None
+        self._send_lock = threading.Lock()
+        self._replies: queue.Queue = queue.Queue()
+        self._queued: set[str] = set()  # message ids speech-dispatcher still has for us
+        self._playing = threading.Event()
+        self._state = threading.Lock()
 
-    def available(self) -> bool:
-        return self._spd is not None
+    # connection
 
-    def speak(self, text: str, interrupt: bool) -> None:
-        if interrupt:
-            self.cancel()
-        self._children = [c for c in self._children if c.poll() is None]
-        self._children.append(self._popen(
-            [self._spd, "--wait", "--", text],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        ))
-
-    def cancel(self) -> None:
-        if self._spd is None:
-            return
+    def _ensure(self):
+        if self._sock is not None:
+            return self._sock
+        if self._failed_at is not None and self._clock() - self._failed_at < self.RETRY_S:
+            return None
         try:
-            self._popen([self._spd, "--cancel"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL)
+            sock = self._connect()
+            self._sock = sock
+            threading.Thread(target=self._read, args=(sock,), name="artemis-speechd", daemon=True).start()
+            self._command("SET self CLIENT_NAME user:artemis:voice")
+            self._command("SET self NOTIFICATION all on")
+            self._failed_at = None
+            return sock
+        except Exception as e:  # no speech-dispatcher: the router falls back to silence
+            log.warning("speech-dispatcher is not reachable: %s", type(e).__name__)
+            self._drop()
+            self._failed_at = self._clock()
+            return None
+
+    def _drop(self) -> None:
+        sock, self._sock = self._sock, None
+        with self._state:
+            self._queued.clear()
+        self._playing.clear()
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _send(self, *lines: str) -> None:
+        self._sock.sendall("".join(line + "\r\n" for line in lines).encode("utf-8"))
+
+    def _reply(self) -> list[str]:
+        lines = self._replies.get(timeout=self.REPLY_TIMEOUT_S)
+        if not lines[-1][:1] == "2":  # 2xx is success; 3xx/4xx/5xx are errors
+            raise OSError(f"speech-dispatcher said {lines[-1][:3]}")
+        return lines
+
+    def _command(self, line: str) -> list[str]:
+        with self._send_lock:
+            self._send(line)
+            return self._reply()
+
+    def _read(self, sock) -> None:
+        """Reader thread: split replies (to the waiting command) from events (7xx, which update state)."""
+        buffer, block = b"", []
+        try:
+            while True:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                buffer += data
+                while b"\r\n" in buffer:
+                    raw, buffer = buffer.split(b"\r\n", 1)
+                    line = raw.decode("utf-8", "replace")
+                    block.append(line)
+                    if len(line) >= 4 and line[3] == "-":
+                        continue  # more lines of this block follow
+                    if line.startswith("7"):
+                        self._event(block)
+                    else:
+                        self._replies.put(block)
+                    block = []
         except OSError:
             pass
-        for child in self._children:
-            if child.poll() is None:
-                child.kill()
-        self._children = []
+        if self._sock is sock:
+            self._drop()
+
+    def _event(self, block: list[str]) -> None:
+        code = block[-1][:3]
+        msg_id = block[0][4:] if len(block) > 1 else ""
+        if code == "701":  # BEGIN
+            self._playing.set()
+        elif code in ("702", "703"):  # END, CANCELED
+            with self._state:
+                self._queued.discard(msg_id)
+                if not self._queued:
+                    self._playing.clear()
+
+    # Speaker protocol
+
+    def available(self) -> bool:
+        return self._ensure() is not None
+
+    def speak(self, text: str, interrupt: bool) -> None:
+        if self._ensure() is None:
+            return
+        # SSIP data: one line per line; a line that starts with "." gets a second "." (dot-stuffing).
+        lines = [("." + line) if line.startswith(".") else line for line in text.replace("\r", "").split("\n")]
+        try:
+            with self._send_lock:
+                if interrupt:
+                    self._send("CANCEL self")  # only Artemis's own messages; never Orca's
+                    self._reply()
+                    with self._state:
+                        self._queued.clear()
+                    self._playing.clear()
+                self._send("SPEAK")
+                self._reply()  # 230 OK RECEIVING DATA
+                self._send(*lines, ".")
+                queued = self._reply()  # 225-<msg id> / 225 OK MESSAGE QUEUED
+            if len(queued) > 1:
+                with self._state:
+                    self._queued.add(queued[0][4:])
+        except Exception as e:
+            log.warning("speech-dispatcher failed to speak: %s", type(e).__name__)
+            self._drop()
+
+    def cancel(self) -> None:
+        if self._sock is None:
+            return
+        try:
+            self._command("CANCEL self")
+        except Exception:
+            self._drop()
+            return
+        with self._state:
+            self._queued.clear()
+        self._playing.clear()
 
     def busy(self) -> bool:
-        return any(c.poll() is None for c in self._children)
+        with self._state:
+            return bool(self._queued)
 
     def speaking(self) -> bool:
-        """spd-say --wait lives exactly as long as its line plays, so speaking and busy are the same here."""
-        return self.busy()
+        """Audio is playing now: between speech-dispatcher's BEGIN and END events for our message."""
+        return self._playing.is_set()
+
+
+def _speechd_connect():
+    """Connect to speech-dispatcher's socket, starting it once (argv only) if it isn't running yet."""
+    import socket
+
+    address = os.environ.get("SPEECHD_ADDRESS", "")
+    if address.startswith("unix_socket:"):
+        path = Path(address.split(":", 1)[1])
+    else:
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        path = Path(runtime) / "speech-dispatcher" / "speechd.sock"
+    if not path.exists():
+        spawn = shutil.which("speech-dispatcher")
+        if spawn is None:
+            raise FileNotFoundError("speech-dispatcher")
+        subprocess.run([spawn, "--spawn"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5, check=False)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(None)
+    sock.connect(str(path))
+    return sock
 
 
 class _Fallback:
