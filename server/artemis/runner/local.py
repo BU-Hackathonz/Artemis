@@ -12,6 +12,7 @@ import time
 import uuid
 from pathlib import Path
 
+from artemis.childenv import child_environ
 from artemis.contracts import FileChange, ProjectRef, RunResult
 
 log = logging.getLogger(__name__)
@@ -36,9 +37,19 @@ def _is_core_python(path: Path) -> bool:
     return sys.prefix != sys.base_prefix and venv in resolved.parents
 
 
+def _is_core_venv_path(path: Path) -> bool:
+    """The core's own python, or anything inside the core's venv, by path as given (no link resolving)."""
+    given = Path(os.path.abspath(path))
+    if given == Path(os.path.abspath(sys.executable)):
+        return True
+    return sys.prefix != sys.base_prefix and Path(os.path.abspath(sys.prefix)) in given.parents
+
+
 def _probe(cmd: list[str], cwd: Path) -> Path | None:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=15, cwd=cwd, stdin=subprocess.DEVNULL)
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15, cwd=cwd, stdin=subprocess.DEVNULL, env=child_environ()
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     line = out.stdout.strip().splitlines()[-1:] if out.returncode == 0 else []
@@ -52,6 +63,11 @@ def find_python(override: str | None = None) -> Path:
         path = Path(override)
         if not path.exists():
             raise NoInterpreter(f"ARTEMIS_RUN_PYTHON points to {override}, which doesn't exist. Fix or unset it, then restart Artemis.")
+        if _is_core_venv_path(path):
+            # The override must not undo risk 7 either: user code never runs in the core's own venv.
+            # Compared without resolving links: a separate venv's python links to the same base
+            # interpreter as ours, and that is fine (programs run with -I).
+            raise NoInterpreter("ARTEMIS_RUN_PYTHON points to Artemis's own Python. Point it at a separate Python, or unset it, then restart Artemis.")
         return path
     home = Path.home()  # outside any project, so uv doesn't pick the core's venv
     candidates: list[list[str]] = []
@@ -155,7 +171,14 @@ class LocalRunner:
         root.mkdir(parents=True, exist_ok=False)
         if shutil.which("git"):
             try:
-                subprocess.run(["git", "init", "-q"], cwd=root, capture_output=True, timeout=15, stdin=subprocess.DEVNULL)
+                subprocess.run(
+                    ["git", "init", "-q"],
+                    cwd=root,
+                    capture_output=True,
+                    timeout=15,
+                    stdin=subprocess.DEVNULL,
+                    env=child_environ(),
+                )
             except (OSError, subprocess.TimeoutExpired):
                 log.warning("git init failed in %s", root)
         return ProjectRef(slug=name, root=str(root))

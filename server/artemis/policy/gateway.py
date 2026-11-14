@@ -147,7 +147,9 @@ def run_announcement(entry: str, result: RunResult, timeout_s: int) -> str:
     lines = [line.strip() for line in result.stderr_tail.splitlines() if line.strip()]
     text = f"{entry} failed with exit code {result.exit_code}."
     if lines:
-        text += f" {lines[-1].rstrip('.')}."
+        last = lines[-1].rstrip(".")
+        # Python 3.12+ ends NameError with "Did you mean: 'print'?": don't add "." after "?".
+        text += f" {last}" + ("" if last.endswith(("?", "!")) else ".")
     if "EOFError" in result.stderr_tail:
         text += " The program asked for input, which isn't supported yet."
     return text
@@ -516,9 +518,12 @@ class ToolGateway:
                 "Escape to reject, or use the override key to approve anyway.",
                 True,
             )
-        # Only claim "no findings" when a scan actually ran.
-        scanned = f" {findings_sentence(findings)}" if self._scan else ""
-        return f"{action}{scanned} Enter to {verb}, Escape to reject.", False
+        # Only claim "no findings" when a scan actually ran; otherwise say it did not.
+        if self._scan:
+            scanned = findings_sentence(findings)
+        else:
+            scanned = "Not scanned: the security scanner isn't installed."
+        return f"{action} {scanned} Enter to {verb}, Escape to reject.", False
 
     async def _run_scan(self, task_id: str, folder: Path, nothing_done: str) -> list[Finding]:
         if self._scan is None:

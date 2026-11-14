@@ -61,8 +61,9 @@ so a misheard "yes" never writes or runs anything.
 Do this at least 30 minutes before judging. The first `npm run tauri dev` build takes minutes.
 
 1. **Code.** `git pull` on `main` (everything the demo uses is merged).
-2. **Dependencies, all groups in one command.** `uv sync` removes groups you don't list, and
-   `start.ps1` doesn't add the `echo` group, so the last sync must include all of them:
+2. **Dependencies, all groups in one command.** `uv sync` removes groups you don't list, so the last
+   sync must include all of them. (`start.ps1 -Agent claude` adds `agent`, `security` and `echo`
+   itself.)
    ```powershell
    uv sync --project server --group voice --group agent --group security --group echo --group dev
    cd server; uv run --group voice python -m artemis.voice.setup; cd ..   # NVDA DLL + speech model
@@ -143,7 +144,8 @@ before/after comparison is kept in memory for the session.
 - **Keys:** Enter for the write; Enter for the run. `hello-world` already exists, so
   Artemis may reuse it or start `hello-world-2`; both are fine.
 - **Hear** (high priority, interrupts other speech, before any explanation):
-  "main.py failed with exit code 1. NameError: name 'pritn' is not defined."
+  "main.py failed with exit code 1. NameError: name 'pritn' is not defined. Did you mean: 'print'?"
+  (Python 3.12 and later add the "Did you mean" part; the core needs 3.12+.)
   then one sentence on what went wrong *(model)*.
 - **Type:** `Fix it and run it again.`
 - **Hear:** "Change 1 file in hello-world: modify main.py, 1 line added, 1 removed. No security findings. Enter to approve, Escape to reject." (project name as above)
@@ -256,7 +258,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 
 | # | Check | How | Pass means | Owner | Status |
 |---|---|---|---|---|---|
-| 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | not run |
+| 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | pass, Sat Nov 14, verified on Yaovi's and David's laptops (registration only; the NVDA line was not checked) |
 | 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
 | 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` is "create a Python program that prints Hello World, and run it" word for word (the wake word is stripped), or the misses are posted | Yaovi | not run |
 | 4 | Keyboard path to Start listening | NVDA on, Tab from the request field | Reaches **Start listening** past the enabled buttons (Repeat, Stop) and the activity log (Send and Cancel are disabled when idle) | Yaovi | not run |

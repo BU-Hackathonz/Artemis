@@ -42,6 +42,7 @@ def test_edit_in_an_opened_project_is_one_approved_diff(tmp_path):
     assert approval.kind == "write_files"
     assert approval.summary == (
         "Change 1 file in old-app: modify app.py, 1 line added, 1 removed. "
+        "Not scanned: the security scanner isn't installed. "
         "Enter to approve, Escape to reject."
     )
     assert approval.files[0].model_dump() == {

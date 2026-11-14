@@ -13,10 +13,10 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header">
-  <div class="nav-pill">
-    <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
-    <nav class="site-nav" aria-label="Main">
+<header class="nav">
+  <div class="nav-in">
+    <a class="logo" href="index.html" aria-label="artemis, home">artemis.</a>
+    <nav aria-label="Main">
       <ul>
         <li><a href="index.html">Home</a></li>
         <li><a href="how-it-works.html">How it works</a></li>
@@ -24,14 +24,15 @@
         <li><a href="team.html" aria-current="page">About</a></li>
       </ul>
     </nav>
-    <a class="button button-solid button-small" href="get-started.html">Get started</a>
+    <a class="btn btn-white" href="get-started.html">Get started</a>
   </div>
 </header>
 <main id="main">
+<div class="wrap">
   <div class="page-head">
     <h1>About Artemis</h1>
     <p class="lede">Four students, one weekend, one goal: a blind developer builds and runs real software by voice and keyboard, with no sighted help.</p>
-    <dl class="stats">
+    <dl class="stats-inline">
       <div><dt>4</dt><dd>people, each owning one part</dd></div>
       <div><dt>6</dt><dd>parts, from voice to runner</dd></div>
       <div><dt>49</dt><dd>pull requests merged by 8 AM Saturday</dd></div>
@@ -48,11 +49,11 @@
     <h2 id="hold-title">What we hold to</h2>
     <dl class="parts panel">
       <dt>You decide every change</dt>
-      <dd>Nothing is written or run without your keypress. An approval covers one exact edit, and a spoken "yes" never counts, so a misheard word can't change your code.</dd>
+      <dd>Nothing is written or run without your keypress. An approval covers the exact edit or run you reviewed, and a spoken "yes" never counts, so a misheard word can't change your code.</dd>
       <dt>Every result is real</dt>
       <dd>Programs really run, and you hear what they actually printed. Echo Check reads the page's real accessibility tree instead of guessing what the screen shows.</dd>
       <dt>Errors are never softened</dt>
-      <dd>When a run fails, you hear the exit code and the first error line, word for word, before any explanation.</dd>
+      <dd>When a run fails, you hear the exit code and the final error line, word for word, before any explanation.</dd>
       <dt>Your screen reader comes first</dt>
       <dd>Artemis speaks in your own NVDA voice, never over it, and every control works from the keyboard.</dd>
     </dl>
@@ -62,7 +63,7 @@
     <h2 id="people-title">The team</h2>
     <ul class="team">
       <li><img src="team/david.png" alt="" width="182" height="182"><h3>David Ribeiro</h3><p>Team lead. Built the Claude coding agent and the safety gate: paths stay inside your project, approvals bind to the exact change, and a security scan blocks risky code.</p></li>
-      <li><span class="initial" aria-hidden="true">A</span><h3>Avery</h3><p>Built the core that tracks every task and approval, the runner that executes approved programs, Echo Check and the launcher. Reviews every pull request.</p></li>
+      <li><img src="team/avery.png" alt="" width="182" height="182"><h3>Avery</h3><p>Built the core that tracks every task and approval, the runner that executes approved programs, Echo Check and the launcher. Reviews every pull request.</p></li>
       <li><img src="team/jun.png" alt="" width="182" height="182"><h3>Jun Olea</h3><p>Built the Windows app: keyboard-first controls, focus that moves to the approval dialog and back, and the push-to-talk shortcut that works from any app.</p></li>
       <li><img src="team/yaovi.png" alt="" width="182" height="182"><h3>Yaovi Agblami</h3><p>Built the voice: speech recognition that stays on your computer, listening tones, and spoken output through NVDA or the Windows voice, never both. Built this site. Presenter.</p></li>
     </ul>
@@ -75,7 +76,7 @@
       <li><time datetime="2026-11-13T22:27-05:00">Fri 10:27 PM</time><div><strong>The first pieces land</strong>A keyboard-first app skeleton, spoken announcements with listening tones, and a first version of the coding agent.</div></li>
       <li><time datetime="2026-11-13T23:45-05:00">Fri 11:45 PM</time><div><strong>The core comes online</strong>The first version of the service that joins every part goes in. This site goes up minutes later.</div></li>
       <li><time datetime="2026-11-14T02:32-05:00">Sat 2:32 AM</time><div><strong>Echo Check</strong>Artemis can open a web page and report its real accessibility problems, most serious first.</div></li>
-      <li><time datetime="2026-11-14T03:36-05:00">Sat 3:36 AM</time><div><strong>Real agent, real scan</strong>Claude starts planning real changes, and every proposed program is scanned for security problems before it can run.</div></li>
+      <li><time datetime="2026-11-14T03:36-05:00">Sat 3:36 AM</time><div><strong>Real agent, real scan</strong>Claude starts planning real changes, and every proposed Python file is scanned for security problems before it can run.</div></li>
       <li><time datetime="2026-11-14T03:52-05:00">Sat 3:52 AM</time><div><strong>Push-to-talk</strong>Hold a shortcut from any app to speak a request (today it is <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>). A blocked approval now opens with Reject focused.</div></li>
       <li><time datetime="2026-11-14T04:45-05:00">Sat 4:45 AM</time><div><strong>Security scan on request</strong>Ask Artemis to scan a whole project, and the scan can't be quietly switched off.</div></li>
     </ol>
@@ -85,10 +86,18 @@
     <h2 id="source-title">Open source</h2>
     <p>All of Artemis, including this site, is on <a href="https://github.com/BU-Hackathonz/Artemis">GitHub</a>.</p>
   </section>
+</div>
 </main>
-<footer class="site-footer">
-  <p>artemis. Built at HackUMass 2026.</p>
-  <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
+<footer>
+  <div class="wrap">
+    <div class="foot-top"><span class="logo">artemis.</span><p>A voice-first development environment for blind developers. Built at HackUMass 2026.</p></div>
+    <div class="cols">
+      <div><h2>Product</h2><ul><li><a href="how-it-works.html">How it works</a></li><li><a href="get-started.html">Get started</a></li></ul></div>
+      <div><h2>Trust</h2><ul><li><a href="trust.html">Accessibility and safety</a></li></ul></div>
+      <div><h2>Team</h2><ul><li><a href="team.html">About</a></li><li><a href="https://github.com/BU-Hackathonz/Artemis">GitHub</a></li></ul></div>
+    </div>
+    <div class="foot-bottom"><span>artemis. Built at HackUMass 2026.</span><span>No cookies, no analytics, no tracking.</span></div>
+  </div>
 </footer>
 </body>
 </html>

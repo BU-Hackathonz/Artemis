@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from artemis.agent.stub import StubAgent
+from artemis.conversation.controller import NVDA_RATE_LINE
 from artemis.contracts import Approval, Decision, EventDraft
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
@@ -544,13 +545,19 @@ async def test_diagnostics_need_the_token_and_a_session(client):
 # ----- spoken rate change with conversation on (§5.4) -----
 
 
-async def say_slower(client, core, voice, monkeypatch, *, voice_ready):
+async def say_rate(client, core, voice, monkeypatch, *, transcript, result, voice_ready=True, screen_reader=None):
     monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
-    voice.announcer.state = (voice_ready, None)
-    voice.set_rate = lambda delta: False  # no change made (no output, or at a limit)
+    voice.announcer.state = (voice_ready, screen_reader)
+    voice.rate_calls = []
+
+    def set_rate(delta):
+        voice.rate_calls.append(delta)
+        return result
+
+    voice.set_rate = set_rate
     sid, session = await start(client, core)
     before = len(session.bus.history)
-    voice.transcript = "slower"
+    voice.transcript = transcript
     await client.post("/voice/listen", headers=AUTH, json={"action": "start"})
     await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
     await wait_for(session, lambda s: any(e.type == "transcript.final" for e in s.bus.history[before:]))
@@ -558,14 +565,55 @@ async def say_slower(client, core, voice, monkeypatch, *, voice_ready):
     return [e for e in session.bus.history[before:] if e.type == "agent.message"]
 
 
-async def test_slower_with_no_voice_output_is_still_answered(client, core, voice, monkeypatch):
-    lines = await say_slower(client, core, voice, monkeypatch, voice_ready=False)
+@pytest.mark.parametrize("transcript, status, line", [
+    ("slower", "slower", "Speaking slower."),
+    ("faster", "faster", "Speaking faster."),
+    ("slower", "at_min", "That's the slowest I go."),
+    ("faster", "at_max", "That's the fastest I go."),
+    ("slower", "nvda", NVDA_RATE_LINE),
+])
+async def test_each_rate_status_is_one_agent_message_and_spoken_once(client, core, voice, monkeypatch, transcript, status, line):
+    from artemis.voice.speech import RateStatus
+
+    lines = await say_rate(client, core, voice, monkeypatch, transcript=transcript, result=RateStatus(status))
+    assert [e.announce.text for e in lines] == [line]
+    assert [t for _, t in voice.spoken].count(line) == 1  # reaches the voice once, through the bus
+
+
+async def test_no_voice_output_gets_the_controller_fallback_once(client, core, voice, monkeypatch):
+    from artemis.voice.speech import RateStatus
+
+    lines = await say_rate(client, core, voice, monkeypatch, transcript="slower",
+                           result=RateStatus.NO_OUTPUT, voice_ready=False)
     assert [e.announce.text for e in lines] == ["I can't change how fast I speak yet."]
 
 
-async def test_slower_with_voice_output_is_not_answered_twice(client, core, voice, monkeypatch):
-    # With output, the voice already said its own line (e.g. "That's the slowest I go.").
-    assert await say_slower(client, core, voice, monkeypatch, voice_ready=True) == []
+async def test_an_unchanged_rate_says_nothing_extra(client, core, voice, monkeypatch):
+    from artemis.voice.speech import RateStatus
+
+    assert await say_rate(client, core, voice, monkeypatch, transcript="slower", result=RateStatus.UNCHANGED) == []
+
+
+async def test_nvda_wording_is_the_controllers_one_sentence(client, core, voice, monkeypatch):
+    # Stale screen-reader state (controller sees no NVDA) reaches the core's rate branch and says NVDA's line.
+    from artemis.voice.speech import RateStatus
+
+    via_rate = await say_rate(client, core, voice, monkeypatch, transcript="slower", result=RateStatus.NVDA)
+    assert [e.announce.text for e in via_rate] == [NVDA_RATE_LINE]
+    assert voice.rate_calls == [-1]  # the stale path: the controller did not know about NVDA
+    # Fresh NVDA state: the controller answers in its own branch, and set_rate never runs.
+    via_controller = await say_rate(client, core, voice, monkeypatch, transcript="slower",
+                                    result=RateStatus.NVDA, screen_reader="nvda")
+    assert [e.announce.text for e in via_controller] == [NVDA_RATE_LINE]
+    assert voice.rate_calls == []
+
+
+async def test_bool_results_from_an_older_voice_still_work(client, core, voice, monkeypatch):
+    assert [e.announce.text for e in await say_rate(client, core, voice, monkeypatch, transcript="slower", result=True)] == ["Speaking slower."]
+    assert [e.announce.text for e in await say_rate(client, core, voice, monkeypatch, transcript="faster", result=True)] == ["Speaking faster."]
+    lines = await say_rate(client, core, voice, monkeypatch, transcript="slower", result=False, voice_ready=False)
+    assert [e.announce.text for e in lines] == ["I can't change how fast I speak yet."]
+    assert await say_rate(client, core, voice, monkeypatch, transcript="slower", result=False, voice_ready=True) == []
 
 
 # ----- ready line (§1) -----
@@ -616,3 +664,110 @@ async def test_a_quick_taps_two_empty_transcripts_count_once(client, core, voice
     await asyncio.sleep(0.1)
     finals = [e for e in session.bus.history[before:] if e.type == "transcript.final"]
     assert len(finals) == 1
+
+
+# ----- unknown ids and reserved routes -----
+
+
+async def test_unknown_task_and_approval_ids_are_404(client):
+    for path in ("/tasks/tsk_nope/cancel", "/tasks/tsk_nope/reply"):
+        r = await client.post(path, headers=AUTH)
+        assert r.status_code == 404 and r.json()["detail"] == {"error": "task_not_found"}
+    r = await client.post("/approvals/apr_nope", headers=AUTH, json={"decision": "approve", "approval_hash": "sha256:x"})
+    assert r.status_code == 404 and r.json()["detail"] == {"error": "approval_not_found"}
+
+
+async def test_reply_is_501_for_a_known_task(client, core):
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "hello"})).json()["task_id"]
+    await wait_for(session, lambda s: pending(s) is not None)
+    r = await client.post(f"/tasks/{tid}/reply", headers=AUTH)
+    assert r.status_code == 501 and r.json() == {"error": "not_supported"}
+    assert session.tasks[tid].active  # reserved, so it changes nothing
+    await client.post(f"/tasks/{tid}/cancel", headers=AUTH)
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+
+
+# ----- voice errors are spoken; bad actions are rejected (§5.1) -----
+
+
+async def test_voice_errors_are_spoken_and_bad_actions_rejected(client, core, voice):
+    r = await client.post("/voice/listen", headers=AUTH, json={"action": "start"})
+    assert r.status_code == 409 and r.json()["detail"] == {"error": "no_session"}
+    _, session = await start(client, core)
+    assert (await client.post("/voice/listen", headers=AUTH, json={"action": "pause"})).status_code == 422
+    assert (await client.post("/speech", headers=AUTH, json={"action": "pause"})).status_code == 422
+
+    async def mic_down():
+        raise RuntimeError("No input device")
+
+    async def stop_fails(client_request_id):
+        raise RuntimeError("x" * 200)  # too long to speak, so a fixed sentence is used
+
+    voice.start_listening = mic_down
+    voice.stop_listening = stop_fails
+    assert (await client.post("/voice/listen", headers=AUTH, json={"action": "start"})).status_code == 204
+    assert (await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})).status_code == 204
+    await wait_for(session, lambda s: sum(e.type == "error" for e in s.bus.history) == 2)
+    errors = [e.data for e in session.bus.history if e.type == "error"]
+    assert [e["code"] for e in errors] == ["mic_error", "mic_error"]
+    assert errors[0]["message"] == "No input device"
+    assert errors[1]["message"] == "The microphone didn't work."
+    assert (("high", "No input device Check the microphone, or type the request.")) in voice.spoken
+    assert not [e for e in session.bus.history if e.type == "transcript.final"]  # no transcript came back
+    assert not session.tasks
+
+
+# ----- event bus failure isolation (§2) -----
+
+
+async def test_bus_keeps_streaming_when_speech_or_the_log_fails(tmp_path):
+    async def broken_speech(text, priority):
+        raise RuntimeError("no audio device")
+
+    blocker = tmp_path / "not-a-dir"  # a file where the log's folder should be
+    blocker.write_text("")
+    bus = EventBus("ses_2", speak=broken_speech, log_path=blocker / "ses.jsonl")
+    q = bus.subscribe()
+    for i in range(3):
+        await bus.emit(EventDraft(type="agent.message", announce={"text": f"m{i}", "priority": "normal"},
+                                  data={"text": f"m{i}", "kind": "answer"}))
+    assert [q.get_nowait().seq for _ in range(3)] == [1, 2, 3]
+    assert [e.seq for e in bus.history] == [1, 2, 3]
+# ----- startup: the security scanner (main.make_scan) -----
+
+
+@pytest.fixture
+def core_main(monkeypatch, tmp_path):
+    """artemis.core.main builds the app on import, so give it a safe environment first."""
+    import importlib
+    import sys
+
+    monkeypatch.setenv("ARTEMIS_TOKEN", "t" * 32)
+    monkeypatch.setenv("ARTEMIS_VOICE", "stub")
+    monkeypatch.setenv("ARTEMIS_RUNNER", "fake")
+    monkeypatch.setenv("ARTEMIS_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("ARTEMIS_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.delitem(sys.modules, "artemis.core.main", raising=False)
+    module = importlib.import_module("artemis.core.main")
+    monkeypatch.setitem(sys.modules, "artemis.core.main", module)  # removed again after the test
+    return module
+
+
+def test_missing_scanner_is_logged_not_silent(core_main, monkeypatch, caplog):
+    from artemis.policy import scan
+
+    monkeypatch.setattr(scan, "available", lambda: False)
+    with caplog.at_level("WARNING", logger="artemis.core.main"):
+        assert core_main.make_scan() is None
+    assert "Security scanner (Bandit) is not installed" in caplog.text
+
+
+def test_installed_scanner_is_used_quietly(core_main, monkeypatch, caplog):
+    from artemis.policy import scan
+
+    monkeypatch.setattr(scan, "available", lambda: True)
+    with caplog.at_level("WARNING", logger="artemis.core.main"):
+        assert core_main.make_scan() is scan.scan
+    assert "not installed" not in caplog.text

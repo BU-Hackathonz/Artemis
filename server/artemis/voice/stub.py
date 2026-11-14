@@ -5,7 +5,7 @@ Speech is real (Announcer); listening returns a canned transcript.
 
 from __future__ import annotations
 
-from .speech import Announcer, Priority
+from .speech import Announcer, Priority, RateStatus
 from .text import strip_wake_word, vocabulary_prompt
 
 MVP_REQUEST = "Artemis, create a Python program that prints Hello World"
@@ -38,5 +38,5 @@ class StubVoice:
     async def repeat_last(self) -> None:
         await self.announcer.repeat_last()
 
-    async def set_rate(self, delta: int) -> bool:
+    async def set_rate(self, delta: int) -> RateStatus:
         return await self.announcer.set_rate(delta)

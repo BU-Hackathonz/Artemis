@@ -149,6 +149,14 @@ def test_release_and_repress_during_earcon_opens_one_mic():
     assert len(streams) == 1 and streams[0].closed and not v.listening  # no leaked, still-open mic
 
 
+def test_first_request_is_primed_with_wake_word_before_any_project():
+    v, model, streams = make(2)
+    assert v.prompt == "Hey Artemis, Artemis, Python, main.py"
+    asyncio.run(v.start_listening())
+    asyncio.run(v.stop_listening("cr_0"))
+    assert model.calls[0][1]["initial_prompt"] == "Hey Artemis, Artemis, Python, main.py"
+
+
 def test_transcribes_and_strips_wake_word():
     v, model, streams = make(2)
     v.set_vocabulary(["main.py", "LoginForm"])
@@ -158,7 +166,7 @@ def test_transcribes_and_strips_wake_word():
     assert text == "create a Python program"
     assert not v.listening and streams[0].closed
     n, kw = model.calls[0]
-    assert n == 2 * RATE and kw["initial_prompt"] == "main.py, LoginForm" and kw["language"] == "en"
+    assert n == 2 * RATE and kw["initial_prompt"] == "Hey Artemis, Artemis, Python, main.py, LoginForm" and kw["language"] == "en"
     assert v._chunks == []  # audio dropped after transcription
 
 
