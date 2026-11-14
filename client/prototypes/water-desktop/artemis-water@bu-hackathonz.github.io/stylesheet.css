@@ -12,17 +12,9 @@
 
 /* The glassy ring: the one bright thing in the widget. */
 .artemis-island-ring {
-  /* at rest a plain ring; while working the liquid glass ring (ringEffect) is drawn in the slot */
+  /* a clear slot: the liquid glass ring (ringEffect) is drawn in it */
   width: 26px;
   height: 26px;
-  border-radius: 13px;
-  border: 2px solid rgba(196, 181, 253, 0.85);
-  background-color: rgba(139, 92, 246, 0.18);
-}
-
-.artemis-island-ring:working {
-  border-color: transparent;
-  background-color: transparent;
 }
 
 .artemis-island-sep { width: 1px; height: 18px; background-color: rgba(167, 139, 250, 0.25); }

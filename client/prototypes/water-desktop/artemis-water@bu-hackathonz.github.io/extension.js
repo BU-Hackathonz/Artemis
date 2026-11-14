@@ -553,9 +553,7 @@ export default class ArtemisWaterExtension extends Extension {
         // trail) and opens back into the ring at home.
         const morph = this._isRing() ? this._tickMorph(now, A) : {value: 0, busy: false};
         // Top-edge island: at home the droplet hides behind the pill's ring; it only shows in flight.
-        // At rest the shader stays off (it covers the whole UI group, so every repaint anywhere went
-        // through it); the pill's CSS ring stands in until a command wakes the droplet.
-        const tucked = this._isIsland() && !A.awake && morph.value === 0;
+        const tucked = false; // island: the ring rests, small, in the pill's slot
         const orb = this._tickOrb(now, A.x, A.y, hidden || tucked || this._typing, s, morph);
         if (this._sphereButton) this._sphereButton.visible = !hidden && !A.awake && morph.value === 0;
 
