@@ -92,6 +92,7 @@ class RedactFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
+            msg, args = _redact_parts(record.msg, record.args)
             message = redact(record.getMessage())
             if record.exc_info:
                 exc_text = redact(logging.Formatter().formatException(record.exc_info))
@@ -99,13 +100,34 @@ class RedactFilter(logging.Filter):
                 exc_text = redact(record.exc_text) if record.exc_text else None
             stack = redact(record.stack_info) if record.stack_info else None
         except Exception:  # never let a logging bug write an unredacted record
-            message, exc_text, stack = "log record suppressed: redaction failed", None, None
-        record.msg = message
-        record.args = ()
+            msg, args, message, exc_text, stack = None, None, "log record suppressed: redaction failed", None, None
+        if msg is not None and _format(msg, args) == message:
+            # Redacted part by part, so formatters that read args still work: uvicorn's access
+            # formatter unpacks five of them, and an empty tuple made it raise on every request.
+            record.msg, record.args = msg, args
+        else:  # a secret spans the parts, or the parts don't format: keep only the redacted text
+            record.msg, record.args = message, ()
         record.exc_info = None
         record.exc_text = exc_text
         record.stack_info = stack
         return True
+
+
+def _redact_parts(msg: Any, args: Any) -> tuple[Any, Any]:
+    """The record's msg and args with each string redacted, keeping the shape of args."""
+    msg = redact(msg) if isinstance(msg, str) else msg
+    if isinstance(args, tuple):
+        args = tuple(redact(a) if isinstance(a, str) else a for a in args)
+    elif isinstance(args, dict):
+        args = {k: redact(v) if isinstance(v, str) else v for k, v in args.items()}
+    return msg, args
+
+
+def _format(msg: Any, args: Any) -> str | None:
+    try:
+        return str(msg) % args if args else str(msg)
+    except Exception:
+        return None
 
 
 def install_log_redaction() -> None:
