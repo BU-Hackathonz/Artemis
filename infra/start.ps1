@@ -16,6 +16,7 @@ param(
     [switch]$CoreOnly,
     [ValidateSet("stub", "claude")][string]$Agent = "stub",
     [ValidateSet("whisper", "stub")][string]$Voice = "whisper",
+    [switch]$Conversation,  # ARTEMIS_CONVERSATION=on: built-in phrases and follow-ups (contracts.md 5.4)
     [int]$HealthTimeoutS = 120
 )
 
@@ -120,12 +121,15 @@ $core = $null
 $app = $null
 try {
     # ----- core -----
-    Write-Host "Starting the Artemis core on $url (agent: $Agent, voice: $Voice)..."
+    $conversationMode = "off"
+    if ($Conversation) { $conversationMode = "on" }
+    Write-Host "Starting the Artemis core on $url (agent: $Agent, voice: $Voice, conversation: $conversationMode)..."
     $coreArgs = "/d /c uv run --project `"$Server`"$groups uvicorn artemis.core.main:app --host 127.0.0.1 --port $port > `"$CoreLog`" 2>&1"
     $core = Start-Child "cmd.exe" $coreArgs $Server @{
         "ARTEMIS_TOKEN" = $token
         "ARTEMIS_AGENT" = $Agent
         "ARTEMIS_VOICE" = $Voice
+        "ARTEMIS_CONVERSATION" = $conversationMode
     }
 
     $headers = @{ "Authorization" = "Bearer $token" }

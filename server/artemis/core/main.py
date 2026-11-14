@@ -4,6 +4,7 @@ ARTEMIS_TOKEN      required; infra/start.ps1 generates it (contracts.md §6)
 ARTEMIS_AGENT      stub (default) | claude
 ARTEMIS_VOICE      whisper (default when the voice group is installed) | stub
 ARTEMIS_RUNNER     real (default) | fake (writes files, never runs anything)
+ARTEMIS_CONVERSATION  off (default) | on: built-in spoken phrases and follow-ups (contracts.md §5.4)
 ARTEMIS_PROJECTS_DIR, ARTEMIS_LOG_DIR
 """
 
