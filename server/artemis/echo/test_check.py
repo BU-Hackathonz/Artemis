@@ -204,3 +204,54 @@ async def test_websockets_never_reach_a_server(tmp_path):
     finally:
         httpd.shutdown()
     assert hits == [], f"WebSocket reached {hits}"
+
+
+async def test_playwright_driver_and_browser_get_no_secrets(tmp_path, monkeypatch):
+    """No browser is needed: the Node driver starts without the key or token, and the launch env has neither
+    (audit finding 2). The launch is faked, so this checks the env the real code builds."""
+    import playwright.async_api as pw_api
+
+    from artemis.echo import check
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-leak")
+    monkeypatch.setenv("ARTEMIS_TOKEN", "token-should-not-leak")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
+    page = tmp_path / "index.html"
+    page.write_text('<!doctype html><html lang="en"><title>x</title><body></body></html>')
+    seen: dict = {}
+
+    class Boom(Exception):
+        pass
+
+    class Browser:
+        async def new_context(self, **kwargs):
+            raise Boom()
+
+        async def close(self):
+            seen["browser_closed"] = True
+
+    class Chromium:
+        async def launch(self, **kwargs):
+            seen["launch_env"] = kwargs["env"]
+            return Browser()
+
+    class FakePlaywright:
+        chromium = Chromium()
+
+        async def stop(self):
+            seen["stopped"] = True
+
+    class Manager:
+        async def start(self):
+            seen["driver_env"] = dict(os.environ)
+            return FakePlaywright()
+
+    monkeypatch.setattr(pw_api, "async_playwright", lambda: Manager())
+    with pytest.raises(Boom):
+        await check.echo_check(str(page))
+
+    for env in (seen["driver_env"], seen["launch_env"]):
+        assert "ANTHROPIC_API_KEY" not in env and "ARTEMIS_TOKEN" not in env
+    assert seen["launch_env"]["PLAYWRIGHT_BROWSERS_PATH"] == "/opt/pw-browsers"
+    assert seen["browser_closed"] and seen["stopped"]
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-should-not-leak"

@@ -16,6 +16,8 @@ from urllib.parse import unquote, urlparse
 
 from pydantic import BaseModel
 
+from artemis.childenv import child_environ, secrets_hidden_from_environ
+
 AXE_JS = Path(__file__).parent / "vendor" / "axe.min.js"
 Impact = Literal["critical", "serious", "moderate", "minor"]
 IMPACT_ORDER: list[str] = ["critical", "serious", "moderate", "minor"]
@@ -226,7 +228,7 @@ async def _launch(p):
     last: Exception | None = None
     for kwargs in attempts:
         try:
-            return await p.chromium.launch(headless=True, args=_BROWSER_ARGS, **kwargs)
+            return await p.chromium.launch(headless=True, args=_BROWSER_ARGS, env=child_environ(), **kwargs)
         except Exception as exc:  # each missing browser raises; try the next one
             last = exc
     raise EchoError(
@@ -241,7 +243,9 @@ async def echo_check(url_or_file: str, timeout_s: float = 15) -> EchoReport:
     except ImportError as exc:
         raise EchoError("Echo Check isn't installed. Run: uv sync --group echo") from exc
 
-    async with async_playwright() as p:
+    with secrets_hidden_from_environ():
+        p = await async_playwright().start()  # the Node driver copies os.environ now, so no secrets in it
+    try:
         browser = await _launch(p)
         try:
             context = await browser.new_context(
@@ -272,6 +276,8 @@ async def echo_check(url_or_file: str, timeout_s: float = 15) -> EchoReport:
             )
         finally:
             await browser.close()
+    finally:
+        await p.stop()
 
     return EchoReport(
         url=url,
