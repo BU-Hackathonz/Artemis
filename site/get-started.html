@@ -58,7 +58,7 @@
     <p>Get the code and install the core with its voice tools:</p>
 <pre tabindex="0"><code>git clone https://github.com/BU-Hackathonz/Artemis.git
 cd Artemis/server
-uv sync --group voice --group dev</code></pre>
+uv sync --group voice --group dev --group security</code></pre>
     <p>Download the speech model and NVDA's connector once, before you need them:</p>
 <pre tabindex="0"><code>uv run --group voice python -m artemis.voice.setup</code></pre>
     <p>Check your microphone. It asks you to speak for four seconds, then says what it heard:</p>
