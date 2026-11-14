@@ -4,7 +4,7 @@ import { createHttpCore, HttpError } from './api';
 import { createDemoCore } from './demo';
 import { ApprovalDialog } from './ApprovalDialog';
 import { initialState, reduceEvent } from './state';
-import { terminal } from './contracts';
+import { terminal, isTaskState } from './contracts';
 import type { Core, CoreEvent, Health } from './contracts';
 import {useVoiceInput} from './useVoiceInput';
 import {VoiceInput} from './VoiceInput';
@@ -34,11 +34,14 @@ export function App() {
   const [token, setToken] = useState('');
   const [text, setText] = useState('');
   const [state, dispatch] = useReducer(reduceEvent, initialState);
+  const observedTaskIds = useRef(new Set<string>());
   const requestRef = useRef<{text: string; id: string} | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const hadApproval = useRef(false);
   const focusedSession = useRef<string | null>(null);
-  const [submittedTask, setSubmittedTask] = useState<string | null>(null);
+  const [responseTaskId, setResponseTaskId] = useState<string | null>(null);
+  // SSE may already have finished this request and moved to a different task.
+  const pendingTaskId = responseTaskId && !observedTaskIds.current.has(responseTaskId) ? responseTaskId : null;
   const generation = useRef(0);
   const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
   const ready = status === 'Connected' || status === 'Demo connected';
@@ -61,6 +64,7 @@ export function App() {
   useEffect(() => {
     if (!connection) return;
     return connection.core.subscribe(connection.sid, event => {
+      if (event.type === 'task.state' && event.task_id && isTaskState(event.data.state)) observedTaskIds.current.add(event.task_id);
       dispatch(event);
       if (event.type === 'error' && event.data.code === 'mic_error') voiceInput.fail('Microphone unavailable. Check the device, or type your request.');
     }, setStatus);
@@ -82,7 +86,6 @@ export function App() {
     return () => window.removeEventListener('focus', restoreRequestFocus);
   }, [ready, state.approvals.length]);
   useEffect(() => { if (state.transcript !== null) setText(state.transcript); }, [state.transcript]);
-  useEffect(() => { if (state.taskId === submittedTask && terminal(state.taskState)) setSubmittedTask(null); }, [state.taskId, state.taskState, submittedTask]);
   useEffect(() => {
     const open = state.approvals.length > 0;
     if (hadApproval.current && !open && ready) {
@@ -111,18 +114,18 @@ export function App() {
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!connection || !ready || busy || !text.trim() || ((submittedTask !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')) return;
+    if (!connection || !ready || busy || !text.trim() || ((pendingTaskId !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')) return;
     setBusy(true); setError('');
     try {
       if (state.taskState === 'awaiting_reply' && state.taskId) await connection.core.reply(state.taskId, text.trim());
       else {
         if (!requestRef.current || requestRef.current.text !== text.trim()) requestRef.current = {text:text.trim(), id:crypto.randomUUID()};
         const taskId = await connection.core.submit(connection.sid, text.trim(), requestRef.current.id);
-        setSubmittedTask(taskId);
+        setResponseTaskId(taskId);
       }
       requestRef.current = null; setText('');
     } catch (e) {
-      if (e instanceof HttpError && e.code === 'task_active' && e.taskId) setSubmittedTask(e.taskId);
+      if (e instanceof HttpError && e.code === 'task_active' && e.taskId) setResponseTaskId(e.taskId);
       setError(message(e));
     }
     finally {setBusy(false);}
@@ -154,9 +157,9 @@ export function App() {
                 event.preventDefault(); event.currentTarget.form?.requestSubmit();
               }
             }} rows={4} value={text} onChange={e => setText(e.target.value)} placeholder="Create a Python program that prints Hello World" disabled={!connection || !ready} required/>
-            <button disabled={!connection || !ready || busy || !text.trim() || ((submittedTask !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')}>{state.taskState === 'awaiting_reply' ? 'Send reply' : 'Send request'}</button>
+            <button disabled={!connection || !ready || busy || !text.trim() || ((pendingTaskId !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')}>{state.taskState === 'awaiting_reply' ? 'Send reply' : 'Send request'}</button>
           </form>
-          <div className="actions"><button disabled={!ready || !(submittedTask ?? state.taskId) || (!submittedTask && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((submittedTask ?? state.taskId)!))}>Cancel task</button>
+          <div className="actions"><button disabled={!ready || !(pendingTaskId ?? state.taskId) || (!pendingTaskId && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((pendingTaskId ?? state.taskId)!))}>Cancel task</button>
             <button disabled={!ready || connection?.demo} onClick={() => void command(() => connection!.core.speech('repeat'))}>Repeat last speech</button>
             <button disabled={!ready || connection?.demo} onClick={() => void command(() => connection!.core.speech('stop'))}>Stop speech</button></div>
         </section>

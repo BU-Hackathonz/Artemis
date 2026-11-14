@@ -1,6 +1,10 @@
 // Working v0 from docs/contracts.md. Replace with OpenAPI-generated types when core lands.
 // Deliberately outside src/generated/: these are provisional client adapters.
-export type TaskState = 'queued' | 'working' | 'awaiting_reply' | 'awaiting_approval' | 'running' | 'succeeded' | 'failed' | 'canceled';
+export const TASK_STATES = ['queued','working','awaiting_reply','awaiting_approval','running','succeeded','failed','canceled'] as const;
+export type TaskState = typeof TASK_STATES[number];
+export function isTaskState(value: unknown): value is TaskState {
+  return typeof value === 'string' && TASK_STATES.includes(value as TaskState);
+}
 export type Decision = 'approve' | 'reject';
 export interface Approval {
   blocking?: boolean;
