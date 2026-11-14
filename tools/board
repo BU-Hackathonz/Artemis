@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# Agent board: one pinned GitHub issue that every teammate's coding agent reads and posts to.
+# Needs only bash + gh (logged in). No jq.
+#
+#   tools/board post "[Sam's Claude] text"   post (or pipe text on stdin). Must start with [<human>'s <agent>],
+#                                            unless AGENT_TAG is set, in which case it is added for you.
+#   tools/board unread                       posts since your last check; flags MENTION; marks them read
+#   tools/board read [-n 20]                 last N posts (does not mark read)
+#   tools/board wait [--interval 30] [--timeout 0]
+#                                            block until someone else posts, print it, mark read.
+#                                            exit 0 = new posts, exit 2 = timed out
+#   tools/board whoami                       your GitHub login, repo, issue and agent tag
+#
+# Config (env vars, or put them in .board/local.env, which is gitignored):
+#   BOARD_ISSUE  board issue number (default 1)
+#   BOARD_REPO   owner/name (default: from the git remote)
+#   AGENT_TAG    e.g. "David's Claude" (default "<login>'s agent"); read-state is kept per tag
+#   BOARD_WAIT   set to "off" to stop the Claude Code hook from asking for a background wait
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+_env_tag="${AGENT_TAG:-}"
+# shellcheck disable=SC1091
+[ -f "$ROOT/.board/local.env" ] && . "$ROOT/.board/local.env"
+[ -n "$_env_tag" ] && AGENT_TAG="$_env_tag"   # env var beats local.env, so two agents can share a checkout
+
+BOARD_ISSUE="${BOARD_ISSUE:-1}"
+RS=$'\x1e'
+
+die() { echo "board: $*" >&2; exit 1; }
+command -v gh >/dev/null 2>&1 || die "gh (GitHub CLI) is not installed"
+
+repo() {
+  if [ -n "${BOARD_REPO:-}" ]; then echo "$BOARD_REPO"; return; fi
+  (cd "$ROOT" && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) \
+    || die "cannot determine repo; set BOARD_REPO=owner/name"
+}
+REPO="$(repo)" || exit 1
+ME="${ME:-$(gh api user -q .login 2>/dev/null)}" || true
+[ -n "$ME" ] || die "gh is not logged in; run: gh auth login"
+default_tag="$ME's agent"
+AGENT_TAG="${AGENT_TAG:-$default_tag}"
+
+mkdir -p "$ROOT/.board"
+STATE="$ROOT/.board/seen.$(printf '%s' "$AGENT_TAG" | tr -c 'A-Za-z0-9' '_')"
+last_id=0; last_ts=""
+[ -f "$STATE" ] && read -r last_id last_ts < "$STATE"
+
+API="repos/$REPO/issues/$BOARD_ISSUE/comments"
+JQ_REC='.[] | "\(.id)\t\(.created_at)\t\(.user.login)\n\(.body)\u001e"'
+
+# Print records from stdin; flag mentions; remember the newest id/ts. Sets: n_new n_others n_mentions
+show() {
+  n_new=0; n_others=0; n_mentions=0
+  local rec head body id ts login flag
+  while IFS= read -r -d "$RS" rec; do
+    rec="${rec#$'\n'}"
+    head="${rec%%$'\n'*}"; body="${rec#*$'\n'}"
+    IFS=$'\t' read -r id ts login <<<"$head"
+    [ -n "$id" ] || continue
+    [ "$id" -gt "${min_id:-0}" ] 2>/dev/null || continue
+    n_new=$((n_new + 1))
+    flag=""
+    if [[ "$body" != "[$AGENT_TAG]"* ]]; then
+      n_others=$((n_others + 1))
+      shopt -s nocasematch
+      if [[ "$body" =~ (^|[^A-Za-z0-9_-])@($ME|all)([^A-Za-z0-9_-]|$) ]]; then
+        flag="  <<< MENTION"; n_mentions=$((n_mentions + 1))
+      fi
+      shopt -u nocasematch
+    fi
+    printf -- '----- #%s  %s  %s%s\n%s\n\n' "$id" "$login" "$ts" "$flag" "$body"
+    if [ "$id" -gt "$new_id" ]; then new_id="$id"; new_ts="$ts"; fi
+  done
+}
+
+fetch_since() {  # comments newer than the saved state
+  local q="per_page=100"
+  [ -n "$last_ts" ] && q="$q&since=$last_ts"
+  gh api --paginate "$API?$q" --jq "$JQ_REC"
+}
+
+save() { [ "$new_id" -gt "$last_id" ] && printf '%s %s\n' "$new_id" "$new_ts" > "$STATE"; return 0; }
+
+cmd="${1:-unread}"; shift || true
+case "$cmd" in
+  post)
+    if [ $# -gt 0 ]; then text="$*"; else text="$(cat)"; fi
+    [ -n "${text//[[:space:]]/}" ] || die "nothing to post"
+    if [[ "$text" != \[*"'s "*\]* ]]; then
+      if [ -n "$_env_tag" ] || grep -q '^AGENT_TAG=' "$ROOT/.board/local.env" 2>/dev/null; then
+        text="[$AGENT_TAG] $text"
+      else
+        die "post must start with [<human>'s <agent>], e.g. [Sam's Claude] (or set AGENT_TAG)"
+      fi
+    fi
+    gh issue comment "$BOARD_ISSUE" --repo "$REPO" --body "$text" >/dev/null && echo "posted to $REPO#$BOARD_ISSUE"
+    ;;
+
+  unread)
+    hook=0; [ "${1:-}" = "--hook" ] && hook=1
+    new_id="$last_id"; new_ts="$last_ts"; min_id="$last_id"
+    if [ "$last_id" = 0 ]; then   # first run: only the last 20, not the whole history
+      out="$(gh api --paginate "$API?per_page=100" --jq "$JQ_REC" 2>/dev/null)" || { [ $hook = 1 ] && exit 0; die "could not read $REPO#$BOARD_ISSUE"; }
+      out="$(printf '%s' "$out" | awk -v RS="$RS" -v ORS="$RS" '{a[NR]=$0} END{s=NR-19; if(s<1)s=1; for(i=s;i<=NR;i++) print a[i]}')"
+    else
+      out="$(fetch_since 2>/dev/null)" || { [ $hook = 1 ] && exit 0; die "could not read $REPO#$BOARD_ISSUE"; }
+    fi
+    tmp="$(mktemp)"; show <<<"$out" >"$tmp"; save
+    if [ "$n_others" = 0 ]; then
+      rm -f "$tmp"
+      [ $hook = 1 ] && exit 0
+      echo "(no new posts on $REPO#$BOARD_ISSUE)"; exit 0
+    fi
+    [ $hook = 1 ] && echo "Agent board $REPO#$BOARD_ISSUE: $n_others new post(s) from others, $n_mentions mentioning @$ME or @all. You are [$AGENT_TAG]. Act on mentions and reply with tools/board post; read the rest and adjust only if it affects your work."
+    cat "$tmp"; rm -f "$tmp"
+    if [ $hook = 1 ] && [ "${BOARD_WAIT:-on}" != "off" ]; then
+      echo "If no background 'tools/board wait' is running in this session, start one (run in background) and re-arm it after it wakes."
+    fi
+    ;;
+
+  read)
+    n=20; [ "${1:-}" = "-n" ] && n="${2:-20}"
+    new_id=0; new_ts=""; min_id=0
+    gh api --paginate "$API?per_page=100" --jq "$JQ_REC" \
+      | awk -v RS="$RS" -v ORS="$RS" -v n="$n" '{a[NR]=$0} END{s=NR-n+1; if(s<1)s=1; for(i=s;i<=NR;i++) print a[i]}' \
+      | { show; }
+    ;;
+
+  wait)
+    interval=30; timeout=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --interval) interval="$2"; shift 2;;
+        --timeout)  timeout="$2"; shift 2;;
+        *) die "unknown option $1";;
+      esac
+    done
+    start=$(date +%s)
+    while :; do
+      new_id="$last_id"; new_ts="$last_ts"; min_id="$last_id"
+      out="$(fetch_since 2>/dev/null)" || out=""
+      if [ -n "$out" ]; then
+        tmp="$(mktemp)"; show <<<"$out" >"$tmp"
+        save; last_id="$new_id"; last_ts="$new_ts"
+        if [ "$n_others" -gt 0 ]; then
+          cat "$tmp"; rm -f "$tmp"
+          [ "$n_mentions" -gt 0 ] && echo ">>> You were mentioned. Act on it, reply with tools/board post, then re-arm tools/board wait."
+          exit 0
+        fi
+        rm -f "$tmp"
+      fi
+      if [ "$timeout" -gt 0 ] && [ $(( $(date +%s) - start )) -ge "$timeout" ]; then
+        echo "(no new posts after ${timeout}s; run tools/board wait again)"; exit 2
+      fi
+      sleep "$interval"
+    done
+    ;;
+
+  whoami)
+    echo "login: $ME"; echo "repo:  $REPO"; echo "issue: #$BOARD_ISSUE"; echo "tag:   [$AGENT_TAG]"
+    ;;
+
+  *) echo "usage: tools/board post|unread|read [-n N]|wait [--interval S] [--timeout S]|whoami" >&2; exit 1;;
+esac
