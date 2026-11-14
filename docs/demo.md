@@ -31,8 +31,9 @@ the real agent isn't installed: run the uv sync from the setup checklist again.
 | Where | Key | Effect |
 |---|---|---|
 | Request field | Enter | Send the request. Shift+Enter adds a new line. |
-| Approval dialog | (opens) | Focus starts on **Approve** for a normal approval, on **Reject** for a blocked one. |
+| Foreground approval dialog | (opens) | Focus starts on **Approve** for a normal approval, on **Reject** for a blocked one. |
 | Approval dialog | Enter | Approve (normal approval, focus on Approve). |
+| Approval revealed from compact/background mode | (opens) | Focus starts on **Reject**, so Enter rejects. Review the proposal, then focus Approve to accept; blocked approvals still require Shift+Enter. |
 | Approval dialog | Escape | Reject. |
 | Blocked approval | Tab, then Shift+Enter | Override: on **Approve blocked action (Shift+Enter)**, only Shift+Enter approves. Enter and clicks do nothing there. |
 | Main window | Tab to the buttons | **Cancel task**, **Repeat last speech**, **Stop speech**. |
