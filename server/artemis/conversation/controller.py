@@ -6,6 +6,8 @@ The core carries the decision out. Nothing here talks to a model, a microphone o
 and nothing here can approve anything: approvals stay on the keyboard.
 """
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -26,6 +28,8 @@ Action = Literal[
     "cancel",  # cancel the active task
     "rate",  # change the speaking rate by `delta` steps; speak `say` if the voice can't
 ]
+
+log = logging.getLogger(__name__)
 
 FINAL_STATES = ("succeeded", "failed", "canceled")
 KEYBOARD_ONLY = "Use the keyboard to decide: Enter on the dialog to approve, Escape to reject."
@@ -81,8 +85,12 @@ def _names(files: list[str]) -> str:
 
 
 class Controller:
-    def __init__(self) -> None:
-        self.style = Style()
+    def __init__(self, style: Style | None = None, on_style: Callable[[Style], object] | None = None) -> None:
+        """`style` is where to start (the saved one, if the core remembers it); `on_style` is told
+        whenever the developer changes it, so the core can save it. A failing `on_style` is
+        ignored: the style still applies for this session."""
+        self.style = style or Style()
+        self._on_style = on_style
         self.queued: str | None = None  # one follow-up, started when the active task ends
         self.task: _Task | None = None  # the active task, or the last one
         self.approval: str | None = None  # the open approval's spoken summary
@@ -180,8 +188,12 @@ class Controller:
             return Decision(intent, "say", self.status())
         if intent == "changed_files":
             return Decision(intent, "say", self.changed_files(), reminder=reminder)
+        if intent == "reset_style":
+            self._set_style(Style())
+            said = "Okay, I've forgotten your answer style. Back to normal answers."
+            return Decision(intent, "say", said, reminder=reminder)
         if intent in ("brief", "detailed", "normal"):
-            self.style = Style(verbosity=intent, focus=self.style.focus)
+            self._set_style(Style(verbosity=intent, focus=self.style.focus))
             said = {
                 "brief": "Okay, I'll keep it brief.",
                 "detailed": "Okay, I'll explain in detail.",
@@ -189,7 +201,7 @@ class Controller:
             }[intent]
             return Decision(intent, "say", said, reminder=reminder)
         if intent in ("visual", "code"):
-            self.style = Style(verbosity=self.style.verbosity, focus=intent)
+            self._set_style(Style(verbosity=self.style.verbosity, focus=intent))
             said = (
                 "Visual mode. I'll describe the layout and how accessible it is."
                 if intent == "visual"
@@ -228,6 +240,14 @@ class Controller:
                 said += " A decision is still waiting: Enter to approve, Escape to reject."
             return Decision("request", "queue", said, text=transcript)
         return Decision("request", "submit", text=transcript)
+
+    def _set_style(self, style: Style) -> None:
+        self.style = style
+        if self._on_style is not None:
+            try:
+                self._on_style(style)
+            except Exception:  # saving must never break a conversation
+                log.exception("could not tell the core about the new answer style")
 
     # ----- fixed sentences -----
 

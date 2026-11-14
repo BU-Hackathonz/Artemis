@@ -261,6 +261,7 @@ transcript, plus `intent`: `"request"` or the name of the built-in phrase.
   | `what are you doing`, `status`, `are you done` | A fixed sentence from task state. No task is created. The "Still working." heartbeat is never reported as the last step |
   | `which file did you change`, `what changed` | The files changed by the current or last task |
   | `keep it brief`, `deep dive`, `normal mode`, `visual mode`, `code mode` | Sets `TaskContext.style` for the following tasks and confirms it |
+  | `reset my preferences`, `forget my answer style` | Sets the answer style back to the defaults (brief/normal/detailed and visual/code both cleared) and confirms it. Also clears the remembered style (below) |
   | `slower`, `faster` | See §5.3 |
   | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | Never applied: "Use the keyboard to decide…" as in §5.2 |
   | `approve`, `yes`, `reject`, `no` with no approval open | If no task is active and the agent's last answer was a question: the answer to it, sent as the next request (design A4; anything it leads to is still approved on the keyboard). Otherwise "There's nothing to approve right now.", never a task or a follow-up |
@@ -280,6 +281,14 @@ transcript, plus `intent`: `"request"` or the name of the built-in phrase.
   "Use the keyboard to decide…"; a queued request adds "A decision is still waiting".
 - **Errors.** If handling an utterance fails (for example the voice can't change its rate), the
   core speaks an `error` with code `conversation_failed` and the session keeps working.
+- **Remembered answer style (proposed; needs the core to opt in).** The controller takes a starting
+  `Style` and calls an `on_style` hook on every change; `artemis.conversation.prefs` loads and saves
+  it as `{"version": 1, "style": {"verbosity": …, "focus": …}}` in `ARTEMIS_PREFS_FILE`, or
+  `%USERPROFILE%/.artemis/preferences.json`. Only those two fields are ever stored, never a
+  transcript, project name or path. A missing, damaged or wrong-version file means the defaults, and
+  a failed save never reaches the conversation. The core decides whether to pass the saved style in
+  (tests and the browser demo must not touch the developer's home folder), so with no wiring nothing
+  is remembered and nothing changes.
 - **Agent prompt.** With the flag on, the agent's system prompt also gets a "How to read a spoken
   request" paragraph (`artemis.agent.prompts.system_prompt(True)`). With it off, the system prompt
   is unchanged.
