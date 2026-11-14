@@ -216,7 +216,9 @@ finding blocks the run until the user explicitly approves it.
 
 ## 16. Ubuntu demo (decided by David, 2026-11-14)
 
-The live demo moved from Windows to Ubuntu: it runs on David's laptop. This adds an Ubuntu target
+The live demo moved from Windows to Ubuntu: it runs on David's laptop. **Avery leads the transition**
+(David, 2026-11-14). Avery sets its order and priorities, assigns its tasks and OKs file handoffs
+inside it. David still merges to `main` and runs the Ubuntu hardware QA on his laptop. This adds an Ubuntu target
 and replaces none of the sections above. The Windows code (Tauri client, NVDA and SAPI speech,
 PowerShell launchers) stays in the repo for the Windows build that comes later.
 
