@@ -7,10 +7,17 @@ so they get os.environ with the secrets removed. The names match policy/redact.p
 
 import os
 import re
+import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 
 _SECRET_NAME = re.compile(r"^ANTHROPIC_|_(TOKEN|KEY|SECRET)$")  # ARTEMIS_TOKEN matches the suffix
+
+# Several callers can overlap (threads, or nested use). The first one in hides the secrets, the
+# last one out restores them; the others only count. _hidden keeps the values while they are hidden.
+_lock = threading.Lock()
+_depth = 0
+_hidden: dict[str, str] = {}
 
 
 def is_secret_name(name: str) -> bool:
@@ -23,17 +30,32 @@ def child_environ(base: Mapping[str, str] | None = None) -> dict[str, str]:
     return {name: value for name, value in source.items() if not is_secret_name(name)}
 
 
+def hidden_secret_values() -> list[str]:
+    """The secret values that secrets_hidden_from_environ() has removed right now, so redaction can still see them."""
+    with _lock:
+        return list(_hidden.values())
+
+
 @contextmanager
 def secrets_hidden_from_environ() -> Iterator[None]:
     """Playwright copies os.environ into its Node driver when the driver starts, and has no env= for it.
 
     Hide the secrets only while the driver starts, then put them back. Other threads read os.environ
-    during this window too, so keep the block short and only around the start.
+    during this window too, so keep the block short and only around the start. Blocks may overlap:
+    the secrets come back only when the last block exits, even if it is an exception that ends it.
     """
-    hidden = {name: value for name, value in os.environ.items() if is_secret_name(name)}
-    for name in hidden:
-        del os.environ[name]
+    global _depth
+    with _lock:
+        if _depth == 0:
+            _hidden.update({name: value for name, value in os.environ.items() if is_secret_name(name)})
+            for name in _hidden:
+                os.environ.pop(name, None)
+        _depth += 1
     try:
         yield
     finally:
-        os.environ.update(hidden)
+        with _lock:
+            _depth -= 1
+            if _depth == 0:
+                os.environ.update(_hidden)
+                _hidden.clear()
