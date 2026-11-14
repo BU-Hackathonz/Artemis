@@ -594,3 +594,76 @@ def test_real_sdk_client_builds_the_request_and_replays_thinking_blocks(tmp_path
     result = second["messages"][2]["content"][0]
     assert result["type"] == "tool_result" and result["tool_use_id"] == "toolu_1"
     assert second["messages"][0] == first["messages"][0]
+
+
+# ----- cancel while the model request is in flight -----
+
+
+class BlockingClient(FakeClient):
+    """Answers from the script, then blocks forever on the next request."""
+
+    def __init__(self, script):
+        super().__init__(script)
+        self.blocked = asyncio.Event()
+
+    async def create(self, **kwargs):
+        if not self.script:
+            self.blocked.set()
+            await asyncio.Event().wait()
+        return await super().create(**kwargs)
+
+
+def cancel_in_flight(tmp_path, script):
+    async def go():
+        w = World(tmp_path, [])
+        w.client = BlockingClient(script)
+        w.agent = ClaudeAgent(Config(), client=w.client)
+        running = asyncio.create_task(w.run("delete the logs"))
+        await w.client.blocked.wait()
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        return w
+
+    return asyncio.run(go())
+
+
+def test_cancel_before_any_answer_removes_the_request(tmp_path):
+    w = cancel_in_flight(tmp_path, [])
+    assert w.agent.messages == []  # the next task won't replay "delete the logs"
+
+    w.client.script = [message(text("Added a test."))]
+    assert asyncio.run(w.run("add a test", task_id="tsk_2")) == Answered(text="Added a test.")
+    sent = w.client.calls[-1]["messages"]
+    assert len(sent) == 2 and "delete the logs" not in sent[0]["content"]
+
+
+def test_cancel_after_tool_calls_keeps_history_and_says_it_was_canceled(tmp_path):
+    w = cancel_in_flight(tmp_path, hello_script()[:1])
+    roles = [m["role"] for m in w.agent.messages]
+    assert roles == ["user", "assistant", "user", "user"]  # nothing answered was removed
+    assert w.agent.messages[-1]["content"] == "The developer canceled this task. Do not continue it."
+    assert w.agent.messages[2]["content"][0]["type"] == "tool_result"
+
+
+# ----- links -----
+
+
+def test_task_message_and_vocabulary_do_not_follow_a_link_out_of_the_project(tmp_path):
+    import sys
+
+    root, outside = tmp_path / "calc", tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (root / "main.py").write_text("def add():\n    pass\n")
+    (outside / "secret.py").write_text("def launch_codes():\n    pass\n")
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(root / "link"))
+    else:
+        os.symlink(outside, root / "link", target_is_directory=True)
+    project = ProjectRef(slug="calc", root=str(root))
+    text_ = task_message(TaskContext(task_id="t", request="r", project=project))
+    assert "main.py" in text_ and "secret" not in text_
+    assert "launch_codes" not in vocabulary(project) and "secret" not in vocabulary(project)

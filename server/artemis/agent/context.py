@@ -4,34 +4,29 @@ Only the file tree is sent; file contents reach the model through read_file, so 
 is announced and wrapped as untrusted.
 """
 
-import os
 import re
 from pathlib import Path
 
 from artemis.contracts import ProjectRef, TaskContext
+from artemis.policy.paths import project_files
 
 from .untrusted import wrap
 
 MAX_TREE_ENTRIES = 200
-SKIP_DIRS = frozenset({".git", "__pycache__", ".venv", "node_modules"})
 _SYMBOL = re.compile(r"^\s*(?:async\s+def|def|class)\s+([A-Za-z_]\w*)", re.MULTILINE)
 _MAX_SYMBOL_FILE_BYTES = 256 * 1024
 
 
-def _files(project: ProjectRef) -> list[Path]:
-    root = Path(project.root)
-    found: list[Path] = []
-    for folder, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
-        for name in sorted(files):
-            if not name.lower().startswith(".env"):
-                found.append(Path(folder, name))
-    return found
-
-
 def file_tree(project: ProjectRef) -> list[str]:
+    """Relative paths of the project's files. Links are not followed, so nothing outside the
+    project is listed or read."""
     root = Path(project.root)
-    return [path.relative_to(root).as_posix() for path in _files(project)]
+    return project_files(root) if root.is_dir() else []
+
+
+def _files(project: ProjectRef) -> list[Path]:
+    root = Path(project.root).resolve()
+    return [root / rel for rel in file_tree(project)]
 
 
 def task_message(task: TaskContext) -> str:
