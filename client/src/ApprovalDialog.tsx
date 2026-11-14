@@ -13,7 +13,7 @@ export function ApprovalDialog({approval, decide}: {approval: Approval; decide: 
     finally { setBusy(false); }
   }
   return <ModalOverlay isOpen isDismissable={false} isKeyboardDismissDisabled={busy || stale} onOpenChange={open => {if (!open) void send('reject');}}>
-    <Modal><Dialog aria-describedby="approval-summary">
+    <Modal><Dialog aria-describedby="approval-summary" data-approval-id={approval.approval_id}>
       <Heading slot="title">{approval.kind === 'write_files' ? 'Review file changes' : 'Review program run'}</Heading>
       <p id="approval-summary">{approval.summary}</p>
       {approval.files.length > 0 && <ul>{approval.files.map(f => <li key={f.path}>{f.path}: {f.action}, {f.lines_added} lines added, {f.lines_removed} removed.</li>)}</ul>}
@@ -21,7 +21,7 @@ export function ApprovalDialog({approval, decide}: {approval: Approval; decide: 
       {approval.findings.length > 0 && <section aria-label="Security findings"><h3>Security findings</h3><ul>{approval.findings.map((f, i) => <li key={i}>{f.severity}: {f.rule} in {f.path}, line {f.line}: {f.message}</li>)}</ul></section>}
       {approval.diff && <details><summary>Read the proposed diff</summary><pre tabIndex={0} aria-label="Proposed diff">{approval.diff}</pre></details>}
       {approval.blocking ? <p role="note">Blocked action. Review the security findings. To override, focus Approve and press Shift+Enter. Enter alone cannot approve. Escape rejects.</p> : <p>Choose a button and press Enter. Escape rejects this proposal.</p>}
-      <div className="actions"><Button autoFocus={Boolean(approval.blocking)} isDisabled={busy || stale} onPress={() => void send('reject')}>Reject</Button><Button autoFocus={!approval.blocking} isDisabled={busy || stale} aria-keyshortcuts={approval.blocking ? 'Shift+Enter' : undefined} onKeyDown={event => {
+      <div className="actions"><Button data-approval-reject autoFocus={Boolean(approval.blocking)} isDisabled={busy || stale} onPress={() => void send('reject')}>Reject</Button><Button autoFocus={!approval.blocking} isDisabled={busy || stale} aria-keyshortcuts={approval.blocking ? 'Shift+Enter' : undefined} onKeyDown={event => {
         if (approval.blocking && event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.repeat) { event.preventDefault(); event.stopPropagation(); void send('approve'); }
         else event.continuePropagation();
       }} onPress={() => {if (!approval.blocking) void send('approve');}}>Approve{approval.blocking ? ' blocked action (Shift+Enter)' : ''}</Button></div>

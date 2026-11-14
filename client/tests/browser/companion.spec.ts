@@ -29,3 +29,52 @@ test('compact status has keyboard access to controls and never opens a core sess
   expect(coreRequests).toEqual([]);
   expect(await page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.every(c => ['get_companion_status','show_main'].includes(c)))).toBe(true);
 });
+
+for (const background of [true, false]) {
+  test(`native approval focuses ${background ? 'Reject when revealing background controls' : 'Approve in existing foreground controls'}`, async ({page}) => {
+    const {createServer} = await import('node:http');
+    let events: import('node:http').ServerResponse | undefined;
+    const decisions:string[] = [];
+    const emit = (seq:number, type:string, data:object) => events!.write(`id: ${seq}\ndata: ${JSON.stringify({seq, session_id:'ses_approval', task_id:'tsk_approval', at:new Date().toISOString(), type, data, announce:null})}\n\n`);
+    const server = createServer((req,res) => {
+      res.setHeader('access-control-allow-origin','http://127.0.0.1:1420');
+      res.setHeader('access-control-allow-headers','Authorization,Content-Type,Last-Event-ID');
+      res.setHeader('access-control-allow-methods','GET,POST,OPTIONS');
+      if (req.method === 'OPTIONS') {res.writeHead(204).end(); return;}
+      if (req.headers.authorization !== 'Bearer approval-focus-test') {res.writeHead(401).end(); return;}
+      if (req.url === '/sessions/ses_approval/events') {
+        events=res;res.writeHead(200,{'content-type':'text/event-stream'});res.write(': connected\n\n');
+        emit(1,'approval.requested',{approval_id:'apr_notch', approval_hash:'sha256:notch', kind:'write_files', summary:'Synthetic focus proposal', files:[], diff:null, run:null, findings:[]}); return;
+      }
+      if (req.url === '/approvals/apr_notch') {
+        let body='';req.on('data',part=>{body+=part;});req.on('end',()=>{
+          decisions.push(JSON.parse(body).decision);
+          emit(2,'approval.resolved',{approval_id:'apr_notch',decision:decisions.at(-1),by:'user'});
+          res.writeHead(204).end();
+        }); return;
+      }
+      if (req.url === '/sessions/ses_approval/ready') {res.writeHead(204).end();return;}
+      res.setHeader('content-type','application/json');
+      if (req.url === '/health') res.end(JSON.stringify({ok:true,version:'approval-focus-fixture',voice_ready:true,screen_reader:null}));
+      else if (req.url === '/sessions') res.end(JSON.stringify({session_id:'ses_approval'}));
+      else res.writeHead(404).end();
+    });
+    await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+    try {
+      await page.addInitScript(({url,background}) => {
+        Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args?:{status?:{approval:boolean}})=>{
+          if(command==='get_core_config')return{core_url:url,token:'approval-focus-test'};
+          if(command==='update_companion_status')return background && Boolean(args?.status?.approval);
+          if(command.endsWith('is_registered'))return false;
+          return;
+        }}});
+      }, {url:`http://127.0.0.1:${(server.address() as {port:number}).port}`,background});
+      await page.goto('/');
+      const decision=background?'Reject':'Approve';
+      await expect(page.getByRole('dialog')).toBeVisible();
+      await expect(page.getByRole('button',{name:decision,exact:true})).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect.poll(()=>decisions).toEqual([decision.toLowerCase()]);
+    } finally {server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+  });
+}

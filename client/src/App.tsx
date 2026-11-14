@@ -28,6 +28,7 @@ function eventText(event: CoreEvent) {
 export function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [status, setStatus] = useState('Not connected');
+  const lastCompanionApproval = useRef<string | null>(null);
   const [companionError, setCompanionError] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -49,14 +50,20 @@ export function App() {
   const voiceInput = useVoiceInput(connection && !connection.demo ? connection.core : null, connection?.sid ?? null, ready, voiceReady);
   useEffect(() => {
     if (!platform.native) return;
+    const approvalId = state.approvals[0]?.approval.approval_id;
+    const approvalChanged = approvalId !== undefined && lastCompanionApproval.current !== approvalId;
+    lastCompanionApproval.current = approvalId ?? null;
     void platform.updateCompanionStatus({
       connection: ready ? 'ready' : ((!connection && status !== 'Launch failed') || status.startsWith('Connecting')) ? 'starting' : 'disconnected',
       task: pendingTaskId ? 'queued' : state.taskId ? state.taskState : 'idle',
       microphone: voiceInput.status.state,
       approval: state.approvals.length > 0,
       speech_ready: voiceReady,
+    }, approvalChanged).then(focusReject => {
+      const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+      if (focusReject && dialog?.dataset.approvalId === approvalId) dialog.querySelector<HTMLButtonElement>('[data-approval-reject]')?.focus();
     }).catch(() => setCompanionError('Desktop status is unavailable. Full controls remain available here.'));
-  }, [ready, status, connection, state.taskId, state.taskState, pendingTaskId, state.approvals.length, voiceInput.status.state, voiceReady]);
+  }, [ready, status, connection, state.taskId, state.taskState, pendingTaskId, state.approvals, voiceInput.status.state, voiceReady]);
   useEffect(() => {
     if (!platform.native) return;
     let active = true;

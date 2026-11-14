@@ -47,9 +47,17 @@ impl CoreConfig {
 
 struct LaunchState(Result<CoreConfig, String>);
 
+fn config_for_window(label: &str, state: &LaunchState) -> Result<CoreConfig, String> {
+    companion::require_label(label, "main")?;
+    state.0.clone()
+}
+
 #[tauri::command]
-fn get_core_config(state: tauri::State<'_, LaunchState>) -> Result<CoreConfig, String> {
-    state.inner().0.clone()
+fn get_core_config(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, LaunchState>,
+) -> Result<CoreConfig, String> {
+    config_for_window(window.label(), state.inner())
 }
 
 fn main() {
@@ -91,6 +99,17 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_main_window_can_receive_the_launch_token() {
+        let state = LaunchState(CoreConfig::from_values(
+            Some("http://127.0.0.1:8123".into()),
+            Some("test-only".into()),
+        ));
+        assert!(config_for_window("main", &state).is_ok());
+        assert!(config_for_window("companion", &state).is_err());
+        assert!(config_for_window("untrusted", &state).is_err());
+    }
 
     #[test]
     fn accepts_only_loopback_root_and_a_nonempty_header_safe_token() {

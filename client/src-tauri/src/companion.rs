@@ -46,8 +46,8 @@ pub struct Status {
 #[derive(Default)]
 pub struct CompanionState(Mutex<Status>);
 
-fn require(window: &WebviewWindow, label: &str) -> Result<(), String> {
-    if window.label() == label {
+pub fn require_label(actual: &str, label: &str) -> Result<(), String> {
+    if actual == label {
         Ok(())
     } else {
         Err("This window cannot perform that action.".into())
@@ -107,7 +107,7 @@ pub fn get_companion_status(
     window: WebviewWindow,
     state: State<'_, CompanionState>,
 ) -> Result<Status, String> {
-    require(&window, "companion")?;
+    require_label(window.label(), "companion")?;
     state
         .0
         .lock()
@@ -120,9 +120,10 @@ pub fn update_companion_status(
     app: AppHandle,
     state: State<'_, CompanionState>,
     status: Status,
-) -> Result<(), String> {
-    require(&window, "main")?;
-    let reveal = {
+    approval_changed: bool,
+) -> Result<bool, String> {
+    require_label(window.label(), "main")?;
+    let (reveal, focus_reject, foreground) = {
         let mut current = state
             .0
             .lock()
@@ -132,19 +133,24 @@ pub fn update_companion_status(
             && (!matches!(current.connection, Connection::Ready) || current.speech_ready);
         let disconnected = matches!(status.connection, Connection::Disconnected)
             && !matches!(current.connection, Connection::Disconnected);
-        let reveal = (status.approval && !current.approval) || silent_ready || disconnected;
+        let approval_arrived = status.approval && (approval_changed || !current.approval);
+        let reveal = approval_arrived || silent_ready || disconnected;
+        let focus_reject = approval_arrived && !window.is_focused().unwrap_or(false);
+        let foreground = approval_arrived;
         *current = status;
-        reveal
+        (reveal, focus_reject, foreground)
     };
     // Reveal the standard window; Windows may require Alt+Tab to give a background app focus.
     if reveal {
-        controls(&app, false)?;
+        // Windows may deny foregrounding, so retain the notch's Open controls fallback.
+        // The caller still focuses Reject in its DOM before the user switches back.
+        let _ = controls(&app, foreground);
     }
-    Ok(())
+    Ok(focus_reject)
 }
 #[tauri::command]
 pub fn show_main(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
-    require(&window, "companion")?;
+    require_label(window.label(), "companion")?;
     controls(&app, true)
 }
 #[tauri::command]
@@ -153,7 +159,7 @@ pub fn enter_compact(
     app: AppHandle,
     state: State<'_, CompanionState>,
 ) -> Result<(), String> {
-    require(&window, "main")?;
+    require_label(window.label(), "main")?;
     if state
         .0
         .lock()

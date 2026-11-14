@@ -32,7 +32,7 @@ export const platform = {
       await unregister(shortcut);
     });
   },
-  updateCompanionStatus(status: CompanionStatus): Promise<void> {return native ? invoke('update_companion_status', {status}) : Promise.resolve();},
+  updateCompanionStatus(status: CompanionStatus, approvalChanged: boolean): Promise<boolean> {return native ? invoke<boolean>('update_companion_status', {status, approvalChanged}) : Promise.resolve(false);},
   getCompanionStatus(): Promise<CompanionStatus> {return invoke('get_companion_status');},
   enterCompact(): Promise<void> {return invoke('enter_compact');},
   showMain(): Promise<void> {return invoke('show_main');},
