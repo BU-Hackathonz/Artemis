@@ -189,3 +189,16 @@ def test_cancel_during_approval_writes_nothing(tmp_path):
 
     w = asyncio.run(go())
     assert w.text() == LOGIN and w.log.spoken()[-1] == "Canceled. Nothing was written."
+
+
+def test_the_approval_the_core_holds_is_redacted_and_keeps_its_hash(tmp_path):
+    """The diff shown to the user is redacted; the approval held for the decision is too, and its
+    hash is still the one computed from the real content, so the approval still matches."""
+    key = "sk-ant-api03-FAKEpinnedapproval0123456789"
+    w = World(tmp_path)
+    result = asyncio.run(w.edit(("    return user\n", f"    return '{key}'\n")))
+    assert result.ok
+    held = w.approvals.requests[0]
+    assert key not in held.diff and "[redacted]" in held.diff
+    assert key not in held.model_dump_json()
+    assert held.approval_hash.startswith("sha256:") and len(held.approval_hash) == 71

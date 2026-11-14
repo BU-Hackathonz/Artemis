@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -127,7 +128,12 @@ class _Tail:
 
     def text(self, wait_s: float = 2.0) -> str:
         self._thread.join(wait_s)
-        return bytes(self.buf).decode("utf-8", errors="replace")
+        text = bytes(self.buf).decode("utf-8", errors="replace")
+        if self.truncated:
+            # The cut can go through a secret, and the piece left after it no longer matches,
+            # so redaction would miss it. Drop the cut-off word (secrets have no whitespace).
+            text = re.sub(r"^\S*", "", text)
+        return text
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -140,6 +146,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
                 capture_output=True,
                 timeout=10,
                 stdin=subprocess.DEVNULL,
+                env=child_environ(),  # no API key, workspace ID or launch token in taskkill either
             )
         else:
             os.killpg(proc.pid, signal.SIGKILL)
