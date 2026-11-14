@@ -132,3 +132,47 @@ def test_wizard_asks_for_the_key_hidden_when_it_is_not_set(tmp_path, monkeypatch
     opener = Sequence(_previews("g1"), {"voice_id": "v1"})
     dv.wizard(Answers("", "1", "n"), lambda p: None, lambda v: True, opener, tmp_path)
     assert opener.requests[0].get_header("Xi-api-key") == KEY
+
+
+class AudioOpener:
+    """Returns mp3 bytes per request; voice ids in `fail` get HTTP 402 (a plan that can't use them)."""
+
+    def __init__(self, fail=()):
+        self.fail, self.requests = set(fail), []
+
+    def __call__(self, request, timeout):
+        self.requests.append(request)
+        if any(v in request.full_url for v in self.fail):
+            raise urllib.error.HTTPError(request.full_url, 402, "paid", {}, io.BytesIO(b'{"detail": {"message": "paid_plan_required"}}'))
+
+        class Body:
+            def read(self_inner):
+                return b"ID3sample"
+
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        return Body()
+
+
+def test_pick_plays_each_sample_and_saves_the_chosen_voice_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", KEY)
+    played, remembered = [], []
+    opener = AudioOpener(fail={dv.CANDIDATES[1][1]})  # the second voice needs a paid plan
+    n = len(dv.CANDIDATES) - 1
+    answers = Answers(*([""] * n), "9", "1", "y")  # Enter for each, an out-of-range choice, then 1, then yes
+    assert dv.pick(answers, played.append, lambda v: remembered.append(v) or True, opener, tmp_path) == 0
+    assert len(played) == n and remembered == [dv.CANDIDATES[0][1]]
+    assert len(opener.requests) == len(dv.CANDIDATES)  # one request per voice; asking again costs nothing
+    request = opener.requests[0]
+    assert request.get_header("Xi-api-key") == KEY and KEY not in request.full_url
+    assert json.loads(request.data) == {"text": dv.SAMPLE_LINE, "model_id": "eleven_flash_v2_5"}
+
+
+def test_pick_with_no_usable_voice_saves_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", KEY)
+    opener = AudioOpener(fail={v for _, v, _ in dv.CANDIDATES})
+    assert dv.pick(Answers(), lambda p: None, lambda v: pytest.fail("nothing to save"), opener, tmp_path) == 1

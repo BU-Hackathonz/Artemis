@@ -17,3 +17,4 @@ server/artemis/voice/bin/
 
 # Voice previews from python -m artemis.voice.design_voice
 voice-previews/
+voice-samples/

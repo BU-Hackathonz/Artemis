@@ -1,6 +1,10 @@
 """Design Artemis's own ElevenLabs voice from a description, then save the one you like to your account.
 
-Easiest: run it with no arguments and answer the questions (it needs only Python, no project setup):
+To use a ready-made voice instead of making one, run `pick`: it says the same Artemis lines in a
+few ElevenLabs default voices, plays each, and saves the voice id of the one you choose.
+    py .\\artemis\\voice\\design_voice.py pick
+
+To make a new voice, run it with no arguments and answer the questions (it needs only Python, no project setup):
     py .\\artemis\\voice\\design_voice.py
 
 It asks for the key (hidden as you paste), makes three previews and plays each one, asks which you
@@ -45,6 +49,23 @@ PREVIEW_TEXT = (
     "main.py ran successfully. It printed: Hello, World! "
     "main.py failed with exit code 1. NameError: name 'pritn' is not defined. Did you mean: 'print'?"
 )
+
+
+# Ready-made ElevenLabs default voices worth hearing for an assistant (docs: voices/default-voices).
+CANDIDATES = (
+    ("Sarah", "EXAVITQu4vr4xnSDxMaL", "female, American, soft"),
+    ("Eric", "cjVigY5qzO86Huf0OWal", "male, American, friendly, conversational"),
+    ("Jessica", "cgSgspJ2msm6clMCkdW9", "female, American, expressive, conversational"),
+    ("Chris", "iP95p4xoKVk53GoZ742B", "male, American, casual, conversational"),
+    ("Matilda", "XrExE9yKIg1WjnnlVkGX", "female, American, friendly"),
+    ("Liam", "TX3LPaxmHKxFdv7VOQHJ", "male, American, articulate"),
+)
+SAMPLE_LINE = (
+    "Artemis is ready. main.py ran successfully. It printed: Hello, World! "
+    "Create project hello-world with one file. Enter to approve, Escape to reject."
+)
+TTS_URL = f"{API}/text-to-speech/{{voice_id}}?output_format=mp3_44100_128"
+SAMPLE_MODEL = "eleven_flash_v2_5"  # the model Artemis speaks with
 
 
 class ApiError(Exception):
@@ -131,6 +152,75 @@ def _post(url: str, body: dict, key: str, opener: Callable | None = None) -> dic
         raise ApiError(type(e).__name__) from None
 
 
+def _post_audio(url: str, body: dict, key: str, opener: Callable | None = None) -> bytes:
+    opener = opener or urllib.request.urlopen
+    request = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"), method="POST",
+        headers={"xi-api-key": key, "Content-Type": "application/json", "Accept": "audio/mpeg"},
+    )
+    try:
+        with opener(request, timeout=TIMEOUT_S) as response:
+            return response.read()
+    except urllib.error.HTTPError as e:
+        raise ApiError(f"HTTP {e.code}{_detail(e)}") from None
+    except Exception as e:
+        raise ApiError(type(e).__name__) from None
+
+
+def samples(key: str, out_dir: Path, opener: Callable | None = None) -> list[tuple[str, str, Path | None, str]]:
+    """Say SAMPLE_LINE in each candidate voice. Returns (name, voice id, file or None, note) per voice:
+    a voice the plan can't use gets None and the reason, and the rest still run."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for name, voice_id, about in CANDIDATES:
+        try:
+            audio = _post_audio(TTS_URL.format(voice_id=voice_id), {"text": SAMPLE_LINE, "model_id": SAMPLE_MODEL}, key, opener)
+        except ApiError as e:
+            results.append((name, voice_id, None, str(e)))
+            continue
+        path = out_dir / f"{name.lower()}.mp3"
+        path.write_bytes(audio)
+        results.append((name, voice_id, path, about))
+    return results
+
+
+def pick(input_fn: Callable[[str], str] = input, play: Callable[[Path], None] | None = None,
+         remember: Callable[[str], bool] | None = None, opener: Callable | None = None,
+         out_dir: Path = Path("voice-samples")) -> int:
+    """Hear the same Artemis lines in each ready-made voice, then choose one."""
+    play, remember = play or _play, remember or _remember
+    key = _key(ask=True)
+    print(f"Making a sample in {len(CANDIDATES)} ready-made voices. This takes a few seconds each.")
+    results = samples(key, out_dir, opener)
+    usable = [r for r in results if r[2] is not None]
+    for name, _, path, note in results:
+        if path is None:
+            print(f"{name}: not available ({note}).")
+    if not usable:
+        print("No sample could be made, so nothing was chosen.")
+        return 1
+    for n, (name, _, path, about) in enumerate(usable, start=1):
+        print(f"{n}. {name} ({about}).")
+        play(path)
+        input_fn("Press Enter for the next one. ")
+    choices = "/".join(str(n) for n in range(1, len(usable) + 1))
+    while True:
+        answer = input_fn(f"Which voice should Artemis use? Type {choices}: ").strip()
+        if answer.isdigit() and 1 <= int(answer) <= len(usable):
+            break
+        print(f"Please type {choices}. The samples are in {out_dir.resolve()}.")
+    name, voice_id, _, _ = usable[int(answer) - 1]
+    print(f"{name}. Voice id: {voice_id}")
+    if input_fn("Remember this voice for Artemis on this computer? y or n: ").strip().lower().startswith("y"):
+        if remember(voice_id):
+            print("Done. New terminals use this voice. Open a new PowerShell window before starting Artemis.")
+        else:
+            print(f"Couldn't save it. Set it yourself: $env:ARTEMIS_ELEVEN_VOICE_ID = \"{voice_id}\"")
+    else:
+        print(f"To use it: $env:ARTEMIS_ELEVEN_VOICE_ID = \"{voice_id}\"")
+    return 0
+
+
 def _detail(e: urllib.error.HTTPError) -> str:
     """ElevenLabs' own error message (e.g. a plan limit), which names no secret. Empty if unreadable."""
     try:
@@ -176,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("design", help="make three previews")
     d.add_argument("--description", default=DEFAULT_DESCRIPTION)
     d.add_argument("--out", type=Path, default=Path("voice-previews"))
+    sub.add_parser("pick", help="hear ready-made voices and choose one (no new voice is made)")
     c = sub.add_parser("create", help="save one preview as a voice")
     c.add_argument("preview_id")
     c.add_argument("--name", default=DEFAULT_NAME)
@@ -184,6 +275,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command is None:
             return wizard()
+        if args.command == "pick":
+            return pick()
         key = _key()
         if args.command == "design":
             ids = design(args.description, args.out, key)
