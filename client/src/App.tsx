@@ -3,7 +3,7 @@ import type { FormEvent } from 'react';
 import { createHttpCore, HttpError } from './api';
 import { createDemoCore } from './demo';
 import { ApprovalDialog } from './ApprovalDialog';
-import { initialState, reduceEvent } from './state';
+import { initialState, reduceEvent, taskLabel } from './state';
 import { terminal, isTaskState } from './contracts';
 import type { Core, CoreEvent, Health } from './contracts';
 import {useVoiceInput} from './useVoiceInput';
@@ -154,7 +154,7 @@ export function App() {
       {error && <p role="alert">{error}</p>}
       <div className="workspace">
         <section aria-labelledby="request-heading"><h2 id="request-heading">Your request</h2>
-          <p>Task: {state.taskState.replaceAll('_', ' ')}</p>
+          <p>Task: {taskLabel(state, pendingTaskId)}</p>
           <form onSubmit={e => void submit(e)}>
             <label htmlFor="request">{state.taskState === 'awaiting_reply' ? 'Answer the clarification question' : 'What would you like to build?'}</label>
             <p id="request-keys">Enter sends your request. Shift+Enter adds a new line.</p>
