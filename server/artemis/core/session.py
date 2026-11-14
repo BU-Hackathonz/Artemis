@@ -485,7 +485,10 @@ class Session:
             )
         )
 
-    async def voice_status(self, voice_ready: bool, screen_reader: str | None) -> None:
+    async def voice_status(self, voice_ready: bool, screen_reader: str | None, engine: str | None = None) -> None:
         await self.emit(
-            EventDraft(type="voice.status", data={"voice_ready": voice_ready, "screen_reader": screen_reader})
+            EventDraft(
+                type="voice.status",
+                data={"voice_ready": voice_ready, "screen_reader": screen_reader, "engine": engine},
+            )
         )
