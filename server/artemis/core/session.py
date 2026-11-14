@@ -206,7 +206,8 @@ class Session:
             )
         )
         if not text.strip():
-            await self.error("empty_transcript", "I didn't catch that.", "Hold the shortcut and speak again.")
+            # An accidental tap of push-to-talk records nothing: stay quiet (Yaovi's review on #20).
+            # The stop earcon already told the user the mic closed.
             return
         words = normalize(text)
         active = self.active_task

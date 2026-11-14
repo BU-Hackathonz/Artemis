@@ -359,3 +359,15 @@ async def test_approvals_hash_must_match():
     assert await waiter == Decision.approve
     with pytest.raises(ApprovalStale):
         approvals.resolve("apr_1", "approve", "sha256:x")
+
+
+async def test_accidental_tap_is_quiet(client, core, voice):
+    sid, session = await start(client, core)
+    voice.transcript = ""
+    before = len(session.bus.history)
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: len(s.bus.history) > before)
+    await asyncio.sleep(0.05)
+    new = session.bus.history[before:]
+    assert [e.type for e in new] == ["transcript.final"] and new[0].announce is None
+    assert not session.tasks
