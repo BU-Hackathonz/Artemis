@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createDemoCore } from '../src/demo';
-import { initialState, reduceEvent } from '../src/state';
+import { initialState, reduceEvent, taskLabel } from '../src/state';
 import type { Approval, CoreEvent } from '../src/contracts';
 
 describe('client event safety', () => {
@@ -43,5 +43,15 @@ describe('client event safety', () => {
     const state = reduceEvent(initialState,{seq:1,session_id:'ses_1',task_id:'tsk_1',at:'',announce:null,type:'approval.requested',data:{approval_id:'apr_1'}});
     expect(state.approvals).toHaveLength(0);
     expect(state.events.at(-1)!.type).toBe('error');
+  });
+});
+
+describe('task status text', () => {
+  it('shows idle until there is a request, then queued before its stream arrives', () => {
+    expect(taskLabel(initialState, null)).toBe('idle');
+    expect(taskLabel(initialState, 'tsk_first')).toBe('queued');
+    const finished = {...initialState, taskId:'tsk_first'};
+    expect(taskLabel(finished, null)).toBe('succeeded');
+    expect(taskLabel(finished, 'tsk_next')).toBe('queued');
   });
 });

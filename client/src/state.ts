@@ -37,3 +37,7 @@ export function reduceEvent(state: ViewState, event: CoreEvent): ViewState {
   if (event.type === 'transcript.final' && typeof event.data.text === 'string') next.transcript = event.data.text;
   return next;
 }
+
+export function taskLabel(state: Pick<ViewState, 'taskId' | 'taskState'>, pendingTaskId: string | null): string {
+  return pendingTaskId ? 'queued' : state.taskId ? state.taskState.replaceAll('_', ' ') : 'idle';
+}
