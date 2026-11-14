@@ -54,6 +54,20 @@ def test_strip_wake_word_accepts_a_clipped_artem():
         assert strip_wake_word(text) == "create a file", text
 
 
+def test_strip_wake_word_after_punctuated_greeting():
+    # Whisper often writes a comma or period after the greeting: "Hey, Artemis," / "Okay. Artemis".
+    for text in ["Hey, Artemis, run it.", "Hey, Artem, run it.", "Okay. Artemis run it.", "OK, Artemis. run it."]:
+        assert strip_wake_word(text) == "run it.", text  # trailing punctuation is kept, as for "Cancel."
+    for text in ["Hey, art is fun", "Okay, run it", "Temis, run it"]:
+        assert strip_wake_word(text) == text, text
+
+
+def test_strip_wake_word_leaves_a_possessive_or_file_name_alone():
+    # The optional -is ending made "Artem's code is broken" come back as "'s code is broken".
+    for text in ["Artem's code is broken", "Artemis's settings are wrong", "artemis.py is broken"]:
+        assert strip_wake_word(text) == text, text
+
+
 def test_strip_wake_word_leaves_other_words_alone():
     for text in ["artistic rendering", "art is hard", "If so, then create a program", "Artemisia is a plant",
                  "run artemus.py", "Armis is a name", "Artemia live in salt lakes", "run Artem"]:

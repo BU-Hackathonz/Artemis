@@ -5,7 +5,9 @@ import re
 # "Artemis, ...", "hey Artemis. ..." -> "..."; push-to-talk means no wake-word engine.
 # Whisper often hears "Artemis" as a near miss (Artemus, Arthemis, Artimis...), so the middle accepts those,
 # and it can split the end off ("Hey Artem, this is creative..."), so the -is/-us ending is optional.
-_WAKE = re.compile(r"^\s*(?:(?:hey|ok|okay)\s+)?ar[td]h?[aei]m(?:[iu]s+)?\b[\s,.:;!?-]*", re.IGNORECASE)
+# Whisper often punctuates the greeting ("Hey, Artemis," / "Okay. Artemis"). A possessive or a file name
+# ("Artem's code", "artemis.py is broken") is part of the request, not the wake word.
+_WAKE = re.compile(r"^\s*(?:(?:hey|ok|okay)[\s,.]+)?ar[td]h?[aei]m(?:[iu]s+)?\b(?!['’.]\w)[\s,.:;!?-]*", re.IGNORECASE)
 
 # Whisper's initial_prompt is capped at about 224 tokens; stay well under it.
 PROMPT_MAX_CHARS = 600
