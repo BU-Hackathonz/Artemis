@@ -54,8 +54,14 @@ def vocabulary(project: ProjectRef) -> list[str]:
     files = _files(project)
     words = [path.stem for path in files] + [path.name for path in files]
     for path in files:
-        if path.suffix.lower() == ".py" and path.stat().st_size <= _MAX_SYMBOL_FILE_BYTES:
+        if path.suffix.lower() != ".py":
+            continue
+        try:
+            if path.stat().st_size > _MAX_SYMBOL_FILE_BYTES:
+                continue
             text = path.read_text(encoding="utf-8", errors="replace")
-            words.extend(_SYMBOL.findall(text))
+        except OSError:
+            continue  # deleted or locked since the listing; keep the words from the rest
+        words.extend(_SYMBOL.findall(text))
     seen: set[str] = set()
     return [w for w in words if not (w.casefold() in seen or seen.add(w.casefold()))]

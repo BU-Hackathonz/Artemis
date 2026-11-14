@@ -485,7 +485,8 @@ def test_task_message_without_and_with_a_project(tmp_path):
             pass  # that file name isn't allowed on Windows
     task = TaskContext(task_id="tsk_2", request="explain it", project=ProjectRef(slug="calc", root=str(root)))
     text_ = task_message(task)
-    assert "main.py\nsrc/ops.py" in text_
+    # Checked one by one: where a file can be named "</untrusted>.txt", it sorts between these two.
+    assert "\nmain.py\n" in text_ and "\nsrc/ops.py\n" in text_
     assert ".git" not in text_ and ".env" not in text_ and "pycache" not in text_
     assert text_.count("</untrusted>") == 1 and text_.endswith("explain it")
 
@@ -508,6 +509,18 @@ def test_vocabulary_puts_file_stems_first(tmp_path):
     assert words[:2] == ["main", "notes"]
     assert {"main.py", "Calculator", "add_numbers", "fetch_total"} <= set(words)
     assert "not_code" not in words and len(words) == len({w.casefold() for w in words})
+
+
+def test_vocabulary_skips_a_file_that_cannot_be_read(tmp_path, monkeypatch):
+    from artemis.agent import context
+
+    root = tmp_path / "calc"
+    root.mkdir()
+    (root / "main.py").write_text("def add_numbers():\n    pass\n")
+    # Listed, then deleted before it was read.
+    monkeypatch.setattr(context, "_files", lambda project: [root / "gone.py", root / "main.py"])
+    words = vocabulary(ProjectRef(slug="calc", root=str(root)))
+    assert words[:2] == ["gone", "main"] and "add_numbers" in words
 
 
 def test_make_agent_switches_on_one_setting():
