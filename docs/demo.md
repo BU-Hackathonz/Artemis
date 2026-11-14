@@ -253,24 +253,27 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 
 | # | Check | How | Pass means | Owner | Status |
 |---|---|---|---|---|---|
-| 1 | Shortcut registers | Start Artemis, listen for the registration message | "Global shortcut is registered", or the fallback `Control+Shift+Space` applies and registers | Yaovi | not run |
-| 2 | Hold-to-talk | Hold the shortcut, say the known sentence, release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
-| 3 | Known-sentence accuracy | Say "Create a Python program that prints Hello World" | `transcript.final` matches word for word, or the misses are posted | Yaovi | not run |
-| 4 | Keyboard path to Start listening | NVDA on, Tab from the request field | Reaches **Start listening** past Send, Cancel, Repeat, Stop and the log | Yaovi | not run |
+| 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, the fallback `Control+Shift+Space` applies and registers | Yaovi | not run |
+| 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
+| 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` is "create a Python program that prints Hello World, and run it" word for word (the wake word is stripped), or the misses are posted | Yaovi | not run |
+| 4 | Keyboard path to Start listening | NVDA on, Tab from the request field | Reaches **Start listening** past the enabled buttons (Repeat, Stop) and the activity log (Send and Cancel are disabled when idle) | Yaovi | not run |
 | 5 | Start listening toggle | Press, speak, press again | Same result as hold-to-talk | Yaovi | not run |
 | 6 | Demo 1 with `-Agent claude` | Run demo 1 end to end | Both approvals spoken, "Hello, World!" printed and spoken | key holder | not run |
 | 7 | Demo 2 failed run | Run demo 2 | Exit code and `NameError` spoken first, fix approved, second run succeeds | key holder | not run |
 | 8 | Demo 3 Bandit block | Run demo 3 | Blocked approval, focus on Reject, Enter on Approve does nothing, Escape rejects, nothing ran | key holder | not run |
 | 9 | Demo 4 injection | Run demo 4 | No approval dialog, `calc` still has its two files | key holder | not run |
 | 10 | Demo 5 Echo Check | Run demo 5 | "Before: 7 problems. After: 0." or the remainder read out and fixed | key holder | not run |
-| 11 | `-Conversation` rehearsal (opt-in) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief" | Built-in phrases answered, one waiting follow-up accepted | key holder | not run |
-| 12 | Fallbacks | `-Agent stub`, typed requests, `setup-demo.ps1 -Force` between runs | Each recovers in under a minute | anyone | not run |
+| 11 | Demo 3b security scan (optional) | Run demo 3b on `old-app` | "Found 2 security issues in 1 Python file: 1 high, 1 low." and no approval dialog | key holder | not run |
+| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered; the second request gets "I'll do that next." (a typed one still gets 409) | key holder | not run |
+| 13 | Fallbacks | `-Agent stub`, typed requests, `setup-demo.ps1 -Force` between runs | Each recovers in under a minute | anyone | not run |
 
 Launch, in order (full steps are in the setup checklist above): `setup-demo.ps1`, set the API key
-in that window only, `infra\start.ps1 -Agent claude`, wait for "Core is ready.".
+in that window only (and `ANTHROPIC_WORKSPACE_ID` if the key isn't workspace-scoped),
+`infra\start.ps1 -Agent claude`, wait for "Core is ready.".
 
 **Go / no-go:** rows 1 to 10 all pass on the demo laptop, twice, the last time with the monitor off.
-If row 2 or 4 fails, the demo is typed plus **Start listening**: say so up front. If rows 6 to 10
+Rows 11 and 12 are optional. If row 2 fails but rows 4 and 5 pass, use typed requests plus
+**Start listening**. If row 4 or 5 also fails, use typed requests only. Say so up front. If rows 6 to 10
 fail, run `-Agent stub` and the offline `test_flows.py` commands listed under each demo, and say
 the agent is scripted.
 
