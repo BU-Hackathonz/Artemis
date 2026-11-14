@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<title>Team | artemis.</title>
-<meta name="description" content="The four people building Artemis at HackUMass 2026.">
+<title>About | artemis.</title>
+<meta name="description" content="Why four students built Artemis, a development environment for blind developers, at HackUMass 2026, what they hold to, and how it came together overnight.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
 <script src="motion.js" defer></script>
@@ -21,27 +21,64 @@
         <li><a href="index.html">Home</a></li>
         <li><a href="how-it-works.html">How it works</a></li>
         <li><a href="trust.html">Accessibility and safety</a></li>
-        <li><a href="team.html" aria-current="page">Team</a></li>
+        <li><a href="team.html" aria-current="page">About</a></li>
       </ul>
     </nav>
     <a class="button button-solid button-small" href="get-started.html">Get started</a>
   </div>
 </header>
-
 <main id="main">
   <div class="page-head">
-    <h1>Team</h1>
-    <p class="lede">Four people building Artemis at HackUMass 2026.</p>
+    <h1>About Artemis</h1>
+    <p class="lede">Four students, one weekend, one goal: a blind developer builds and runs real software by voice and keyboard, with no sighted help.</p>
+    <dl class="stats">
+      <div><dt>4</dt><dd>people, each owning one part</dd></div>
+      <div><dt>6</dt><dd>parts, from voice to runner</dd></div>
+      <div><dt>40</dt><dd>pull requests merged by Saturday morning</dd></div>
+    </dl>
   </div>
 
+  <section class="block panel prose" aria-labelledby="why-title">
+    <h2 id="why-title">Why we built it</h2>
+    <p>Coding tools are built around the screen. You scan a diff, click a button, spot the red line in a terminal. A screen reader can read those things aloud, but the tools were never designed to be heard, so blind developers end up working around them or asking someone to look.</p>
+    <p>Artemis starts from the other side. Speech and the screen reader are the main interface, not an add-on. A developer should be able to open a project, ask for a change, review it, run it and find out what went wrong, without looking at the screen.</p>
+  </section>
+
+  <section class="block" aria-labelledby="hold-title">
+    <h2 id="hold-title">What we hold to</h2>
+    <dl class="parts panel">
+      <dt>You decide every change</dt>
+      <dd>Nothing is written or run without your keypress. An approval covers one exact edit, and a spoken "yes" never counts, so a misheard word can't change your code.</dd>
+      <dt>Every result is real</dt>
+      <dd>Programs really run, and you hear what they actually printed. Echo Check reads the page's real accessibility tree instead of guessing what the screen shows.</dd>
+      <dt>Errors are never softened</dt>
+      <dd>When a run fails, you hear the exit code and the first error line, word for word, before any explanation.</dd>
+      <dt>Your screen reader comes first</dt>
+      <dd>Artemis speaks in your own NVDA voice, never over it, and every control works from the keyboard.</dd>
+    </dl>
+  </section>
+
   <section class="block" aria-labelledby="people-title">
-    <h2 id="people-title" class="visually-hidden">People</h2>
+    <h2 id="people-title">The team</h2>
     <ul class="team">
-      <li><img src="team/david.png" alt="" width="182" height="182"><h3>David Ribeiro</h3><p>Team lead. The coding agent and the safety gate.</p></li>
-      <li><span class="initial" aria-hidden="true">A</span><h3>Avery</h3><p>The core service, the runner and the launcher.</p></li>
-      <li><img src="team/jun.png" alt="" width="182" height="182"><h3>Jun Olea</h3><p>The desktop app, keyboard navigation and screen-reader experience.</p></li>
-      <li><img src="team/yaovi.png" alt="" width="182" height="182"><h3>Yaovi Agblami</h3><p>Voice: push-to-talk, speech recognition and spoken output. Presenter.</p></li>
+      <li><img src="team/david.png" alt="" width="182" height="182"><h3>David Ribeiro</h3><p>Team lead. Built the Claude coding agent and the safety gate: paths stay inside your project, approvals bind to the exact change, and a security scan blocks risky code.</p></li>
+      <li><span class="initial" aria-hidden="true">A</span><h3>Avery</h3><p>Built the core that tracks every task and approval, the runner that executes approved programs, Echo Check and the launcher. Reviews every pull request.</p></li>
+      <li><img src="team/jun.png" alt="" width="182" height="182"><h3>Jun Olea</h3><p>Built the Windows app: keyboard-first controls, focus that moves to the approval dialog and back, and the push-to-talk shortcut that works from any app.</p></li>
+      <li><img src="team/yaovi.png" alt="" width="182" height="182"><h3>Yaovi Agblami</h3><p>Built the voice: speech recognition that stays on your computer, listening tones, and spoken output through NVDA or the Windows voice, never both. Built this site. Presenter.</p></li>
     </ul>
+  </section>
+
+  <section class="block" aria-labelledby="log-title">
+    <h2 id="log-title">How it came together</h2>
+    <ol class="timeline">
+      <li><time datetime="2026-11-13T20:36-05:00">Fri 8:36 PM</time><div><strong>First commit</strong>The repository opens. Within an hour the team agrees on the stack, the folder owners and a shared board for every coding agent.</div></li>
+      <li><time datetime="2026-11-13T22:27-05:00">Fri 10:27 PM</time><div><strong>The first pieces land</strong>A keyboard-first app skeleton, spoken announcements with listening tones, and a first version of the coding agent.</div></li>
+      <li><time datetime="2026-11-13T23:45-05:00">Fri 11:45 PM</time><div><strong>The core comes online</strong>The first version of the service that joins every part goes in. This site goes up minutes later.</div></li>
+      <li><time datetime="2026-11-14T02:32-05:00">Sat 2:32 AM</time><div><strong>Echo Check</strong>Artemis can open a web page and report its real accessibility problems, most serious first.</div></li>
+      <li><time datetime="2026-11-14T03:36-05:00">Sat 3:36 AM</time><div><strong>Real agent, real scan</strong>Claude starts planning real changes, and every proposed program is scanned for security problems before it can run.</div></li>
+      <li><time datetime="2026-11-14T03:52-05:00">Sat 3:52 AM</time><div><strong>Push-to-talk</strong>Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> from any app to speak a request. A blocked approval now opens with Reject focused.</div></li>
+      <li><time datetime="2026-11-14T04:45-05:00">Sat 4:45 AM</time><div><strong>Security scan on request</strong>Ask Artemis to scan a whole project, and the scan can't be quietly switched off.</div></li>
+    </ol>
   </section>
 
   <section class="block panel prose" aria-labelledby="source-title">
@@ -49,7 +86,6 @@
     <p>All of Artemis, including this site, is on <a href="https://github.com/BU-Hackathonz/Artemis">GitHub</a>.</p>
   </section>
 </main>
-
 <footer class="site-footer">
   <p>artemis. Built at HackUMass 2026.</p>
   <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
