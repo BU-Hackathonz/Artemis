@@ -7,11 +7,11 @@ import httpx
 import pytest
 
 from artemis.agent.stub import StubAgent
+from artemis.contracts import Approval, Decision, EventDraft
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
 from artemis.core.session import normalize
-from artemis.contracts import Approval, Decision, EventDraft
 from artemis.policy.testing import FakeRunner
 
 TOKEN = "test-token"
@@ -371,3 +371,132 @@ async def test_accidental_tap_is_quiet(client, core, voice):
     new = session.bus.history[before:]
     assert [e.type for e in new] == ["transcript.final"] and new[0].announce is None
     assert not session.tasks
+
+
+# ----- interpreter pre-check (risk 7) -----
+
+
+async def test_no_interpreter_is_spoken_at_session_start_and_probed_once(client, core, voice, monkeypatch):
+    from artemis.runner import LocalRunner, local
+
+    probes = []
+
+    def missing(override=None):
+        probes.append(1)
+        raise local.NoInterpreter("I couldn't find a Python to run your program with.")
+
+    monkeypatch.setattr(local, "find_python", missing)
+    core.make_runner = LocalRunner
+    for _ in range(2):
+        _, session = await start(client, core)
+        await wait_for(session, lambda s: "error" in types(s))
+        assert types(session)[:2] == ["voice.status", "error"]
+        error = session.bus.history[1]
+        assert error.data["code"] == "no_interpreter"
+        assert error.data["message"] == "I couldn't find a Python to run your program with."
+        assert error.data["recovery"] and error.announce.priority == "high"
+    assert len(probes) == 1  # cached for the process, not re-probed per session
+
+
+async def test_interpreter_found_or_fake_runner_is_quiet(client, core, monkeypatch, tmp_path):
+    from artemis.runner import LocalRunner, local
+
+    _, session = await start(client, core)  # FakeRunner: nothing to probe
+    monkeypatch.setattr(local, "find_python", lambda override=None: tmp_path / "python")
+    core.make_runner = LocalRunner
+    _, session2 = await start(client, core)
+    await asyncio.wait_for(asyncio.gather(*core.background), 5)
+    assert core._interpreter_probe is not None and core._interpreter_probe.done()
+    assert types(session) == types(session2) == ["voice.status"]
+
+
+# ----- "still working" heartbeat (risk 9) -----
+
+
+class SlowAgent:
+    """Stays in a chosen state until released, saying nothing."""
+
+    def __init__(self, state="working"):
+        self.state = state
+        self.release = asyncio.Event()
+
+    async def run(self, task, tools, emit):
+        from artemis.contracts import Answered, TaskStateData
+
+        await emit(EventDraft(task_id=task.task_id, type="task.state",
+                              data=TaskStateData(state=self.state).model_dump()))
+        await self.release.wait()
+        return Answered(text="done")
+
+
+def still_working(session):
+    return [e for e in session.bus.history if e.type == "agent.message" and e.data["text"] == "Still working."]
+
+
+async def submit_slow(client, core, agent):
+    core.make_agent = lambda: agent
+    core.heartbeat_s = 0.05
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "x"})).json()["task_id"]
+    return session, tid
+
+
+@pytest.mark.parametrize("state", ["working", "running"])
+async def test_heartbeat_repeats_while_quiet_then_stops(client, core, voice, state):
+    agent = SlowAgent(state)
+    session, tid = await submit_slow(client, core, agent)
+    await wait_for(session, lambda s: len(still_working(s)) >= 3)
+    cue = still_working(session)[0]
+    assert cue.announce.priority == "low" and cue.data["kind"] == "progress"
+    assert ("low", "Still working.") in voice.spoken
+    agent.release.set()
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    count = len(still_working(session))
+    await asyncio.sleep(0.2)
+    assert len(still_working(session)) == count  # silent after completion
+    assert session.tasks[tid].heartbeat.done()
+
+
+async def test_heartbeat_never_fires_while_awaiting_approval(client, core):
+    agent = SlowAgent("awaiting_approval")
+    session, tid = await submit_slow(client, core, agent)
+    await wait_for(session, lambda s: s.tasks[tid].state == "awaiting_approval")
+    await asyncio.sleep(0.3)
+    assert still_working(session) == []
+    agent.release.set()
+
+
+async def test_heartbeat_prefers_a_voice_cue_and_survives_its_failure(client, core, voice):
+    cues = []
+
+    def working_cue():
+        cues.append(1)
+        raise RuntimeError("no audio device")
+
+    voice.working_cue = working_cue
+    agent = SlowAgent()
+    session, tid = await submit_slow(client, core, agent)
+    await wait_for(session, lambda s: len(cues) >= 2)
+    assert still_working(session) == []  # the earcon replaces the spoken line
+    agent.release.set()
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    assert session.tasks[tid].state == "succeeded"
+
+
+async def test_shutdown_cancels_heartbeats(core):
+    agent = SlowAgent()
+    core.make_agent = lambda: agent
+    app = create_app(core, TOKEN, warm_voice=False)
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c,
+    ):
+        sid, session = await start(c, core)
+        await c.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                     json={"client_request_id": "cr_1", "source": "keyboard", "text": "x"})
+        heartbeat = next(iter(session.tasks.values())).heartbeat
+        assert not heartbeat.done()
+    await asyncio.sleep(0)
+    assert heartbeat.cancelled()
