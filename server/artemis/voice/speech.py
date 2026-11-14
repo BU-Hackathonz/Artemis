@@ -16,6 +16,7 @@ import inspect
 import logging
 import os
 import sys
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Protocol
@@ -78,12 +79,23 @@ class Speaker(Protocol):
     def busy(self) -> bool: ...
 
 
+def speech_seconds(text: str, words_per_second: float) -> float:
+    """Rough time to say `text`: its word count at the given pace."""
+    return len(text.split()) / words_per_second
+
+
 class NvdaSpeaker:
     """NVDA Controller Client: speaks in the user's own NVDA voice and rate, from any focused app."""
 
     name = "nvda"
+    # The controller can't say whether NVDA is still talking, so busy() estimates it from word count.
+    # 3.5 words a second is about NVDA's default rate. For a faster user a low-priority progress line
+    # may be dropped a little early; a normal or high line is never dropped because of busy().
+    WORDS_PER_SECOND = 3.5
 
-    def __init__(self, dll_path: Path = NVDA_DLL) -> None:
+    def __init__(self, dll_path: Path = NVDA_DLL, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._done_at = 0.0  # when the text we sent should have finished
         self._dll = None
         if sys.platform == "win32" and dll_path.is_file():
             try:
@@ -100,16 +112,22 @@ class NvdaSpeaker:
         return self._dll is not None and self._dll.nvdaController_testIfRunning() == 0
 
     def speak(self, text: str, interrupt: bool) -> None:
+        now = self._clock()
         if interrupt:
             self._dll.nvdaController_cancelSpeech()
+            self._done_at = now
         self._dll.nvdaController_speakText(text)
         self._dll.nvdaController_brailleMessage(text)
+        # Without interrupt NVDA queues the text after whatever it is still saying.
+        self._done_at = max(self._done_at, now) + speech_seconds(text, self.WORDS_PER_SECOND)
 
     def cancel(self) -> None:
         self._dll.nvdaController_cancelSpeech()
+        self._done_at = 0.0
 
     def busy(self) -> bool:
-        return False  # the controller API can't tell; low-priority text is spoken anyway
+        # An estimate of our own text only: NVDA reading the user's code is invisible to the controller.
+        return self._clock() < self._done_at
 
 
 class SapiSpeaker:
