@@ -75,7 +75,7 @@ def test_a_failed_run_is_reported_as_a_failure_never_as_a_success():
                     stdout_tail="", stderr_tail="NameError", truncated=False))
     c.observe(event("task.state", state="failed"))
     said = c.status()
-    assert "failed" in said and "The last run exited with code 1." in said
+    assert "The last request failed" in said and "The last run failed with exit code 1." in said
     assert "success" not in said.lower() and "passed" not in said.lower()
 
 
@@ -133,3 +133,62 @@ def test_a_new_task_starts_with_no_remembered_checks():
     c.begin("tsk_2", "second")
     c.observe(event("task.state", task_id="tsk_2", state="working"))
     assert c.status() == "I'm working on: second."
+
+
+# ----- review fixes (Avery on #108) -----
+
+
+FINDING = {"rule": "B602", "path": "main.py", "line": 5, "message": "shell=True", "severity": "high"}
+
+
+def test_a_clean_approval_clears_an_earlier_finding():
+    """The gateway sends security.findings only when there are findings, so a clean rewrite
+    must clear what an earlier blocked write left behind."""
+    c = started("create a program")
+    c.observe(event("security.findings", op_id="o3", tool="bandit", findings=[FINDING]))
+    assert "1 finding, 1 high severity" in c.status()
+    c.observe(event("approval.requested", approval_id="apr_2", summary="Create main.py. Enter to approve.", findings=[]))
+    c.observe(event("approval.resolved", approval_id="apr_2", decision="approve", by="user"))
+    assert "security" not in c.status()
+
+
+def test_an_approval_with_findings_sets_the_scan_fact():
+    c = started("create a program")
+    c.observe(event("approval.requested", approval_id="apr_2", summary="Blocked: 1 issue.", findings=[FINDING]))
+    c.observe(event("approval.resolved", approval_id="apr_2", decision="approve", by="user"))
+    assert "The security scan reported 1 finding, 1 high severity." in c.status()
+
+
+def test_an_approval_without_a_findings_list_leaves_the_fact_alone():
+    c = started("create a program")
+    c.observe(event("security.findings", op_id="o3", tool="bandit", findings=[FINDING]))
+    c.observe(event("approval.requested", approval_id="apr_2", summary="Run main.py."))
+    c.observe(event("approval.resolved", approval_id="apr_2", decision="approve", by="user"))
+    assert "1 finding" in c.status()
+
+
+def test_next_up_is_not_said_while_a_decision_is_open():
+    c = started("create a program", state="awaiting_approval")
+    c.observe(event("approval.requested", approval_id="apr_1", summary="Create main.py. Enter to approve."))
+    c.decide("and then add a docstring")
+    assert c.status() == "I'm waiting for your decision. Create main.py. Enter to approve."
+    c.observe(event("approval.resolved", approval_id="apr_1", decision="approve", by="user"))
+    c.observe(event("task.state", state="working"))
+    assert c.status().endswith("Next up: and then add a docstring.")
+
+
+def test_while_a_program_runs_the_last_run_is_not_said():
+    c = started("run it")
+    c.observe(event("run.result", op_id="o2", preset="python", exit_code=1, timed_out=False, duration_ms=5,
+                    stdout_tail="", stderr_tail="NameError", truncated=False))
+    c.observe(event("task.state", state="running"))
+    assert c.status() == "I'm running the program for: run it."
+    c.observe(event("task.state", state="working"))
+    assert "The last run failed with exit code 1." in c.status()
+
+
+def test_a_full_scan_list_is_said_as_fifty_or_more():
+    c = started("scan it")
+    c.observe(event("security.findings", op_id="o4", tool="bandit",
+                    findings=[dict(FINDING, severity="low", line=n) for n in range(50)]))
+    assert "reported 50 or more findings." in c.status()

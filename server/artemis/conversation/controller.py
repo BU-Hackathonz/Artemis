@@ -73,7 +73,8 @@ class _Task:
     def verified(self) -> list[str]:
         """Sentences about checks that actually reported, in the order they happened to be learned."""
         facts = []
-        if self.run:
+        # While a program is running, "the last run" would sound like it is about this one.
+        if self.run and self.state != "running":
             facts.append(f"The last run {self.run}.")
         if self.scan:
             facts.append(f"The security scan {self.scan}.")
@@ -83,6 +84,18 @@ class _Task:
 def _short(text: str) -> str:
     text = " ".join(text.split()).rstrip(".")
     return text if len(text) <= _MAX_SPOKEN_REQUEST else text[:_MAX_SPOKEN_REQUEST].rstrip() + "…"
+
+
+def _scan_text(findings: list) -> str:
+    """What the scan reported, from the findings it sent. scan_project sends at most 50, so a full
+    list is said as "50 or more"."""
+    if not findings:
+        return "reported no findings"
+    high = sum(1 for f in findings if isinstance(f, dict) and f.get("severity") == "high")
+    count = "1 finding" if len(findings) == 1 else f"{len(findings)} findings"
+    if len(findings) >= 50:
+        count = "50 or more findings"
+    return f"reported {count}" + (f", {high} high severity" if high else "")
 
 
 def _end(text: str) -> str:
@@ -136,6 +149,10 @@ class Controller:
                 task.answer = data.get("text", "")
         elif event.type == "approval.requested":
             self.approval = data.get("summary") or "An approval is open."
+            # The approval carries the findings that apply to what it proposes. A clean one replaces
+            # an earlier finding, which is no longer true of the code about to be written or run.
+            if isinstance(data.get("findings"), list):
+                task.scan = _scan_text(data["findings"]) if data["findings"] else ""
         elif event.type == "approval.resolved":
             self.approval = None
         elif event.type == "file.changed":
@@ -146,16 +163,13 @@ class Controller:
             if data.get("timed_out"):
                 task.run = "timed out"
             elif isinstance(data.get("exit_code"), int):
-                task.run = f"exited with code {data['exit_code']}"
+                code = data["exit_code"]
+                # Worded like the run announcement: a non-zero exit is a failure.
+                task.run = "exited with code 0" if code == 0 else f"failed with exit code {code}"
         elif event.type == "security.findings":
             findings = data.get("findings")
             if isinstance(findings, list):
-                high = sum(1 for f in findings if isinstance(f, dict) and f.get("severity") == "high")
-                if not findings:
-                    task.scan = "reported no findings"
-                else:
-                    count = "1 finding" if len(findings) == 1 else f"{len(findings)} findings"
-                    task.scan = f"reported {count}" + (f", {high} high severity" if high else "")
+                task.scan = _scan_text(findings)
 
     def next_request(self) -> "FollowUp | None":
         """Call when a task has ended: what to do with the request that was waiting, if any.
@@ -289,7 +303,8 @@ class Controller:
         # a check that never reported, and nothing here calls a failure a success.
         if not (task.state == "awaiting_approval" and self.approval):  # the decision comes first, alone
             said += "".join(f" {fact}" for fact in task.verified())
-        if self.queued:
+        decision_open = task.state == "awaiting_approval" and bool(self.approval)
+        if self.queued and not decision_open:  # an open decision is said alone, nothing after it
             said += f" Next up: {_end(_short(self.queued))}"
         return said
 
