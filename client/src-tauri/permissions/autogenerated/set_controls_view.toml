@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-controls-view"
+description = "Enables the set_controls_view command without any pre-configured scope."
+commands.allow = ["set_controls_view"]
+
+[[permission]]
+identifier = "deny-set-controls-view"
+description = "Denies the set_controls_view command without any pre-configured scope."
+commands.deny = ["set_controls_view"]

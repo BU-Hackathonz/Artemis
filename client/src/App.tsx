@@ -1,5 +1,6 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import {flushSync} from 'react-dom';
 import { createHttpCore, HttpError } from './api';
 import { createDemoCore } from './demo';
 import { ApprovalDialog, ENTER_GUARD_MS } from './ApprovalDialog';
@@ -27,6 +28,17 @@ function eventText(event: CoreEvent) {
   return event.type.replaceAll('.', ' ');
 }
 export function App() {
+  const [controlsNotice, setControlsNotice] = useState<{revision: number; view: 'full' | 'settings'; guard: boolean} | null>(null);
+  const settingsHeading = useRef<HTMLHeadingElement>(null);
+  const controlsView = controlsNotice?.view ?? 'full';
+  useEffect(() => {
+    if (!platform.native) return;
+    let active = true;
+    void platform.registerControlsHandler(notice => {if (active) setControlsNotice(notice);}).catch(() => {
+      if (active) setCompanionError('Settings unavailable. Use the full Artemis window.');
+    });
+    return () => {active = false;};
+  }, []);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [status, setStatus] = useState('Not connected');
   // Compact desktop status is opt-in (start.ps1 -Compact). Off: no status window, approvals focus as in the browser.
@@ -63,6 +75,20 @@ export function App() {
     }
   }, [state.taskId, state.taskState]);
   const ringInputs = {connected: ready, taskState: pendingTaskId ? 'queued' as const : state.taskId ? state.taskState : 'idle' as const, microphone: voiceInput.status.state, approval: state.approvals.length > 0};
+  useLayoutEffect(() => {
+    if (!controlsNotice) return;
+    const frame = requestAnimationFrame(() => {
+      const approval = state.approvals[0]?.approval;
+      const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+      if (approval && dialog) {
+        dialog.querySelector<HTMLButtonElement>(approval.blocking ? '[data-approval-reject]' : '[data-approval-approve]')?.focus();
+        if (controlsNotice.guard) flushSync(() => setRevealGuard({approvalId: approval.approval_id, until: Date.now() + ENTER_GUARD_MS}));
+      } else if (controlsNotice.view === 'settings') settingsHeading.current?.focus();
+      else input.current?.focus();
+      void platform.controlsViewReady(controlsNotice.revision).catch(() => setCompanionError('Could not reveal controls. Choose Artemis in the taskbar.'));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [controlsNotice]);
   useEffect(() => {
     if (!platform.native || !compact) return;
     const approvalId = state.approvals[0]?.approval.approval_id;
@@ -180,8 +206,34 @@ export function App() {
     }
     finally {setBusy(false);}
   }
-  return <><a className="skip" href="#request">Skip to request</a><header><LiquidRing kick={ringKick} inputs={ringInputs}/><p>ARTEMIS · {platform.name}</p><h1>Build with words.</h1><p>Direct a change, review each action, and hear the result.</p></header>
-    <main>
+  async function changeView(view: 'full' | 'settings') {
+    try {await platform.setControlsView(view);} catch {setCompanionError('Could not switch controls. Try Artemis in the taskbar.');}
+  }
+  const taskControls = <div className="actions">
+    <button aria-disabled={!ready} disabled={!(pendingTaskId ?? state.taskId) || (!pendingTaskId && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((pendingTaskId ?? state.taskId)!))}>Cancel task</button>
+    <button aria-disabled={!ready} disabled={!connection || connection.demo} onClick={() => void command(() => connection!.core.speech('repeat'))}>Repeat last speech</button>
+    <button aria-disabled={!ready} disabled={!connection || connection.demo} onClick={() => void command(() => connection!.core.speech('stop'))}>Stop speech</button>
+  </div>;
+  return <>
+    {controlsView === 'settings' && <main className="settings-panel" onKeyDown={event => {
+      if (event.key === 'Escape' && !state.approvals.length) {
+        event.preventDefault();
+        if (compact) void platform.enterCompact().catch(() => setCompanionError('Could not return to the notch.'));
+        else void changeView('full');
+      }
+    }}>
+      <h1 ref={settingsHeading} tabIndex={-1}>Settings and controls</h1>
+      <p role="status">{status} · Task: {taskLabel(state, pendingTaskId)}</p>
+      {error && <p role="alert">{error}</p>}{companionError && <p role="alert">{companionError}</p>}
+      <button onClick={() => void changeView('full')}>Open request and activity controls</button>
+      {compact && <button disabled={state.approvals.length > 0} onClick={() => void platform.enterCompact().catch(() => setCompanionError('Could not return to the notch.'))}>Return to notch</button>}
+      <section aria-label="Task and speech controls"><h2>Task and speech</h2>{taskControls}</section>
+      {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
+      <p>Answer style, conversation mode, and voice selection are currently configured through the launcher or spoken commands. Their settings controls will be available when the core supports them.</p>
+      <p>Open request and activity controls for setup, typed requests, approvals, and the activity log.</p>
+    </main>}
+    <div hidden={controlsView !== 'full'}>{platform.native ? <><a className="skip" href="#request">Skip to request</a><header className="controls-header"><h1>Artemis controls</h1></header></> : <><a className="skip" href="#request">Skip to request</a><header><LiquidRing kick={ringKick} inputs={ringInputs}/><p>ARTEMIS · {platform.name}</p><h1>Build with words.</h1><p>Direct a change, review each action, and hear the result.</p></header></>}
+    <main className={platform.native ? 'native-controls' : undefined}>
       <section aria-labelledby="connection-heading"><h2 id="connection-heading">Core connection</h2>
         <p role="status">{status}</p>
         {!connection && platform.native ? <><p>Start Artemis through infra/start.ps1 to connect securely to its core.</p>{!busy && <button onClick={() => window.location.reload()}>Retry launcher connection</button>}</> : !connection ? <><form onSubmit={e => {e.preventDefault(); void connect(false);}}>
@@ -194,6 +246,7 @@ export function App() {
           {!ready && <button onClick={() => {reconnectFocus.current = true; setConnection({...connection});}}>Reconnect event stream</button>}
         </>}
       </section>
+      {platform.native && <button onClick={() => void changeView('settings')}>Settings and controls</button>}
       {platform.native && compact && <button disabled={state.approvals.length > 0} onClick={() => {
         void platform.enterCompact().catch(() => setCompanionError('Could not open compact status. Full controls remain available here.'));
       }}>Use compact status</button>}
@@ -212,9 +265,7 @@ export function App() {
             }} rows={4} value={text} onChange={e => setText(e.target.value)} placeholder="Create a Python program that prints Hello World" disabled={!connection} readOnly={!ready} aria-disabled={!ready} required/>
             <button disabled={!connection || !ready || busy || !text.trim() || ((pendingTaskId !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')}>{state.taskState === 'awaiting_reply' ? 'Send reply' : 'Send request'}</button>
           </form>
-          <div className="actions"><button aria-disabled={!ready} disabled={!(pendingTaskId ?? state.taskId) || (!pendingTaskId && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((pendingTaskId ?? state.taskId)!))}>Cancel task</button>
-            <button aria-disabled={!ready} disabled={connection?.demo} onClick={() => void command(() => connection!.core.speech('repeat'))}>Repeat last speech</button>
-            <button aria-disabled={!ready} disabled={connection?.demo} onClick={() => void command(() => connection!.core.speech('stop'))}>Stop speech</button></div>
+          {taskControls}
         </section>
         <section aria-labelledby="log-heading"><h2 id="log-heading">Activity log</h2><p>Latest 500 events. Tab into the log and use arrow keys to scroll.</p>
           <div role="log" aria-label="Activity log" aria-live={voiceReady ? 'off' : 'polite'} aria-relevant="additions" tabIndex={0} className="log">
@@ -226,7 +277,9 @@ export function App() {
         </section>
       </div>
       {/* After the request form in tab order: focus starts in the request field after connect. */}
-      {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
+      {controlsView === 'full' && connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
+
+    </main><footer>Writes and runs require approval. Review every proposal before approving.</footer></div>
       {state.approvals[0] && connection && ready && <ApprovalDialog enterGuardUntil={revealGuard?.approvalId === state.approvals[0].approval.approval_id ? revealGuard.until : undefined} key={state.approvals[0].approval.approval_id} approval={state.approvals[0].approval} decide={decision => connection.core.decide(state.approvals[0].approval, decision)}/>}
-    </main><footer>Writes and runs require approval. Review every proposal before approving.</footer></>;
+    </>;
 }

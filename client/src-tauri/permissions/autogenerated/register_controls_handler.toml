@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-register-controls-handler"
+description = "Enables the register_controls_handler command without any pre-configured scope."
+commands.allow = ["register_controls_handler"]
+
+[[permission]]
+identifier = "deny-register-controls-handler"
+description = "Denies the register_controls_handler command without any pre-configured scope."
+commands.deny = ["register_controls_handler"]

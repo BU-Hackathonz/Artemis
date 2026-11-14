@@ -3,6 +3,7 @@
 use serde::Serialize;
 use tauri::Manager;
 mod companion;
+mod controls;
 
 #[derive(Clone, Serialize)]
 struct CoreConfig {
@@ -81,6 +82,7 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
         .manage(companion::CompanionState::default())
+        .manage(controls::ControlsState::default())
         .setup(move |app| {
             // Default: no compact status window; full controls open and take focus as before.
             let status = if compact {
@@ -112,7 +114,11 @@ fn main() {
             companion::update_companion_status,
             companion::show_main,
             companion::enter_compact,
-            companion::reveal_approval
+            companion::reveal_approval,
+            controls::register_controls_handler,
+            controls::show_settings,
+            controls::set_controls_view,
+            controls::controls_view_ready
         ])
         .run(tauri::generate_context!())
         .expect("Could not start Artemis desktop client");
