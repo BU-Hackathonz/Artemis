@@ -1,6 +1,8 @@
 """Voice tests. Run with pytest, or without it: python -m artemis.voice.test_voice (from server/)."""
 
 import asyncio
+import inspect
+import logging
 
 import pytest
 
@@ -193,24 +195,97 @@ def test_rate_never_changes_under_nvda():
     assert "NVDA's speech settings" in nvda.said[0][0]
 
 
-def test_env_rate_is_optional_and_safe():
-    import os
-
+def test_env_rate_is_optional_and_safe(monkeypatch):
     from artemis.voice.speech import RATE_MAX, _env_rate
 
-    old = os.environ.get("ARTEMIS_SAPI_RATE")
-    try:
-        os.environ.pop("ARTEMIS_SAPI_RATE", None)
-        assert _env_rate() is None  # unset: keep the user's own Windows rate
-        os.environ["ARTEMIS_SAPI_RATE"] = "99"
-        assert _env_rate() == RATE_MAX
-        os.environ["ARTEMIS_SAPI_RATE"] = "fast"
-        assert _env_rate() is None
-    finally:
-        if old is None:
-            os.environ.pop("ARTEMIS_SAPI_RATE", None)
-        else:
-            os.environ["ARTEMIS_SAPI_RATE"] = old
+    monkeypatch.delenv("ARTEMIS_SAPI_RATE", raising=False)
+    assert _env_rate() is None  # unset: keep the user's own Windows rate
+    monkeypatch.setenv("ARTEMIS_SAPI_RATE", "99")
+    assert _env_rate() == RATE_MAX
+    monkeypatch.setenv("ARTEMIS_SAPI_RATE", "fast")
+    assert _env_rate() is None
+
+
+class FakeToken:
+    """A SAPI voice token: only GetDescription() is used by choose_voice."""
+
+    def __init__(self, description):
+        self._description = description
+
+    def GetDescription(self):
+        return self._description
+
+
+class FakeSpVoice:
+    """Stands in for SAPI.SpVoice: GetVoices() lists the tokens; assigning .Voice records the choice."""
+
+    def __init__(self, descriptions=(), raises=None):
+        self.tokens = [FakeToken(d) for d in descriptions]
+        self._raises = raises
+        self.Voice = "windows-default"
+
+    def GetVoices(self):
+        if self._raises is not None:
+            raise self._raises
+        return self.tokens
+
+
+def sapi_with(voice):
+    from artemis.voice.speech import SapiSpeaker
+
+    s = SapiSpeaker.__new__(SapiSpeaker)  # bypass __init__: no COM, no pywin32 in tests
+    s._voice = voice
+    return s
+
+
+INSTALLED = ["Microsoft David Desktop", "Microsoft Zira Desktop"]
+
+
+def _warnings(caplog):
+    return [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_choose_voice_sets_the_matching_voice():
+    fake = FakeSpVoice(INSTALLED)
+    assert sapi_with(fake).choose_voice("Zira") is True
+    assert fake.Voice is fake.tokens[1]
+
+
+def test_choose_voice_matches_case_insensitive_substring():
+    fake = FakeSpVoice(INSTALLED)
+    assert sapi_with(fake).choose_voice("DAVID") is True
+    assert fake.Voice is fake.tokens[0]
+
+
+def test_choose_voice_takes_the_first_installed_match():
+    fake = FakeSpVoice(INSTALLED)  # "Microsoft" is in both descriptions
+    assert sapi_with(fake).choose_voice("microsoft") is True
+    assert fake.Voice is fake.tokens[0]
+
+
+def test_choose_voice_unknown_name_keeps_voice_and_warns(caplog):
+    fake = FakeSpVoice(INSTALLED)
+    with caplog.at_level(logging.WARNING, logger="artemis.voice.speech"):
+        assert sapi_with(fake).choose_voice("Hazel") is False
+    assert fake.Voice == "windows-default"
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1 and "Hazel" in warnings[0].getMessage()
+
+
+@pytest.mark.parametrize("name", [None, ""])
+def test_choose_voice_empty_name_is_a_silent_no_op(name, caplog):
+    fake = FakeSpVoice(INSTALLED)
+    assert sapi_with(fake).choose_voice(name) is False
+    assert fake.Voice == "windows-default"
+    assert _warnings(caplog) == []
+
+
+def test_choose_voice_com_error_does_not_crash_and_warns(caplog):
+    fake = FakeSpVoice(raises=RuntimeError("COM error"))
+    with caplog.at_level(logging.WARNING, logger="artemis.voice.speech"):
+        assert sapi_with(fake).choose_voice("Zira") is False
+    assert fake.Voice == "windows-default"
+    assert len(_warnings(caplog)) == 1
 
 
 def test_sapi_init_survives_a_failing_rate_set():
@@ -237,5 +312,8 @@ def test_stub_voice_passes_set_rate_through():
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
+            if inspect.signature(fn).parameters:  # pytest fixtures or parametrize: pytest only
+                print("skipped (needs pytest)", name)
+                continue
             fn()
             print("ok", name)
