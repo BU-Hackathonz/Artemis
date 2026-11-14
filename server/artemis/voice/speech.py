@@ -132,6 +132,10 @@ class NvdaSpeaker:
         self._dll.nvdaController_cancelSpeech()
         self._done_at = 0.0
 
+    def braille(self, text: str) -> None:
+        """Send text to the braille display only; NVDA does not speak it."""
+        self._dll.nvdaController_brailleMessage(text)
+
     def busy(self) -> bool:
         # An estimate of our own text only: NVDA reading the user's code is invisible to the controller.
         return self._clock() < self._done_at
@@ -264,9 +268,15 @@ def _chain(first: bytes, rest):
     yield from rest
 
 
+ENGINES = ("elevenlabs", "nvda", "sapi")
+
+
 def voice_engine() -> str:
-    """ARTEMIS_VOICE_ENGINE: unset keeps today's behaviour; 'elevenlabs' opts in."""
-    return os.environ.get("ARTEMIS_VOICE_ENGINE", "").strip().lower()
+    """ARTEMIS_VOICE_ENGINE picks Artemis's own voice: elevenlabs (the default), nvda or sapi."""
+    raw = os.environ.get("ARTEMIS_VOICE_ENGINE", "").strip().lower()
+    if raw and raw not in ENGINES:
+        log.warning("ARTEMIS_VOICE_ENGINE=%r is not one of %s; using elevenlabs", raw, ", ".join(ENGINES))
+    return raw if raw in ENGINES else "elevenlabs"
 
 
 class ElevenLabsSpeaker:
@@ -274,9 +284,10 @@ class ElevenLabsSpeaker:
 
     The network and the audio device run on one worker thread, so the event loop never waits on them.
     A line that can't start within the timeout (no key, a failed request, a slow first chunk) is spoken
-    by the fallback speaker (SAPI) instead. After FAILURES_BEFORE_SAPI failures in a row this speaker
-    reports unavailable for the rest of the session, so the router uses SAPI. The API key is only ever
-    sent in the request header: it is never logged, spoken or put in an event.
+    by the fallback speaker instead (NVDA when it runs, else SAPI). After FAILURES_BEFORE_SAPI failures
+    in a row this speaker reports unavailable for the rest of the session, so the router falls back
+    too. When NVDA runs, every line also goes to the braille display through `braille`. The API key is
+    only ever sent in the request header: it is never logged, spoken or put in an event.
     """
 
     name = "elevenlabs"
@@ -293,6 +304,7 @@ class ElevenLabsSpeaker:
         self.timeout_s = timeout_s if timeout_s is not None else _env_float("ARTEMIS_ELEVEN_TIMEOUT_S", 1.5, 0.2, 10.0)
         self.fallback = fallback
         self.on_give_up = on_give_up  # the core can set this to say FALLBACK_NOTICE through the bus
+        self.braille: Callable[[str], None] | None = None  # set by the Announcer: NVDA's braille display
         self._opener, self._output = opener, output
         self._queue: queue.Queue = queue.Queue()
         self._gen = 0  # bumped by cancel (and so by interrupt): work holding an older number stops
@@ -309,9 +321,9 @@ class ElevenLabsSpeaker:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._worker: threading.Thread | None = None
         if not self._key:
-            log.warning("ARTEMIS_VOICE_ENGINE=elevenlabs, but ELEVENLABS_API_KEY is not set; using the Windows voice")
+            log.warning("ElevenLabs voice: ELEVENLABS_API_KEY is not set; using NVDA or the Windows voice")
         elif self.voice_id == PLACEHOLDER_VOICE:
-            log.warning("ARTEMIS_VOICE_ENGINE=elevenlabs, but ARTEMIS_ELEVEN_VOICE_ID is not set; using the Windows voice")
+            log.warning("ElevenLabs voice: ARTEMIS_ELEVEN_VOICE_ID is not set; using NVDA or the Windows voice")
 
     # Speaker protocol
 
@@ -325,6 +337,11 @@ class ElevenLabsSpeaker:
             self._loop = None
         if interrupt:
             self.cancel()
+        if self.braille is not None:
+            try:
+                self.braille(text)  # the same line on the braille display, as NVDA would send it
+            except Exception:
+                pass
         with self._lock:
             gen = self._gen
             self._idle.clear()
@@ -350,7 +367,7 @@ class ElevenLabsSpeaker:
                     pass
         if self.fallback is not None:
             try:
-                self.fallback.cancel()  # a line that fell back to SAPI stops too (push-to-talk)
+                self.fallback.cancel()  # a line that fell back stops too (push-to-talk)
             except Exception:
                 pass
 
@@ -526,22 +543,66 @@ class NullSpeaker:
         return False
 
 
+class _Fallback:
+    """Where a line goes when ElevenLabs can't say it: NVDA when it runs (never a second voice over it),
+    else SAPI. cancel() stops only the speaker this fallback last used, so NVDA's own reading of the
+    screen is never cut off by Artemis."""
+
+    name = "fallback"
+
+    def __init__(self, announcer: "Announcer") -> None:
+        self._a, self._last = announcer, None
+
+    def _target(self) -> Speaker | None:
+        a = self._a
+        if a.is_nvda_running():
+            return a.nvda if a.nvda.available() else None
+        return a.sapi if a.sapi.available() else None
+
+    def available(self) -> bool:
+        return self._target() is not None
+
+    def speak(self, text: str, interrupt: bool) -> None:
+        target = self._target()
+        if target is not None:
+            self._last = target
+            target.speak(text, interrupt)
+
+    def cancel(self) -> None:
+        if self._last is not None:
+            self._last.cancel()
+            self._last = None
+
+    def busy(self) -> bool:
+        return self._last is not None and self._last.busy()
+
+
 class Announcer:
-    """announce() for the core: picks NVDA, then ElevenLabs (opt-in), then SAPI, then silence; applies priority."""
+    """announce() for the core. Artemis's voice is ARTEMIS_VOICE_ENGINE: elevenlabs (the default) speaks
+    even while NVDA runs, and NVDA keeps the screen and the braille display; with no key, or with nvda
+    or sapi chosen, it is NVDA when it runs, else SAPI, else silence. Never two voices for one line."""
 
     def __init__(self, nvda: Speaker | None = None, sapi: Speaker | None = None, is_nvda_running: Callable[[], bool] = nvda_running,
                  eleven: Speaker | None = None) -> None:
         self.nvda = nvda or NvdaSpeaker()
         self.sapi = sapi or SapiSpeaker()
         self.is_nvda_running = is_nvda_running
-        # Opt-in natural voice, used only when NVDA is not running. Unset ARTEMIS_VOICE_ENGINE keeps today's behaviour.
-        if eleven is None and voice_engine() == "elevenlabs":
-            eleven = ElevenLabsSpeaker(fallback=self.sapi)
+        self.engine = voice_engine()
+        if eleven is None and self.engine == "elevenlabs":
+            eleven = ElevenLabsSpeaker(fallback=_Fallback(self))
+        if eleven is not None and hasattr(eleven, "braille"):
+            eleven.braille = self._braille
         self.eleven = eleven
         self.last: str | None = None
         self._warned = False
 
+    def _braille(self, text: str) -> None:
+        if self.is_nvda_running() and self.nvda.available() and hasattr(self.nvda, "braille"):
+            self.nvda.braille(text)
+
     def current(self) -> Speaker:
+        if self.engine == "elevenlabs" and self.eleven is not None and self.eleven.available():
+            return self.eleven  # the user's chosen voice, with or without NVDA
         if self.is_nvda_running():
             if self.nvda.available():
                 return self.nvda
@@ -549,12 +610,14 @@ class Announcer:
                 log.warning("NVDA is running but its controller DLL is unavailable; staying silent. Run: python -m artemis.voice.setup")
                 self._warned = True
             return NullSpeaker()
-        if self.eleven is not None and self.eleven.available():
-            return self.eleven
         return self.sapi if self.sapi.available() else NullSpeaker()
 
     def status(self) -> tuple[bool, str | None]:
-        """(voice_ready, screen_reader) as contracts.md voice.status and /health report them."""
+        """(voice_ready, screen_reader) as contracts.md voice.status and /health report them.
+
+        screen_reader is "nvda" only when Artemis speaks through NVDA: with ElevenLabs speaking it is
+        None, so "faster" reaches ElevenLabs instead of the NVDA rate line.
+        """
         name = self.current().name
         return name != "none", "nvda" if name == "nvda" else None
 

@@ -9,6 +9,7 @@ import urllib.error
 
 from artemis.voice.speech import (
     FALLBACK_NOTICE,
+    _Fallback,
     Announcer,
     ElevenLabsSpeaker,
     RateStatus,
@@ -103,16 +104,37 @@ def ok_opener(chunks=(b"\x01\x00" * 10, b"\x02\x00" * 10)):
 # ----- routing -----
 
 
-def test_nvda_running_means_elevenlabs_is_never_used():
+class BrailleNvda(FakeSpeaker):
+    def __init__(self):
+        super().__init__("nvda")
+        self.brailled = []
+
+    def braille(self, text):
+        self.brailled.append(text)
+
+
+def test_elevenlabs_speaks_even_while_nvda_runs_and_nvda_keeps_braille():
     opener = ok_opener()
-    nvda, sapi = FakeSpeaker("nvda"), FakeSpeaker("sapi")
+    nvda, sapi = BrailleNvda(), FakeSpeaker("sapi")
     e = eleven(opener, sapi=sapi)
     a = Announcer(nvda=nvda, sapi=sapi, is_nvda_running=lambda: True, eleven=e)
     asyncio.run(a.announce("main.py ran successfully.", "high"))
-    e.wait_idle(2)
-    assert a.current() is nvda and nvda.said == [("main.py ran successfully.", True)]
-    assert opener.requests == [] and sapi.said == []
-    assert a.status() == (True, "nvda")
+    assert e.wait_idle(2)
+    assert a.current() is e and len(opener.requests) == 1
+    assert nvda.said == [] and nvda.canceled == 0  # never a second voice, and NVDA's own reading is never cut
+    assert nvda.brailled == ["main.py ran successfully."]  # the braille display still gets the line
+    assert a.status() == (True, None)  # Artemis speaks through ElevenLabs, not NVDA
+
+
+def test_choosing_nvda_or_sapi_keeps_nvda_first(monkeypatch):
+    opener = ok_opener()
+    for engine in ("nvda", "sapi"):
+        monkeypatch.setenv("ARTEMIS_VOICE_ENGINE", engine)
+        nvda, sapi = FakeSpeaker("nvda"), FakeSpeaker("sapi")
+        a = Announcer(nvda=nvda, sapi=sapi, is_nvda_running=lambda: True, eleven=eleven(opener, sapi=sapi))
+        asyncio.run(a.announce("main.py ran successfully.", "high"))
+        assert nvda.said == [("main.py ran successfully.", True)] and sapi.said == []
+    assert opener.requests == []
 
 
 def test_without_nvda_the_order_is_elevenlabs_then_sapi():
@@ -124,15 +146,18 @@ def test_without_nvda_the_order_is_elevenlabs_then_sapi():
     assert a.current() is sapi
 
 
-def test_engine_is_off_unless_asked(monkeypatch):
-    monkeypatch.delenv("ARTEMIS_VOICE_ENGINE", raising=False)
+def test_elevenlabs_is_the_default_and_without_a_key_it_is_nvda_then_sapi(monkeypatch):
     a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False)
-    assert a.eleven is None and a.current().name == "sapi"
-    monkeypatch.setenv("ARTEMIS_VOICE_ENGINE", "elevenlabs")
+    assert a.engine == "elevenlabs" and a.eleven is not None and not a.eleven.available()
+    assert a.current().name == "sapi"  # no key: today's behaviour
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: True)
+    assert a.current().name == "nvda"
     monkeypatch.setenv("ELEVENLABS_API_KEY", KEY)
     monkeypatch.setenv("ARTEMIS_ELEVEN_VOICE_ID", "voice_abc")
-    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False)
-    assert a.eleven is not None and a.current().name == "elevenlabs"
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: True)
+    assert a.current().name == "elevenlabs"
+    monkeypatch.setenv("ARTEMIS_VOICE_ENGINE", "loud")  # unknown: warns, keeps the default
+    assert Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: True).engine == "elevenlabs"
 
 
 def test_missing_key_or_voice_falls_back_to_sapi_with_one_warning(monkeypatch, caplog):
@@ -186,10 +211,32 @@ def test_speed_is_clamped_and_steps_by_a_tenth():
     assert asyncio.run(a.set_rate(0)) == RateStatus.UNCHANGED
 
 
-def test_under_nvda_faster_never_touches_elevenlabs():
+def test_faster_reaches_elevenlabs_even_with_nvda_but_never_nvda_itself(monkeypatch):
     e = eleven(ok_opener(), speed=1.0)
     a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: True, eleven=e)
-    assert asyncio.run(a.set_rate(1)) == RateStatus.NVDA and e.speed == 1.0
+    assert asyncio.run(a.set_rate(1)) == RateStatus.FASTER and e.speed == 1.1
+    monkeypatch.setenv("ARTEMIS_VOICE_ENGINE", "nvda")
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: True, eleven=e)
+    assert asyncio.run(a.set_rate(1)) == RateStatus.NVDA and e.speed == 1.1
+
+
+def test_a_failed_line_falls_back_to_nvda_when_it_runs_and_cancel_spares_nvda_otherwise():
+    nvda, sapi = BrailleNvda(), FakeSpeaker("sapi")
+    running = [True]
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", opener=Opener(lambda: urllib.error.URLError("offline")),
+                          output=FakeOutput)
+    a = Announcer(nvda=nvda, sapi=sapi, is_nvda_running=lambda: running[0], eleven=e)
+    e.fallback = _Fallback(a)
+    e.speak("Created main.py, 1 line.", interrupt=False)
+    assert e.wait_idle(2)
+    assert nvda.said == [("Created main.py, 1 line.", False)] and sapi.said == []  # never SAPI over NVDA
+    e.cancel()
+    assert nvda.canceled == 1  # it was NVDA saying our line, so stopping it is right
+    e.cancel()
+    assert nvda.canceled == 1  # nothing of ours left: NVDA's own reading is not touched
+    running[0] = False
+    e.speak("Hello.", interrupt=False)
+    assert e.wait_idle(2) and sapi.said == [("Hello.", False)]
 
 
 # ----- interrupt, cancel, busy -----

@@ -96,16 +96,23 @@ the exit code and the last line of the error output (the exception) verbatim bef
 explanation. Earcons are Yaovi's and don't collide with speech; built so far: listening on and off.
 The "still working" heartbeat is a low-priority spoken line from the core, not an earcon.
 
-### 5a. ElevenLabs, an optional natural voice (Yaovi; off by default)
+### 5a. ElevenLabs, Artemis's own voice (Yaovi; default when a key is set; issue #134)
 
-**Why.** SAPI voices sound robotic, and a developer who doesn't use NVDA may listen to Artemis for a
-long session. ElevenLabs streams a natural voice fast enough to start speaking in about a second
-with its flash model.
+**Why.** SAPI voices sound robotic, and Artemis is meant to sound like a voice you work with, not a
+form read aloud. ElevenLabs streams a natural voice fast enough to start speaking in about a second
+with its flash model. The voice, speed and engine are the user's choice.
 
-**When it is used.** Only with `ARTEMIS_VOICE_ENGINE=elevenlabs`, and only when NVDA is not
-running. The order is NVDA, then ElevenLabs, then SAPI, then silence. A running NVDA always wins,
-and its voice and rate are never touched. With the variable unset nothing changes, including the
-rehearsed demo.
+**When it is used.** ElevenLabs is the first choice for Artemis's own lines, **even while NVDA
+runs** (decided by Yaovi and David, #134). NVDA stays the screen reader: it keeps reading focus,
+navigation and the user's own text, and Artemis's lines still go to the braille display through
+NVDA's `brailleMessage`. NVDA is not asked to speak them, so no line is heard twice, and Artemis never
+cancels NVDA's own speech. This revises "never both" in §5: one voice per line, but Artemis's voice
+and NVDA's reading can overlap, and Artemis can't tell when NVDA is talking.
+- No key, no voice id, or `ARTEMIS_VOICE_ENGINE=nvda` or `sapi`: today's order, NVDA when it runs,
+  else SAPI, else silence. So a machine without a key behaves exactly as before, including the
+  rehearsed demo.
+- `screen_reader` in `voice.status` stays "nvda" only when Artemis speaks through NVDA, so "faster"
+  reaches ElevenLabs instead of answering with the NVDA rate line.
 
 **How it behaves.**
 - Audio streams as raw PCM and starts playing on the first chunk. The download and the playback run
@@ -113,8 +120,8 @@ rehearsed demo.
 - A `high` line stops the current audio at once, and push-to-talk stops it before the listening
   earcon, as it does for SAPI.
 - If a line can't start within `ARTEMIS_ELEVEN_TIMEOUT_S` (no key, a failed request, a slow first
-  chunk), that same line is spoken by SAPI and one warning is logged. After 3 failures in a row,
-  SAPI is used for the rest of the session. The notice "My natural voice isn't reachable, so I'm
+  chunk), that same line is spoken by NVDA when it runs, else SAPI, and one warning is logged. After
+  3 failures in a row, that fallback is used for the rest of the session. The notice "My natural voice isn't reachable, so I'm
   using the Windows voice." is handed to the core through a hook; until the core wires it to the
   event bus, it is logged only.
 - "Faster" and "slower" change the ElevenLabs speed by 0.1 within 0.7 to 1.2, for the session.
@@ -132,9 +139,9 @@ event or committed (`.env.example` holds an empty placeholder).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ARTEMIS_VOICE_ENGINE` | unset | `elevenlabs` opts in; anything else keeps SAPI |
-| `ELEVENLABS_API_KEY` | unset | The API key. Without it, SAPI is used |
-| `ARTEMIS_ELEVEN_VOICE_ID` | `<PASTE_VOICE_ID>` | The voice. Without a real id, SAPI is used |
+| `ARTEMIS_VOICE_ENGINE` | `elevenlabs` | Artemis's voice: `elevenlabs`, `nvda` or `sapi` (the last two keep NVDA first) |
+| `ELEVENLABS_API_KEY` | unset | The API key. Without it, NVDA or SAPI is used |
+| `ARTEMIS_ELEVEN_VOICE_ID` | `<PASTE_VOICE_ID>` | The voice. Without a real id, NVDA or SAPI is used |
 | `ARTEMIS_ELEVEN_MODEL` | `eleven_flash_v2_5` | The model |
 | `ARTEMIS_ELEVEN_SPEED` | `1.0` | Starting speed, clamped to 0.7..1.2 |
 | `ARTEMIS_ELEVEN_STABILITY` | `0.5` | Voice stability, 0..1 |
