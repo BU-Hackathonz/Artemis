@@ -18,6 +18,7 @@ ErrorCode = Literal[
     "timeout",
     "not_found",
     "tool_failed",
+    "echo_unavailable",
 ]
 
 
@@ -69,6 +70,10 @@ class EditFileArgs(_Args):
     edits: list[Edit] = Field(min_length=1)
 
 
+class InspectPageArgs(_Args):
+    path: str  # an .html or .htm file in the current project
+
+
 TOOL_ARGS: dict[str, type[BaseModel]] = {
     "create_project": CreateProjectArgs,
     "open_project": OpenProjectArgs,
@@ -77,6 +82,7 @@ TOOL_ARGS: dict[str, type[BaseModel]] = {
     "write_files": WriteFilesArgs,
     "run_program": RunProgramArgs,
     "edit_file": EditFileArgs,
+    "inspect_page": InspectPageArgs,
 }
 
 

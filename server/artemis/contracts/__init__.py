@@ -47,6 +47,7 @@ from .tools import (
     EditFileArgs,
     ErrorCode,
     FileWrite,
+    InspectPageArgs,
     ListFilesArgs,
     OpenProjectArgs,
     ReadFileArgs,
