@@ -1,0 +1,24 @@
+{
+  "response": {
+    "decision": "reject",
+    "approval_hash": "sha256:0f0d5f1a3c1c2b7e8a9d4c6b5a4e3f2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f"
+  },
+  "events": [
+    {
+      "seq": 6, "session_id": "ses_1", "task_id": "tsk_7", "type": "approval.resolved",
+      "at": "2026-11-14T15:02:15Z", "announce": null,
+      "data": { "approval_id": "apr_3", "decision": "reject", "by": "user" }
+    },
+    {
+      "seq": 7, "session_id": "ses_1", "task_id": "tsk_7", "type": "agent.message",
+      "at": "2026-11-14T15:02:15Z",
+      "announce": { "text": "Okay, I didn't create anything.", "priority": "normal" },
+      "data": { "text": "Okay, I didn't create anything.", "kind": "answer" }
+    },
+    {
+      "seq": 8, "session_id": "ses_1", "task_id": "tsk_7", "type": "task.state",
+      "at": "2026-11-14T15:02:15Z", "announce": null,
+      "data": { "state": "succeeded" }
+    }
+  ]
+}

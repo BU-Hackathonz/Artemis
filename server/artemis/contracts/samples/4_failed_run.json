@@ -1,0 +1,21 @@
+{
+  "seq": 12,
+  "session_id": "ses_1",
+  "task_id": "tsk_7",
+  "type": "run.result",
+  "at": "2026-11-14T15:03:02Z",
+  "announce": {
+    "text": "main.py failed with exit code 1. NameError: name 'pritn' is not defined.",
+    "priority": "high"
+  },
+  "data": {
+    "op_id": "op_9",
+    "preset": "python",
+    "exit_code": 1,
+    "timed_out": false,
+    "duration_ms": 81,
+    "stdout_tail": "",
+    "stderr_tail": "Traceback (most recent call last):\n  File \"main.py\", line 1 ...\nNameError: name 'pritn' is not defined",
+    "truncated": false
+  }
+}
