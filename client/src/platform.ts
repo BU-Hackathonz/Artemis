@@ -31,8 +31,9 @@ export const platform = {
   native,
   /** Main-window side of the desktop agent ring (desktop app only; no-ops in the browser). */
   agent: {
-    sendStatus(status: AgentStatus): Promise<void> { return native ? sendTo('agent', AGENT.status, status) : Promise.resolve(); },
-    setVisible(visible: boolean): Promise<void> { return native ? sendTo('agent', AGENT.visible, visible) : Promise.resolve(); },
+    // the island ('agent') and the flow overlay ('flow') both picture the state
+    sendStatus(status: AgentStatus): Promise<void> { return native ? Promise.all([sendTo('agent', AGENT.status, status), sendTo('flow', AGENT.status, status)]).then(() => {}) : Promise.resolve(); },
+    setVisible(visible: boolean): Promise<void> { return native ? Promise.all([sendTo('agent', AGENT.visible, visible), sendTo('flow', AGENT.visible, visible)]).then(() => {}) : Promise.resolve(); },
     resetPosition(): Promise<void> { return native ? sendTo('agent', AGENT.reset) : Promise.resolve(); },
     onReady(handler: () => void): Promise<Unlisten> { return native ? on(AGENT.ready, handler) : Promise.resolve(() => {}); },
     /** The agent was clicked: bring the controls back and focus them. */
