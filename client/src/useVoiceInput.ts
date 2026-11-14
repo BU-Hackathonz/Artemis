@@ -41,7 +41,10 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
     if (!platform.native || !core) return;
     let disposed = false;
     let unregister: (() => Promise<void>) | undefined;
-    const talk = createPushToTalk(core, setStatus, shortcut);
+    const talk = createPushToTalk(core, next => {
+      if (next.state === 'idle' || next.state === 'error') sources.current.clear();
+      setStatus(next);
+    }, shortcut);
     controller.current = talk;
     sources.current.clear(); shortcutDown.current = false;
     setRegistered(false); setShortcutError(''); setShortcutErrorKind(null); setNoticeFailed(false);
@@ -62,13 +65,15 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
       // Without core speech, the local alert is the one announcement source.
       if (!voiceReadyRef.current) return;
       if (sessionId) {
-        let notice = noticeRequests.current.get(sessionId);
+        const noticeKey = JSON.stringify([sessionId, 'shortcut_registration_failed', shortcut]);
+        let notice = noticeRequests.current.get(noticeKey);
+        if (notice) setNoticeFailed(true); // The core suppresses exact repeats; announce locally.
         if (!notice) {
           notice = core.reportShortcutFailure(sessionId, shortcut).catch(error => {
-            if (noticeRequests.current.get(sessionId) === notice) noticeRequests.current.delete(sessionId);
+            if (noticeRequests.current.get(noticeKey) === notice) noticeRequests.current.delete(noticeKey);
             throw error;
           });
-          noticeRequests.current.set(sessionId, notice);
+          noticeRequests.current.set(noticeKey, notice);
         }
         void notice.catch(() => {if (!disposed) setNoticeFailed(true);});
       } else setNoticeFailed(true);

@@ -13,6 +13,7 @@ export function normalizeVoiceShortcut(input: string): string {
     throw new Error('That is a system shortcut. Choose a different voice shortcut.');
   }
   if (!/^(?:[A-Z0-9]|F(?:[1-9]|1\d|2[0-4])|SPACE)$/.test(upper)) throw new Error('Choose a letter, number, function key or Space after the modifiers.');
+  if (unique.has('Control') && unique.has('Alt') && /^[A-Z]$/.test(upper)) throw new Error('Control+Alt+letter may conflict with AltGr or assistive technology. Choose a different shortcut.');
   const normalizedKey = upper === 'SPACE' ? 'Space' : upper;
   return [...['Control','Alt','Shift'].filter(part=>unique.has(part)),normalizedKey].join('+');
 }

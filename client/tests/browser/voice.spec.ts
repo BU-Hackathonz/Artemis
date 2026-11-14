@@ -22,7 +22,7 @@ async function bridge(page:Page, url:string, failFirst:boolean|'always'=false) {
     }}});
   },{url,failFirst});
 }
-async function coreFixture({delayFirstStart=false,voiceReady=false,diagnosticsStatus=204}: {delayFirstStart?:boolean;voiceReady?:boolean;diagnosticsStatus?:number} = {}) {
+async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceReady=false,diagnosticsStatus=204}: {failFirstStart?:boolean;delayFirstStart?:boolean;voiceReady?:boolean;diagnosticsStatus?:number} = {}) {
   const actions:string[]=[];
   let pendingStart:ServerResponse|undefined;
   let events:ServerResponse|undefined;
@@ -47,7 +47,10 @@ async function coreFixture({delayFirstStart=false,voiceReady=false,diagnosticsSt
     if(req.url==='/voice/listen'){
       let body='';req.on('data',part=>{body+=part;});req.on('end',()=>{
         const action=JSON.parse(body).action;actions.push(action);
-        if(action==='start' && ++starts===1 && delayFirstStart){pendingStart=res;return;}
+        if(action==='start' && ++starts===1){
+          if(failFirstStart){res.writeHead(503).end();return;}
+          if(delayFirstStart){pendingStart=res;return;}
+        }
         res.writeHead(204).end();
       });return;
     }
@@ -148,7 +151,11 @@ test('SAPI-ready registration failure uses the bounded core diagnostic without a
     await page.getByLabel('Global voice shortcut').fill('Control+Shift+Space');
     await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
     await expect(page.locator('#shortcut-error')).toContainText('Could not register Control+Shift+Space');
-    expect(core.diagnostics).toHaveLength(1);
+    await expect.poll(()=>core.diagnostics.length).toBe(2);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
+    await expect(page.getByRole('alert')).toContainText('Could not register Control+Shift+Space');
+    expect(core.diagnostics).toHaveLength(2);
   }finally{await core.close();}
 });
 
@@ -159,5 +166,22 @@ test('a failed core diagnostic retains the local alert and listening fallback',a
     await expect(page.getByRole('alert')).toContainText('Could not register');
     expect(core.diagnostics).toHaveLength(1);
     await expect(page.getByRole('button',{name:'Start listening',exact:true})).toBeEnabled();
+  }finally{await core.close();}
+});
+
+
+test('listening toggle retries after microphone start fails',async({page})=>{
+  const core=await coreFixture({failFirstStart:true});
+  try{
+    await bridge(page,core.url);await page.goto('/');
+    const start=page.getByRole('button',{name:'Start listening',exact:true});
+    await start.click();
+    await expect(page.getByLabel('Microphone status')).toContainText('Microphone could not start');
+    await expect(start).not.toHaveAttribute('aria-pressed');
+    await start.click();
+    await expect.poll(()=>core.actions).toEqual(['start','stop','start']);
+    await expect(page.getByLabel('Microphone status')).toContainText('Listening.');
+    await page.getByRole('button',{name:'Stop listening',exact:true}).click();
+    await expect.poll(()=>core.actions).toEqual(['start','stop','start','stop']);
   }finally{await core.close();}
 });
