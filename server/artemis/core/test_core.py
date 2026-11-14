@@ -992,7 +992,8 @@ async def test_the_tone_finishes_before_the_line_is_emitted(tmp_path):
                       earcon=tone, result_earcons=True)
     await session.emit(run_draft(0))
     assert len(cue_at) == 1 and voice.line_at is not None
-    assert voice.line_at - cue_at[0] >= 0.2
+    # The core waits the tone's 0.2 s; Windows' timer (about 15.6 ms ticks) can wake asyncio a tick early.
+    assert voice.line_at - cue_at[0] >= 0.2 - 0.05
     assert [text for _, text in voice.spoken] == ["The program ran successfully."]
 
 
