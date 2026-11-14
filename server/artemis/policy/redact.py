@@ -21,10 +21,18 @@ _AUTH_BEARER = re.compile(r"(?i)(\bauthorization\s*[:=]\s*bearer\s+)\S+")
 # Keys end in api_key / apikey / api-key (so x-api-key matches), token, password or secret,
 # optionally with a prefix such as access_token or ARTEMIS_TOKEN. The keyword must end right
 # before the separator, so "max_tokens=" and "token budget" are left alone.
+# The pattern has no leading repeated group: a prefix such as "a_" is skipped one character
+# at a time, so the scan stays linear. "==" and "!=" never match because the separator may
+# not be followed by "=" and "!" is not a separator.
 _ASSIGNMENT = re.compile(
-    r"""(?i)(?<![A-Za-z0-9])((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|token|password|passwd|secret))"""
-    r"""(["']?\s*[:=]\s*["']?)[^\s&"',;]+"""
+    r"""(?i)(?<![A-Za-z0-9])(api[_-]?key|token|password|passwd|secret)"""
+    r"""(["']?)(\s*[:=](?!=)\s*)(["']?)([^\s&"',;()\[\]{}]*)"""
 )
+# A bare value must look like a literal, so code such as "token = get_token()" or
+# "def f(token: str)" is left alone.
+_MIN_BARE_VALUE = 6
+_CODE_NAME = re.compile(r"[A-Za-z_][A-Za-z_.]*")
+_NOT_SECRET_WORDS = frozenset({"None", "True", "False"})
 
 
 def _env_secrets() -> list[str]:
@@ -37,6 +45,29 @@ def _env_secrets() -> list[str]:
     return sorted(values, key=len, reverse=True)
 
 
+def _is_secret_literal(value: str, text: str, end: int) -> bool:
+    """Decide whether a bare (unquoted) value after a secret keyword is a literal.
+
+    Short values, None/True/False, names with no digits (Python identifiers such as
+    "other_var" or "self.token") and calls (value followed by "(") are code, not secrets.
+    Values with a digit, such as "abc123", are treated as literals.
+    """
+    if len(value) < _MIN_BARE_VALUE or value in _NOT_SECRET_WORDS:
+        return False
+    if text[end : end + 1] == "(":
+        return False
+    return _CODE_NAME.fullmatch(value) is None
+
+
+def _redact_assignment(match: re.Match[str]) -> str:
+    key, pre_quote, separator, open_quote, value = match.groups()
+    if not value:
+        return match.group(0)
+    if not open_quote and not _is_secret_literal(value, match.string, match.end()):
+        return match.group(0)
+    return f"{key}{pre_quote}{separator}{open_quote}{REDACTED}"
+
+
 def redact(text: str) -> str:
     for secret in _env_secrets():
         text = text.replace(secret, REDACTED)
@@ -44,7 +75,7 @@ def redact(text: str) -> str:
     text = _ANTHROPIC_KEY.sub(REDACTED, text)
     text = _BEARER.sub(f"Bearer {REDACTED}", text)
     text = _AUTH_BEARER.sub(rf"\1{REDACTED}", text)
-    text = _ASSIGNMENT.sub(rf"\1\2{REDACTED}", text)
+    text = _ASSIGNMENT.sub(_redact_assignment, text)
     return text
 
 

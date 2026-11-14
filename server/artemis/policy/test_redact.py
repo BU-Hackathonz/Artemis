@@ -2,6 +2,7 @@
 
 import io
 import logging
+import time
 
 import pytest
 
@@ -141,6 +142,55 @@ def test_install_log_redaction_covers_existing_handlers():
         assert "FAKEfake" not in buf.getvalue() and REDACTED in buf.getvalue()
     finally:
         log.removeHandler(handler)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "if token == None:",
+        "if token != x:",
+        "if token != None:",
+        "token=='abc'",
+        "def f(token=None)",
+        "def f(token: str) -> None:",
+        "def f(token: Optional[str]) -> None:",
+        "token = get_token()",
+        "token = other_var",
+        "api_key = os.environ['KEY']",
+        "x = self.api_key",
+    ],
+)
+def test_code_is_not_mangled(text):
+    assert redact(text) == text
+
+
+def test_quoted_literal_assignment_is_redacted():
+    assert redact('token = "zq9-literal"') == f'token = "{REDACTED}"'
+
+
+def test_bare_value_shorter_than_six_chars_is_left_alone():
+    assert redact("token=abc") == "token=abc"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "a_" * 100000,
+        "ab-" * 66666,
+        "token" * 40000,
+        "x-api-key " * 20000,
+        "x-api-key" * 22000,
+        "x_" * 100000 + "token",
+        "Bearer " * 25000,
+        "authorization: " * 14000,
+    ],
+    ids=["a_", "ab-", "token", "x-api-key-spaced", "x-api-key", "x_-then-token", "Bearer", "authorization"],
+)
+def test_adversarial_input_is_linear_time(shape):
+    start = time.perf_counter()
+    redact(shape)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 0.5, f"redact took {elapsed:.2f}s on {len(shape)} chars"
 
 
 def test_redact_obj_walks_nested_data():
