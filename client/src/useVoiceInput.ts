@@ -1,10 +1,13 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {Core} from './contracts';
+import {normalizeVoiceShortcut} from './shortcuts';
 import {platform} from './platform';
 import {createPushToTalk, type PushToTalk, type TalkStatus} from './pushToTalk';
 
-export function useVoiceInput(core: Core | null, ready: boolean) {
+export function useVoiceInput(core: Core | null, sessionId: string | null, ready: boolean, voiceReady: boolean) {
   const controller = useRef<PushToTalk | null>(null);
+  const voiceReadyRef = useRef(voiceReady);
+  voiceReadyRef.current = voiceReady;
   const readyRef = useRef(ready);
   readyRef.current = ready;
   const sources = useRef(new Set<string>());
@@ -13,6 +16,9 @@ export function useVoiceInput(core: Core | null, ready: boolean) {
   const [shortcut, setShortcut] = useState('Control+Alt+Space');
   const [draft, setDraft] = useState(shortcut);
   const [revision, setRevision] = useState(0);
+  const noticeRequests = useRef(new Map<string, Promise<void>>());
+  const [shortcutErrorKind, setShortcutErrorKind] = useState<'registration'|'validation'|null>(null);
+  const [noticeFailed, setNoticeFailed] = useState(false);
   const [shortcutError, setShortcutError] = useState('');
   const [registered, setRegistered] = useState(false);
 
@@ -35,11 +41,14 @@ export function useVoiceInput(core: Core | null, ready: boolean) {
     if (!platform.native || !core) return;
     let disposed = false;
     let unregister: (() => Promise<void>) | undefined;
-    const talk = createPushToTalk(core, setStatus, shortcut);
+    const talk = createPushToTalk(core, next => {
+      if (next.state === 'idle' || next.state === 'error') sources.current.clear();
+      setStatus(next);
+    }, shortcut);
     controller.current = talk;
     sources.current.clear(); shortcutDown.current = false;
-    setRegistered(false); setShortcutError('');
-    setStatus({state:'idle',message:`Hold ${shortcut} or the talk button. Wait for the listening tone, then speak. Release to stop.`});
+    setRegistered(false); setShortcutError(''); setShortcutErrorKind(null); setNoticeFailed(false);
+    setStatus({state:'idle',message:`Hold ${shortcut} or choose Start listening. Wait for the listening tone, then speak. Release to stop.`});
     void platform.registerPushToTalk(shortcut, state => {
       if (state === 'Released') {shortcutDown.current = false; setSource('shortcut',false); return;}
       if (shortcutDown.current) return;
@@ -50,7 +59,24 @@ export function useVoiceInput(core: Core | null, ready: boolean) {
       unregister = cleanup;
       setRegistered(true);
     }).catch(() => {
-      if (!disposed) setShortcutError(`Could not register ${shortcut}. Another app may use it. Choose another shortcut, use the talk button, or type your request.`);
+      if (disposed) return;
+      setShortcutError(`Could not register ${shortcut}. Another app may use it. Choose another shortcut, use Start listening, or type your request.`);
+      setShortcutErrorKind('registration');
+      // Without core speech, the local alert is the one announcement source.
+      if (!voiceReadyRef.current) return;
+      if (sessionId) {
+        const noticeKey = JSON.stringify([sessionId, 'shortcut_registration_failed', shortcut]);
+        let notice = noticeRequests.current.get(noticeKey);
+        if (notice) setNoticeFailed(true); // The core suppresses exact repeats; announce locally.
+        if (!notice) {
+          notice = core.reportShortcutFailure(sessionId, shortcut).catch(error => {
+            if (noticeRequests.current.get(noticeKey) === notice) noticeRequests.current.delete(noticeKey);
+            throw error;
+          });
+          noticeRequests.current.set(noticeKey, notice);
+        }
+        void notice.catch(() => {if (!disposed) setNoticeFailed(true);});
+      } else setNoticeFailed(true);
     });
     const unload = () => {sources.current.clear(); void talk.dispose(); void unregister?.().catch(() => {});};
     window.addEventListener('beforeunload', unload);
@@ -60,7 +86,7 @@ export function useVoiceInput(core: Core | null, ready: boolean) {
       sources.current.clear();
       void talk.dispose(); void unregister?.().catch(() => {});
     };
-  }, [core, shortcut, revision, setSource]);
+  }, [core, sessionId, shortcut, revision, setSource]);
   useEffect(() => {
     if (!ready) {sources.current.clear(); controller.current?.release();}
   }, [ready]);
@@ -68,12 +94,16 @@ export function useVoiceInput(core: Core | null, ready: boolean) {
   const active = ['starting','listening','stopping'].includes(status.state);
   function apply() {
     if (active || status.stopUnconfirmed) return;
-    const value = draft.trim();
-    if (!value || value.length > 80 || !/(?:Control|Ctrl|Alt|Shift|Meta|Super|Command)/i.test(value)) {
-      setShortcutError('Choose a shortcut with a modifier such as Control+Alt+Space.'); return;
-    }
+    let value: string;
+    try {value = normalizeVoiceShortcut(draft.trim());}
+    catch (error) {setShortcutErrorKind('validation'); setShortcutError(error instanceof Error ? error.message : 'Choose another voice shortcut.'); return;}
     setDraft(value); setShortcut(value); setRevision(n=>n+1);
   }
-  return {status, shortcut, draft, setDraft, apply, shortcutError, registered, active, setSource, fail};
+  function toggleButton() {
+    if (['starting','listening'].includes(status.state) || sources.current.has('button')) {
+      sources.current.clear(); controller.current?.release();
+    } else if (status.state !== 'stopping' && !status.stopUnconfirmed) setSource('button',true);
+  }
+  return {toggleButton, status, shortcut, draft, setDraft, apply, shortcutError, shortcutErrorKind, noticeFailed, registered, active, setSource, fail};
 }
 export type VoiceInputState = ReturnType<typeof useVoiceInput>;

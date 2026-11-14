@@ -28,6 +28,14 @@ describe('core HTTP boundary', () => {
     expect(fetchMock.mock.calls.map(call=>call[1].keepalive)).toEqual([false,true]);
     expect(fetchMock.mock.calls.every(call=>call[1].headers.Authorization==='Bearer secret')).toBe(true);
   });
+  it('reports only the bounded shortcut diagnostic to the session', async () => {
+    const fetchMock=vi.fn().mockResolvedValue(new Response(null,{status:204}));
+    vi.stubGlobal('fetch',fetchMock);
+    const core=createHttpCore('http://127.0.0.1:8000','secret');
+    await core.reportShortcutFailure('ses_1','Control+Alt+Space');
+    expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:8000/sessions/ses_1/diagnostics');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({code:'shortcut_registration_failed',shortcut:'Control+Alt+Space'});
+  });
   it('preserves a client request id across a failed submission retry', async () => {
     const fetchMock = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(Response.json({task_id:'tsk_1'}));
     vi.stubGlobal('fetch',fetchMock);

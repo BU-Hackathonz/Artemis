@@ -20,7 +20,7 @@ export function createPushToTalk(core: VoiceControl, notify: (status: TalkStatus
     show('starting', 'Opening microphone. Wait for the listening tone, then speak.');
     const start = core.listen('start').then(() => {
       startFinished = true;
-      if (held && !releaseSignaled && !failure && !disposed) show('listening', `Listening. Release ${shortcutLabel} or the talk button to stop.`);
+      if (held && !releaseSignaled && !failure && !disposed) show('listening', `Listening. Release ${shortcutLabel} or choose Stop listening.`);
     }).catch(() => {
       startFinished = true;
       failure = 'Microphone could not start. Check the core and microphone, or type your request.';
@@ -43,7 +43,7 @@ export function createPushToTalk(core: VoiceControl, notify: (status: TalkStatus
       failure = 'Could not confirm the microphone stopped. Close Artemis to stop its core, then restart through the launcher.';
     }
     if (failure) show('error', failure);
-    else show('idle', `Microphone stopped. Hold ${shortcutLabel} or the talk button to speak again.`);
+    else show('idle', `Microphone stopped. Hold ${shortcutLabel} or choose Start listening to speak again.`);
   }
   function begin() {
     failure = null;

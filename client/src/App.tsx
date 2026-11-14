@@ -42,7 +42,7 @@ export function App() {
   const generation = useRef(0);
   const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
   const ready = status === 'Connected' || status === 'Demo connected';
-  const voiceInput = useVoiceInput(connection && !connection.demo ? connection.core : null, ready);
+  const voiceInput = useVoiceInput(connection && !connection.demo ? connection.core : null, connection?.sid ?? null, ready, voiceReady);
   useEffect(() => {
     if (!platform.native) return;
     let active = true;
