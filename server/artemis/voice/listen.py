@@ -17,7 +17,7 @@ import threading
 import numpy as np
 
 from . import earcons
-from .speech import Announcer, Priority
+from .speech import Announcer, Priority, RateStatus
 from .text import strip_wake_word, vocabulary_prompt
 
 RATE = 16_000
@@ -149,7 +149,7 @@ class WhisperVoice:
     async def repeat_last(self) -> None:
         await self.announcer.repeat_last()
 
-    async def set_rate(self, delta: int) -> bool:
+    async def set_rate(self, delta: int) -> RateStatus:
         return await self.announcer.set_rate(delta)
 
 
