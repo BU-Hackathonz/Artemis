@@ -248,6 +248,7 @@ processes' command lines. Malware running as the same user is out of scope for t
 - Requires `Authorization: Bearer <token>` on every route, the SSE stream included.
 - CORS allows only `http://tauri.localhost` and `http://127.0.0.1:1420`.
 - Origin check: a request **with no `Origin`** (the launcher's readiness probe, curl) is allowed
-  when the token is valid; a **listed** Origin is allowed; **any other** Origin gets `403`. That way
+  when the token is valid; a **listed** Origin is allowed; **any other** Origin gets `403`,
+  including `Origin: null` (sandboxed frames, `file:` pages), which counts as unlisted. That way
   a website open in the user's browser can't drive the local core.
 - The token is never logged, spoken, put in a URL, or included in an event.
