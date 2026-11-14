@@ -60,18 +60,25 @@ function Get-FreePort {
     try { return $listener.LocalEndpoint.Port } finally { $listener.Stop() }
 }
 
-function Start-Child([string]$FileName, [string]$Arguments, [string]$WorkingDirectory, [hashtable]$Environment) {
+function Start-Child([string]$FileName, [string]$Arguments, [string]$WorkingDirectory, [hashtable]$Environment, [string[]]$Withhold = @()) {
     # Secrets go in the child's environment only: never in argv (any process can list command lines).
+    # $Withhold drops inherited variables a child doesn't need (the app never needs the Claude key).
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FileName
     $psi.Arguments = $Arguments
     $psi.WorkingDirectory = $WorkingDirectory
     $psi.UseShellExecute = $false
+    foreach ($key in $Withhold) {
+        if ($psi.EnvironmentVariables.ContainsKey($key)) { $psi.EnvironmentVariables.Remove($key) }
+    }
     foreach ($key in $Environment.Keys) {
         $psi.EnvironmentVariables[$key] = [string]$Environment[$key]
     }
     return [System.Diagnostics.Process]::Start($psi)
 }
+
+# Only the core talks to Claude; the desktop app never gets the key.
+$coreOnlySecrets = @("ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID")
 
 # ----- preflight -----
 
@@ -162,10 +169,10 @@ try {
     $appEnv = @{ "ARTEMIS_CORE_URL" = $url; "ARTEMIS_TOKEN" = $token }
     if ($AppPath) {
         Write-Host "Starting the app: $AppPath"
-        $app = Start-Child $AppPath "" (Split-Path -Parent $AppPath) $appEnv
+        $app = Start-Child $AppPath "" (Split-Path -Parent $AppPath) $appEnv $coreOnlySecrets
     } else {
         Write-Host "Starting the app in dev mode (npm run tauri dev). The first build takes a few minutes."
-        $app = Start-Child "cmd.exe" "/d /c npm run tauri dev" $Client $appEnv
+        $app = Start-Child "cmd.exe" "/d /c npm run tauri dev" $Client $appEnv $coreOnlySecrets
     }
 
     # Polling instead of WaitForExit, so Ctrl+C reaches the finally block.
