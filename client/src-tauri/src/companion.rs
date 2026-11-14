@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use tauri::{AppHandle, Manager, PhysicalPosition, State, WebviewWindow};
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -44,7 +47,55 @@ pub struct Status {
     speech_ready: bool,
 }
 #[derive(Default)]
-pub struct CompanionState(Mutex<Status>);
+pub struct CompanionState {
+    status: Mutex<Status>,
+    pending_reveal: AtomicBool,
+}
+
+struct Reveal {
+    show: bool,
+    focus_reject: bool,
+    foreground: bool,
+}
+impl CompanionState {
+    fn update(&self, status: Status, changed: bool, focused: bool) -> Result<Reveal, String> {
+        let mut current = self
+            .status
+            .lock()
+            .map_err(|_| "Desktop status is unavailable.")?;
+        let silent_ready = matches!(status.connection, Connection::Ready)
+            && !status.speech_ready
+            && (!matches!(current.connection, Connection::Ready) || current.speech_ready);
+        let disconnected = matches!(status.connection, Connection::Disconnected)
+            && !matches!(current.connection, Connection::Disconnected);
+        let arrived = status.approval && (changed || !current.approval);
+        if !status.approval {
+            self.pending_reveal.store(false, Ordering::SeqCst);
+        } else if arrived && !focused {
+            self.pending_reveal.store(true, Ordering::SeqCst);
+        }
+        let focus_reject = status.approval && self.pending_reveal.load(Ordering::SeqCst);
+        let transition = Reveal {
+            show: !focus_reject && (arrived || silent_ready || disconnected),
+            focus_reject,
+            foreground: arrived && !focus_reject,
+        };
+        *current = status;
+        Ok(transition)
+    }
+    fn acknowledge(&self) -> Result<bool, String> {
+        let pending = self
+            .status
+            .lock()
+            .map_err(|_| "Desktop status is unavailable.")?
+            .approval;
+        if !pending {
+            self.pending_reveal.store(false, Ordering::SeqCst);
+            return Ok(false);
+        }
+        Ok(self.pending_reveal.swap(false, Ordering::SeqCst))
+    }
+}
 
 pub fn require_label(actual: &str, label: &str) -> Result<(), String> {
     if actual == label {
@@ -109,7 +160,7 @@ pub fn get_companion_status(
 ) -> Result<Status, String> {
     require_label(window.label(), "companion")?;
     state
-        .0
+        .status
         .lock()
         .map(|s| s.clone())
         .map_err(|_| "Desktop status is unavailable.".into())
@@ -123,31 +174,30 @@ pub fn update_companion_status(
     approval_changed: bool,
 ) -> Result<bool, String> {
     require_label(window.label(), "main")?;
-    let (reveal, focus_reject, foreground) = {
-        let mut current = state
-            .0
-            .lock()
-            .map_err(|_| "Desktop status is unavailable.")?;
-        let silent_ready = matches!(status.connection, Connection::Ready)
-            && !status.speech_ready
-            && (!matches!(current.connection, Connection::Ready) || current.speech_ready);
-        let disconnected = matches!(status.connection, Connection::Disconnected)
-            && !matches!(current.connection, Connection::Disconnected);
-        let approval_arrived = status.approval && (approval_changed || !current.approval);
-        let reveal = approval_arrived || silent_ready || disconnected;
-        let focus_reject = approval_arrived && !window.is_focused().unwrap_or(false);
-        let foreground = approval_arrived;
-        *current = status;
-        (reveal, focus_reject, foreground)
-    };
-    // Reveal the standard window; Windows may require Alt+Tab to give a background app focus.
-    if reveal {
-        // Windows may deny foregrounding, so retain the notch's Open controls fallback.
-        // The caller still focuses Reject in its DOM before the user switches back.
-        let _ = controls(&app, foreground);
+    let transition = state.update(
+        status,
+        approval_changed,
+        window.is_focused().unwrap_or(false),
+    )?;
+    if transition.show {
+        let _ = controls(&app, transition.foreground);
     }
-    Ok(focus_reject)
+    Ok(transition.focus_reject)
 }
+
+#[tauri::command]
+pub fn reveal_approval(
+    window: WebviewWindow,
+    app: AppHandle,
+    state: State<'_, CompanionState>,
+) -> Result<(), String> {
+    require_label(window.label(), "main")?;
+    if state.acknowledge()? {
+        controls(&app, true)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn show_main(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
     require_label(window.label(), "companion")?;
@@ -161,7 +211,7 @@ pub fn enter_compact(
 ) -> Result<(), String> {
     require_label(window.label(), "main")?;
     if state
-        .0
+        .status
         .lock()
         .map_err(|_| "Desktop status is unavailable.")?
         .approval
@@ -194,7 +244,7 @@ pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         if let tauri::WindowEvent::Resized(_) = event {
             if window.is_minimized().unwrap_or(false) {
                 let state = window.app_handle().state::<CompanionState>();
-                let may_compact = state.0.lock().map(|s| !s.approval).unwrap_or(false);
+                let may_compact = state.status.lock().map(|s| !s.approval).unwrap_or(false);
                 if may_compact {
                     if let Some(companion) = window.app_handle().get_webview_window("companion") {
                         let _ = companion.show();
@@ -217,6 +267,34 @@ pub fn window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn approval_status() -> Status {
+        Status {
+            connection: Connection::Ready,
+            approval: true,
+            speech_ready: true,
+            ..Status::default()
+        }
+    }
+    #[test]
+    fn background_reveal_waits_for_focus_acknowledgement_and_survives_reconnect() {
+        let state = CompanionState::default();
+        let first = state.update(approval_status(), true, false).unwrap();
+        assert!(!first.show && first.focus_reject);
+        let reconnect = state.update(approval_status(), false, false).unwrap();
+        assert!(!reconnect.show && reconnect.focus_reject);
+        assert!(state.acknowledge().unwrap());
+        assert!(!state.acknowledge().unwrap());
+        let foreground = state.update(approval_status(), true, true).unwrap();
+        assert!(foreground.show && foreground.foreground && !foreground.focus_reject);
+    }
+    #[test]
+    fn canceled_approval_cannot_be_revealed_by_a_late_acknowledgement() {
+        let state = CompanionState::default();
+        state.update(approval_status(), true, false).unwrap();
+        state.update(Status::default(), false, false).unwrap();
+        assert!(!state.acknowledge().unwrap());
+    }
 
     #[test]
     fn status_accepts_fixed_values_and_rejects_arbitrary_data() {

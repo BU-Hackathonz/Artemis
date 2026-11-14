@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Local main window launch configuration and push-to-talk shortcut only",
+  "description": "Local main window launch configuration, push-to-talk and bounded desktop status/reveal commands",
   "local": true,
   "windows": [
     "main"
@@ -12,6 +12,7 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
     "allow-update-companion-status",
-    "allow-enter-compact"
+    "allow-enter-compact",
+    "allow-reveal-approval"
   ]
 }

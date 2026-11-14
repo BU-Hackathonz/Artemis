@@ -6,6 +6,7 @@ fn main() {
             "update_companion_status",
             "show_main",
             "enter_compact",
+            "reveal_approval",
         ]),
     ))
     .expect("Could not build Artemis desktop resources");

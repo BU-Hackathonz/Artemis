@@ -62,7 +62,15 @@ for (const background of [true, false]) {
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
     try {
       await page.addInitScript(({url,background}) => {
+        const reveals:boolean[]=[]; Object.defineProperty(window,'approvalReveals',{value:reveals});
+        const focused:string[]=[]; Object.defineProperty(window,'approvalFocusHistory',{value:focused});
+        if(background) Object.defineProperty(document,'hasFocus',{value:()=>false});
+        document.addEventListener('focusin',event=>{
+          const target=event.target;
+          if(target instanceof HTMLButtonElement && target.closest('[role=dialog]')) focused.push(target.textContent??'');
+        });
         Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{transformCallback:()=>1,unregisterCallback:()=>{},invoke:async(command:string,args?:{status?:{approval:boolean}})=>{
+          if(command==='reveal_approval'){reveals.push(Boolean(document.activeElement?.hasAttribute('data-approval-reject')));return;}
           if(command==='get_core_config')return{core_url:url,token:'approval-focus-test'};
           if(command==='update_companion_status')return background && Boolean(args?.status?.approval);
           if(command.endsWith('is_registered'))return false;
@@ -73,6 +81,13 @@ for (const background of [true, false]) {
       const decision=background?'Reject':'Approve';
       await expect(page.getByRole('dialog')).toBeVisible();
       await expect(page.getByRole('button',{name:decision,exact:true})).toBeFocused();
+      if(background) {
+        await expect.poll(()=>page.evaluate(()=>(window as unknown as {approvalReveals:boolean[]}).approvalReveals)).toEqual([true]);
+        const history=await page.evaluate(()=>(window as unknown as {approvalFocusHistory:string[]}).approvalFocusHistory);
+        expect(history.length).toBeGreaterThan(0);
+        expect(history.some(name=>name.startsWith('Approve'))).toBe(false);
+      }
+      else expect(await page.evaluate(()=>(window as unknown as {approvalReveals:boolean[]}).approvalReveals)).toEqual([]);
       await page.keyboard.press('Enter');
       await expect.poll(()=>decisions).toEqual([decision.toLowerCase()]);
     } finally {server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}

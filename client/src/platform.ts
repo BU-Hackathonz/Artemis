@@ -35,6 +35,7 @@ export const platform = {
   updateCompanionStatus(status: CompanionStatus, approvalChanged: boolean): Promise<boolean> {return native ? invoke<boolean>('update_companion_status', {status, approvalChanged}) : Promise.resolve(false);},
   getCompanionStatus(): Promise<CompanionStatus> {return invoke('get_companion_status');},
   enterCompact(): Promise<void> {return invoke('enter_compact');},
+  revealApproval(): Promise<void> {return invoke('reveal_approval');},
   showMain(): Promise<void> {return invoke('show_main');},
   getCoreConfig(): Promise<NativeCoreConfig> {
     if (!native) return Promise.reject(new Error(launchError));

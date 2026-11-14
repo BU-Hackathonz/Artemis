@@ -28,6 +28,7 @@ function eventText(event: CoreEvent) {
 export function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [status, setStatus] = useState('Not connected');
+  const [backgroundApproval, setBackgroundApproval] = useState<string | null>(null);
   const lastCompanionApproval = useRef<string | null>(null);
   const [companionError, setCompanionError] = useState('');
   const [error, setError] = useState('');
@@ -62,7 +63,16 @@ export function App() {
       speech_ready: voiceReady,
     }, approvalChanged).then(focusReject => {
       const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
-      if (focusReject && dialog?.dataset.approvalId === approvalId) dialog.querySelector<HTMLButtonElement>('[data-approval-reject]')?.focus();
+      if (focusReject && approvalId && lastCompanionApproval.current === approvalId) {
+        setBackgroundApproval(approvalId);
+        if (dialog?.dataset.approvalId === approvalId) {
+          const reject = dialog.querySelector<HTMLButtonElement>('[data-approval-reject]');
+          reject?.focus();
+          if (reject && document.activeElement === reject) {
+            void platform.revealApproval().catch(() => setCompanionError('Switch to Artemis controls to review the pending proposal.'));
+          }
+        }
+      }
     }).catch(() => setCompanionError('Desktop status is unavailable. Full controls remain available here.'));
   }, [ready, status, connection, state.taskId, state.taskState, pendingTaskId, state.approvals, voiceInput.status.state, voiceReady]);
   useEffect(() => {
@@ -202,6 +212,6 @@ export function App() {
       </div>
       {/* After the request form in tab order: focus starts in the request field after connect. */}
       {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
-      {state.approvals[0] && connection && ready && <ApprovalDialog key={state.approvals[0].approval.approval_id} approval={state.approvals[0].approval} decide={decision => connection.core.decide(state.approvals[0].approval, decision)}/>}
+      {state.approvals[0] && connection && ready && <ApprovalDialog preferReject={platform.native && (backgroundApproval === state.approvals[0].approval.approval_id || !document.hasFocus())} key={state.approvals[0].approval.approval_id} approval={state.approvals[0].approval} decide={decision => connection.core.decide(state.approvals[0].approval, decision)}/>}
     </main><footer>Writes and runs require approval. Review every proposal before approving.</footer></>;
 }

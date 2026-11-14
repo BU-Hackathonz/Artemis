@@ -90,7 +90,8 @@ fn main() {
             companion::get_companion_status,
             companion::update_companion_status,
             companion::show_main,
-            companion::enter_compact
+            companion::enter_compact,
+            companion::reveal_approval
         ])
         .run(tauri::generate_context!())
         .expect("Could not start Artemis desktop client");
