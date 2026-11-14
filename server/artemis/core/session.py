@@ -104,7 +104,7 @@ class Session:
         self.tasks: dict[str, Task] = {}
         self._by_request: dict[str, str] = {}  # client_request_id -> task_id (idempotency)
         self.history: list[TurnSummary] = []
-        self.reported: set[str] = set()  # client diagnostic codes already spoken this session
+        self.reported: set[tuple[str, str | None]] = set()  # (code, shortcut) already spoken
         self._on_project = on_project
 
     async def emit(self, draft: EventDraft) -> None:
