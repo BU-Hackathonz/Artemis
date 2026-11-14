@@ -633,7 +633,9 @@ def core_main(monkeypatch, tmp_path):
     monkeypatch.setenv("ARTEMIS_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("ARTEMIS_PROJECTS_DIR", str(tmp_path / "projects"))
     monkeypatch.delitem(sys.modules, "artemis.core.main", raising=False)
-    return importlib.import_module("artemis.core.main")
+    module = importlib.import_module("artemis.core.main")
+    monkeypatch.setitem(sys.modules, "artemis.core.main", module)  # removed again after the test
+    return module
 
 
 def test_missing_scanner_is_logged_not_silent(core_main, monkeypatch, caplog):
