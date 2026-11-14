@@ -99,7 +99,7 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    Wait for "Core is ready." and the app window. Focus lands in the request field. Core log:
    `%LOCALAPPDATA%\Artemis\logs\core.log`.
 9. **Smoke test** before the judges arrive: run demo 1, then re-run `setup-demo.ps1` and restart.
-9. Volume up, notifications off (Focus assist), laptop on power, screen mirrored for the judges.
+10. Volume up, notifications off (Focus assist), laptop on power, screen mirrored for the judges.
 
 ## The scripted demo
 
@@ -108,7 +108,7 @@ before/after comparison is kept in memory for the session.
 
 ### 1. Hello World
 
-- **Type** (or, once push-to-talk lands, hold Ctrl+Alt+Space and say "Artemis, create a Python
+- **Type** (or hold the push-to-talk shortcut, Ctrl+Alt+Space by default, and say "Artemis, create a Python
   program that prints Hello World"; release):
   `Create a Python program that prints Hello World, and run it.`
 - **Hear:**
@@ -244,6 +244,38 @@ version is not in the project, so the agent has to make the fix.
     findings and the spoken lines; NVDA reads the console):
     `cd server; uv run --group echo python -m artemis.echo ..\fixture\echo-page\before.html ..\fixture\echo-page\after.html`
   - "Echo Check isn't installed" or "Echo Check needs a browser": re-run step 2 of the setup.
+
+## Pass/fail sheet (demo readiness)
+
+One row per thing that must work on stage. **Status stays "not run" until the named owner posts
+raw evidence on the board**; nobody marks a row for someone else's hardware. Evidence means the
+exact spoken lines or transcript text, not "it worked". Never paste keys or `.env` contents.
+
+| # | Check | How | Pass means | Owner | Status |
+|---|---|---|---|---|---|
+| 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, the fallback `Control+Shift+Space` applies and registers | Yaovi | not run |
+| 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
+| 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` is "create a Python program that prints Hello World, and run it" word for word (the wake word is stripped), or the misses are posted | Yaovi | not run |
+| 4 | Keyboard path to Start listening | NVDA on, Tab from the request field | Reaches **Start listening** past the enabled buttons (Repeat, Stop) and the activity log (Send and Cancel are disabled when idle) | Yaovi | not run |
+| 5 | Start listening toggle | Press, speak, press again | Same result as hold-to-talk | Yaovi | not run |
+| 6 | Demo 1 with `-Agent claude` | Run demo 1 end to end | Both approvals spoken, "Hello, World!" printed and spoken | key holder | not run |
+| 7 | Demo 2 failed run | Run demo 2 | Exit code and `NameError` spoken first, fix approved, second run succeeds | key holder | not run |
+| 8 | Demo 3 Bandit block | Run demo 3 | Blocked approval, focus on Reject, Enter on Approve does nothing, Escape rejects, nothing ran | key holder | not run |
+| 9 | Demo 4 injection | Run demo 4 | No approval dialog, `calc` still has its two files | key holder | not run |
+| 10 | Demo 5 Echo Check | Run demo 5 | "Before: 7 problems. After: 0." or the remainder read out and fixed | key holder | not run |
+| 11 | Demo 3b security scan (optional) | Run demo 3b on `old-app` | "Found 2 security issues in 1 Python file: 1 high, 1 low." and no approval dialog | key holder | not run |
+| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered; the second request gets "I'll do that next." (a typed one still gets 409) | key holder | not run |
+| 13 | Fallbacks | `-Agent stub`, typed requests, `setup-demo.ps1 -Force` between runs | Each recovers in under a minute | anyone | not run |
+
+Launch, in order (full steps are in the setup checklist above): `setup-demo.ps1`, set the API key
+in that window only (and `ANTHROPIC_WORKSPACE_ID` if the key isn't workspace-scoped),
+`infra\start.ps1 -Agent claude`, wait for "Core is ready.".
+
+**Go / no-go:** rows 1 to 10 all pass on the demo laptop, twice, the last time with the monitor off.
+Rows 11 and 12 are optional. If row 2 fails but rows 4 and 5 pass, use typed requests plus
+**Start listening**. If row 4 or 5 also fails, use typed requests only. Say so up front. If rows 6 to 10
+fail, run `-Agent stub` and the offline `test_flows.py` commands listed under each demo, and say
+the agent is scripted.
 
 ## Eyes-closed rehearsal checklist
 
