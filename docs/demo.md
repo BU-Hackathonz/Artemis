@@ -34,9 +34,9 @@ the real agent isn't installed: run the uv sync from the setup checklist again.
 | Where | Key | Effect |
 |---|---|---|
 | Request field | Enter | Send the request. Shift+Enter adds a new line. |
-| Foreground approval dialog | (opens) | Focus starts on **Approve** for a normal approval, on **Reject** for a blocked one. |
+| Approval dialog | (opens) | Focus starts on **Approve** for a normal approval, on **Reject** for a blocked one. |
 | Approval dialog | Enter | Approve (normal approval, focus on Approve). |
-| Approval revealed from compact/background mode | (opens) | Focus starts on **Reject**, so Enter rejects. Review the proposal, then focus Approve to accept; blocked approvals still require Shift+Enter. |
+| Approval revealed from the compact status (`-Compact` only) | (opens) | Focus starts on **Reject**, so Enter rejects. Review the proposal, then focus Approve to accept; blocked approvals still require Shift+Enter. |
 | Approval dialog | Escape | Reject. |
 | Blocked approval | Tab, then Shift+Enter | Override: on **Approve blocked action (Shift+Enter)**, only Shift+Enter approves. Enter and clicks do nothing there. |
 | Main window | Tab to the buttons | **Cancel task**, **Repeat last speech**, **Stop speech**. |
@@ -103,6 +103,9 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    ```powershell
    powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude
    ```
+   Stage without `-Compact` (the default): the app opens as the full window. `-Compact` (opt-in, not
+   for the demo) starts behind a small status window, and an approval that arrives there focuses
+   Reject, so the spoken "Enter to approve" would reject.
    Wait for "Core is ready." (printed in the PowerShell window) and the app window. Focus lands in
    the request field and Artemis says "Artemis is ready. Hold Control Shift Space and speak, or type
    a request." (if no shortcut registered: "Artemis is ready. Use the Start listening button and
