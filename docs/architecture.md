@@ -112,6 +112,8 @@ multi-project management, Echo Check.
 important milestone. Type the request → `POST /tasks` → **stub agent** that always proposes
 `hello-world/main.py` → approval dialog → write → stub run → `run.result` → spoken and in the log.
 This proves the client, core, approvals, events and speech before any AI or audio is live.
+**End Phase 1 with an eyes-closed rehearsal** (monitor off, NVDA on) of this stub flow. It catches
+focus, speech-overlap, cancel and approval problems while there is still time to fix them.
 
 **Phase 2: swap in the real parts (about hours 8 to 18), in parallel, each behind its interface**
 - David: real agent loop + policy gate + scan before run.
@@ -120,16 +122,21 @@ This proves the client, core, approvals, events and speech before any AI or audi
 - Jun: approval dialog, log navigation, "repeat last" and "stop speech" keys, settings.
 - Avery: cancel, error events, reconnect and replay with `Last-Event-ID`.
 
-**Phase 3: MVP rehearsal (about hours 18 to 22).** Run the 10-step demo with eyes closed (monitor
-off), twice. Fix every missed announcement, focus trap and silent failure before adding anything.
+**Phase 3: MVP rehearsal (about hours 18 to 22).** Run the 10-step demo with the real agent and
+voice, eyes closed (monitor off), twice. Fix every missed announcement, focus trap and silent
+failure before adding anything. This is the second rehearsal; the first ends Phase 1.
 
 **Phase 4: differentiators, in this order, each demoable alone**
 1. **Failed run explained**: the agent introduces a bug, the run fails, Artemis speaks the error and fixes it. Debugging is cheap once runs work.
 2. **Security Guardian**: generated code with a planted vulnerability (e.g. `subprocess` with `shell=True`, or a hard-coded secret); the scan finding is spoken and blocks the run until the user decides. Also the planted prompt injection in a repository file, shown to be harmless. (Best AI Security Hack.)
 3. **Edit existing code + spoken diff review** (search/replace edits, hunk-by-hunk navigation).
-4. **Echo Check** on a small generated web page: Playwright + `aria_snapshot()` + axe-core, spoken findings. (Best Accessibility Hack.)
+4. **Echo Check**, kept small and only once the path above is reliable: one fixture web page, `aria_snapshot()` roles and accessible names plus axe-core, run before and after the fix, findings spoken through the same `announce()`. (Best Accessibility Hack.)
 
-**Phase 5: final rehearsal and pitch.** Freeze features about 4 hours before judging.
+**Phase 5: final rehearsal and pitch.** Freeze features about 4 hours before judging. In the
+pitch, say clearly which parts are the real integrated run and which are simulated client demos.
+The line against general voice assistants: Artemis proves its results. Every change is approved
+and bound to the exact edit, every run is real, and Echo Check reports the real accessibility tree
+instead of describing the screen.
 
 ## Keep it modular without overengineering
 
