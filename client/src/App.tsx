@@ -9,6 +9,7 @@ import type { Core, CoreEvent, Health } from './contracts';
 import {useVoiceInput} from './useVoiceInput';
 import {VoiceInput} from './VoiceInput';
 import { platform } from './platform';
+import { LiquidRing } from './LiquidRing';
 
 interface Connection {core: Core; sid: string; health: Health; demo: boolean}
 async function openConnection(core: Core, demo: boolean): Promise<Connection> {
@@ -47,6 +48,16 @@ export function App() {
   const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
   const ready = status === 'Connected' || status === 'Demo connected';
   const voiceInput = useVoiceInput(connection && !connection.demo ? connection.core : null, connection?.sid ?? null, ready, voiceReady);
+  // The liquid ring pictures the state the text announces; a finished task makes it splash.
+  const [ringKick, setRingKick] = useState(0);
+  const finishedTask = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.taskId && state.taskState === 'succeeded' && finishedTask.current !== state.taskId) {
+      finishedTask.current = state.taskId;
+      setRingKick(k => k + 1);
+    }
+  }, [state.taskId, state.taskState]);
+  const ringInputs = {connected: ready, taskState: pendingTaskId ? 'queued' as const : state.taskId ? state.taskState : 'idle' as const, microphone: voiceInput.status.state, approval: state.approvals.length > 0};
   useEffect(() => {
     if (!platform.native) return;
     let active = true;
@@ -137,7 +148,7 @@ export function App() {
     }
     finally {setBusy(false);}
   }
-  return <><a className="skip" href="#request">Skip to request</a><header><p>ARTEMIS · {platform.name}</p><h1>Build with words.</h1><p>Direct a change, review each action, and hear the result.</p></header>
+  return <><a className="skip" href="#request">Skip to request</a><header><LiquidRing kick={ringKick} inputs={ringInputs}/><p>ARTEMIS · {platform.name}</p><h1>Build with words.</h1><p>Direct a change, review each action, and hear the result.</p></header>
     <main>
       <section aria-labelledby="connection-heading"><h2 id="connection-heading">Core connection</h2>
         <p role="status">{status}</p>
