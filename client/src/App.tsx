@@ -145,7 +145,6 @@ export function App() {
         </>}
       </section>
       {error && <p role="alert">{error}</p>}
-      {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
       <div className="workspace">
         <section aria-labelledby="request-heading"><h2 id="request-heading">Your request</h2>
           <p>Task: {state.taskState.replaceAll('_', ' ')}</p>
@@ -172,6 +171,8 @@ export function App() {
           </div>
         </section>
       </div>
+      {/* After the request form in tab order: focus starts in the request field after connect. */}
+      {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
       {state.approvals[0] && connection && ready && <ApprovalDialog key={state.approvals[0].approval.approval_id} approval={state.approvals[0].approval} decide={decision => connection.core.decide(state.approvals[0].approval, decision)}/>}
     </main><footer>Writes and runs require approval. Review every proposal before approving.</footer></>;
 }

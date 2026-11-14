@@ -10,6 +10,10 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
   voiceReadyRef.current = voiceReady;
   const readyRef = useRef(ready);
   readyRef.current = ready;
+  // Read through a ref: the session id must not re-run (and re-register) the shortcut effect.
+  const sessionRef = useRef(sessionId);
+  sessionRef.current = sessionId;
+  const failure = useRef<{shortcut: string; isDisposed: () => boolean} | null>(null);
   const sources = useRef(new Set<string>());
   const shortcutDown = useRef(false);
   const [status, setStatus] = useState<TalkStatus>({state:'idle',message:'Voice input connects with the desktop core.'});
@@ -32,6 +36,22 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
       if (wasHeld || source === 'shortcut') {sources.current.clear(); controller.current?.release();}
     }
   }, []);
+  // The core suppresses exact repeats per (session, shortcut); this map sends each one once.
+  const reportFailure = useCallback((session: string, failed: string, isDisposed: () => boolean, alertRepeat: boolean) => {
+    if (!core) return;
+    const noticeKey = JSON.stringify([session, 'shortcut_registration_failed', failed]);
+    let notice = noticeRequests.current.get(noticeKey);
+    if (notice) {
+      if (alertRepeat) setNoticeFailed(true); // An exact repeat is not spoken again; announce locally.
+      return;
+    }
+    notice = core.reportShortcutFailure(session, failed).catch(error => {
+      if (noticeRequests.current.get(noticeKey) === notice) noticeRequests.current.delete(noticeKey);
+      throw error;
+    });
+    noticeRequests.current.set(noticeKey, notice);
+    void notice.catch(() => {if (!isDisposed()) setNoticeFailed(true);});
+  }, [core]);
   const fail = useCallback((message: string) => {
     sources.current.clear();
     controller.current?.fail(message);
@@ -64,29 +84,28 @@ export function useVoiceInput(core: Core | null, sessionId: string | null, ready
       setShortcutErrorKind('registration');
       // Without core speech, the local alert is the one announcement source.
       if (!voiceReadyRef.current) return;
-      if (sessionId) {
-        const noticeKey = JSON.stringify([sessionId, 'shortcut_registration_failed', shortcut]);
-        let notice = noticeRequests.current.get(noticeKey);
-        if (notice) setNoticeFailed(true); // The core suppresses exact repeats; announce locally.
-        if (!notice) {
-          notice = core.reportShortcutFailure(sessionId, shortcut).catch(error => {
-            if (noticeRequests.current.get(noticeKey) === notice) noticeRequests.current.delete(noticeKey);
-            throw error;
-          });
-          noticeRequests.current.set(noticeKey, notice);
-        }
-        void notice.catch(() => {if (!disposed) setNoticeFailed(true);});
-      } else setNoticeFailed(true);
+      failure.current = {shortcut, isDisposed: () => disposed};
+      // Before the session id is known, the session effect below reports it once the id arrives.
+      if (sessionRef.current) reportFailure(sessionRef.current, shortcut, () => disposed, true);
     });
     const unload = () => {sources.current.clear(); void talk.dispose(); void unregister?.().catch(() => {});};
     window.addEventListener('beforeunload', unload);
     return () => {
-      disposed = true; controller.current = null;
+      disposed = true; controller.current = null; failure.current = null;
       window.removeEventListener('beforeunload', unload);
       sources.current.clear();
       void talk.dispose(); void unregister?.().catch(() => {});
     };
-  }, [core, sessionId, shortcut, revision, setSource]);
+    // A new session (reconnect) must not re-register: on Windows an immediate unregister and
+    // register of the same hotkey can race, and the registration then fails.
+  }, [core, shortcut, revision, setSource]);
+  useEffect(() => {
+    // Report a current registration failure to a session that did not hear it yet,
+    // e.g. when registration failed before the session id arrived.
+    const current = failure.current;
+    if (!sessionId || !current || current.isDisposed() || !voiceReadyRef.current) return;
+    reportFailure(sessionId, current.shortcut, current.isDisposed, false);
+  }, [sessionId, reportFailure]);
   useEffect(() => {
     if (!ready) {sources.current.clear(); controller.current?.release();}
   }, [ready]);
