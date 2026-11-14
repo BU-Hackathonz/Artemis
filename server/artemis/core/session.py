@@ -284,6 +284,11 @@ class Session:
             await asyncio.wait_for(asyncio.shield(task.job), timeout=5)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
+        if task.job.cancelled() and task.active:
+            # Canceled before its first step: _run never ran, so nothing said so and the task
+            # would stay queued, refusing every later request.
+            await self._state(task_id, "canceled", "Canceled.", "high")
+            self.history.append(TurnSummary(request=task.request.text, outcome="canceled"))
         return True
 
     async def _state(

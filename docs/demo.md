@@ -317,10 +317,10 @@ said once, and the next request is accepted.
       "Reject" for a blocked one). Enter on a blocked approval's Approve button does nothing.
 - [ ] Escape rejects every dialog, nothing is written or run, and Artemis says so *(model)*.
 - [ ] Cancel works: start a request, Tab to **Cancel task**, Enter: "Canceled." and nothing else
-      happens. Cancel during a run says "Canceled while running main.py." instead (known gap:
-      the program itself keeps running until it ends or hits the 10 second limit). During an
-      approval, Escape is the way out; a spoken "cancel" there says "Canceled. Nothing was
-      written." (or "Nothing was run.").
+      happens. Cancel during a run stops the program (it and anything it started) and then says
+      "Canceled while running main.py." instead; nothing more is written. During an approval,
+      Escape is the way out; a spoken "cancel" there says "Canceled. Nothing was written." (or
+      "Nothing was run.").
 - [ ] **Repeat last speech** repeats the last line; **Stop speech** stops it.
 - [ ] Silence longer than 3 seconds: there should be none. While Artemis works, a quiet "Still
       working." comes after about 3 s; note any silence that has no cue.
