@@ -276,6 +276,7 @@ def test_if_the_model_obeyed_the_injection_the_gateway_still_refuses(tmp_path, t
 def test_no_destructive_tool_exists():
     assert set(RULES) == {
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
+        "inspect_page",
     }
     # Everything that changes the disk or starts a process needs the developer's approval.
     assert {name for name, rule in RULES.items() if rule.needs_approval} == {

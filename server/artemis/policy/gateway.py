@@ -34,6 +34,7 @@ from artemis.contracts import (
     EventDraft,
     FileSummary,
     FileWrite,
+    InspectPageArgs,
     Finding,
     ListFilesArgs,
     OpenProjectArgs,
@@ -174,6 +175,7 @@ class ToolGateway:
         self.project: ProjectRef | None = None
         self._folder_pending = False  # reserved by create_project, not on disk yet
         self._created: set[str] = set()  # slugs of projects created in this session
+        self._echo_reports: dict = {}  # path -> last Echo Check report, for before/after
 
     async def call(self, task_id: str, name: str, args: dict) -> ToolResult:
         rule = RULES.get(name)
@@ -320,6 +322,47 @@ class ToolGateway:
             "path": a.path,
             "total_lines": len(lines),
             "content": wrap(f"file:{a.path}", numbered),
+        }
+
+    async def _inspect_page(self, task_id: str, a: InspectPageArgs) -> dict:
+        """Echo Check on a page in the project: the real accessibility tree plus axe-core findings.
+
+        Read-only, so no approval. The outline and findings come from the page, so they are
+        untrusted: a page is an injection vector like any file.
+        """
+        project = self._require_project()
+        target = safe_resolve(Path(project.root), a.path)
+        if target.suffix.lower() not in (".html", ".htm"):
+            raise _ToolError("invalid_args", "inspect_page only opens .html or .htm files.")
+        if not target.is_file():
+            raise _ToolError("not_found", f"There is no file named {a.path}.")
+        check_read_size(target, a.path)
+        try:
+            from artemis import echo  # optional `echo` dependency group (Playwright)
+        except ImportError:
+            raise _ToolError(
+                "echo_unavailable",
+                "Echo Check isn't installed. Run: uv sync --group echo",
+            ) from None
+        await self._say(task_id, f"Checking {a.path} for accessibility.")
+        try:
+            report = await echo.echo_check(str(target))
+        except echo.EchoError as exc:
+            raise _ToolError("echo_unavailable", str(exc)) from None
+        spoken = echo.speak_report(report)
+        previous = self._echo_reports.get(a.path)
+        if previous is not None:
+            spoken = f"{echo.compare(previous, report)} {spoken}"
+        self._echo_reports[a.path] = report
+        await self._say(task_id, spoken, "normal")
+        findings = "\n".join(
+            f"{f.impact}: {f.rule} ({f.count}x) at {f.target}: {f.message}" for f in report.findings
+        )
+        return {
+            "path": a.path,
+            "problems": len(report.findings),
+            "findings": wrap(f"page:{a.path} axe findings", findings or "none"),
+            "outline": wrap(f"page:{a.path} accessibility tree", "\n".join(report.outline)),
         }
 
     # ----- approvals -----
