@@ -6,10 +6,10 @@ export function VoiceInput({voice, ready, voiceReady}: {voice: VoiceInputState; 
   return <section aria-labelledby="voice-heading"><h2 id="voice-heading">Voice input</h2>
     {platform.native ? <>
       <p id="voice-instructions">Hold {voice.shortcut}, wait for the listening tone, and release to stop. The listening button is a toggle: activate once to start and again to stop. It works with screen-reader clicks; the microphone stays on until you stop it.</p>
-      <Button isDisabled={!ready || voice.status.stopUnconfirmed || voice.status.state==='stopping'} aria-describedby="voice-instructions"
-        aria-pressed={voice.status.state==='starting' || voice.status.state==='listening'} onPress={event=>{if (!event.ctrlKey && !event.altKey && !event.metaKey) voice.toggleButton();}}>{voice.status.state==='starting' || voice.status.state==='listening' ? 'Stop listening' : 'Start listening'}</Button>
+      <Button isDisabled={!ready || voice.status.stopUnconfirmed} aria-busy={voice.status.state==='stopping'} aria-describedby="voice-instructions"
+        aria-pressed={voice.status.state==='starting' || voice.status.state==='listening'} onPress={event=>{if (!event.ctrlKey && !event.altKey && !event.metaKey) voice.toggleButton();}}>{voice.status.state==='starting' || voice.status.state==='listening' ? 'Stop listening' : voice.status.state==='stopping' ? 'Stopping…' : 'Start listening'}</Button>
       <p aria-label="Microphone status" role={voice.status.state==='error'?'alert':undefined} aria-live={voice.status.state==='error'?'assertive':voiceReady?'off':'polite'}>{voice.status.message}</p>
-      {voice.shortcutError && <p id="shortcut-error" role="alert">{voice.shortcutError}</p>}
+      {voice.shortcutError && <p id="shortcut-error" role={voice.shortcutErrorKind==='validation' || voice.noticeFailed || !voiceReady ? 'alert' : undefined}>{voice.shortcutError}</p>}
       <form onSubmit={event=>{event.preventDefault();voice.apply();}}>
         <label htmlFor="voice-shortcut">Global voice shortcut</label>
         <input id="voice-shortcut" value={voice.draft} onChange={event=>voice.setDraft(event.target.value)} maxLength={80} disabled={voice.active || voice.status.stopUnconfirmed} aria-invalid={Boolean(voice.shortcutError)} aria-describedby={voice.shortcutError ? 'shortcut-help shortcut-error' : 'shortcut-help'}/>
