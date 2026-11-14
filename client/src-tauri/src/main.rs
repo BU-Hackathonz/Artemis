@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod caret;
+
 use serde::Serialize;
 use tauri::Manager;
 
@@ -51,12 +53,23 @@ fn get_core_config(state: tauri::State<'_, LaunchState>) -> Result<CoreConfig, S
     state.inner().0.clone()
 }
 
+/// Where the text caret is (physical screen pixels), or None. For the flow window only: the label
+/// comes from the window that invoked the command, never from an argument, so a page cannot claim
+/// to be the flow window. It returns two numbers and nothing else.
+#[tauri::command]
+fn get_caret_position(window: tauri::WebviewWindow) -> Result<Option<(i32, i32)>, String> {
+    if window.label() != "flow" {
+        return Err("Not available to this window.".into());
+    }
+    Ok(caret::position())
+}
+
 fn main() {
     let state = LaunchState(CoreConfig::from_env());
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![get_core_config])
+        .invoke_handler(tauri::generate_handler![get_core_config, get_caret_position])
         // The desktop agent window must not keep Artemis running once the main window is gone.
         .on_window_event(|window, event| {
             if window.label() == "main" {

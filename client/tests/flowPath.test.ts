@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {flowMode, wanderTarget} from '../src/flowPath';
+import {chooseTarget, flowMode, wanderTarget} from '../src/flowPath';
 
 describe('wanderTarget', () => {
   it('stays inside the window, away from the edges, for a long time', () => {
@@ -32,5 +32,19 @@ describe('flowMode', () => {
   it('holds still for an approval, even while busy', () => {
     expect(flowMode({approval: true, busy: true})).toBe('awaiting_approval');
     expect(flowMode({approval: true, busy: false})).toBe('awaiting_approval');
+  });
+});
+
+describe('chooseTarget', () => {
+  it('follows a caret that is on this screen', () => {
+    expect(chooseTarget({x: 300, y: 200}, 5, 1480, 864)).toEqual({x: 300, y: 200});
+  });
+  it('falls back to the slow path with no caret', () => {
+    expect(chooseTarget(null, 5, 1480, 864)).toEqual(wanderTarget(5, 1480, 864));
+  });
+  it('ignores a caret outside the window or a nonsense one', () => {
+    for (const bad of [{x: -5, y: 10}, {x: 99999, y: 10}, {x: 10, y: -1}, {x: 10, y: 99999}, {x: NaN, y: 3}]) {
+      expect(chooseTarget(bad, 2, 1480, 864)).toEqual(wanderTarget(2, 1480, 864));
+    }
   });
 });

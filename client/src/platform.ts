@@ -49,6 +49,16 @@ export const platform = {
   },
   /** Agent-window side (the transparent ring window). */
   agentWindow: {
+    /** The text caret's screen position in physical pixels, or null when the focused application has
+     * no system caret to follow. Flow window only (the command checks its caller); two numbers, never text. */
+    async caretPosition(): Promise<{x: number; y: number} | null> {
+      if (!native) return null;
+      try {
+        const {invoke} = await import('@tauri-apps/api/core');
+        const at = await invoke<[number, number] | null>('get_caret_position');
+        return Array.isArray(at) && at.length === 2 && at.every(Number.isFinite) ? {x: at[0], y: at[1]} : null;
+      } catch { return null; }
+    },
     onStatus(handler: (status: AgentStatus) => void): Promise<Unlisten> { return on(AGENT.status, handler); },
     onVisible(handler: (visible: boolean) => void): Promise<Unlisten> { return on(AGENT.visible, handler); },
     onReset(handler: () => void): Promise<Unlisten> { return on(AGENT.reset, handler); },

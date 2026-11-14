@@ -3,7 +3,7 @@ import {platform} from './platform';
 import type {AgentStatus} from './platform';
 import {ISLAND_MOTION, createIslandMotion, stepIslandMotion} from './motion';
 import type {IslandFrame} from './motion';
-import {flowMode, wanderTarget} from './flowPath';
+import {chooseTarget, flowMode} from './flowPath';
 
 // The flow: a transparent, click-through window over the primary screen's work area (label
 // "flow", index.html#flow), shown only while Artemis works. The island's ring collapses into a
@@ -59,7 +59,7 @@ export function FlowWindow() {
     if (!platform.native) return () => document.documentElement.classList.remove('agent-page');
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     let active = true, raf = 0, shown = false, allowed = true, busy = false, approval = false;
-    let origin = {x: 0, y: 0}, ring: Pt = {x: innerWidth / 2 - 76, y: 36};
+    let origin = {x: 0, y: 0}, ring: Pt = {x: innerWidth / 2 - 76, y: 36}, caret: Pt | null = null, scaleF = 1;
     let motion = createIslandMotion(ring), t = 0, last = performance.now();
     const off: (() => void)[] = [];
 
@@ -82,6 +82,20 @@ export function FlowWindow() {
         const scale = await me.scaleFactor();
         ring = {x: (p.x - origin.x) / scale + 22, y: (p.y - origin.y) / scale + 24};
       }
+      scaleF = await me.scaleFactor();
+      // While Artemis works, ask now and then where the text caret is (two numbers, never any text),
+      // so the droplet can ride it. Most modern applications expose no system caret: then it is null
+      // and the droplet keeps its slow path.
+      let asking = false;
+      const poll = window.setInterval(() => {
+        if (!busy) { caret = null; return; }
+        if (asking) return;
+        asking = true;
+        void platform.agentWindow.caretPosition().then(at => {
+          caret = at ? {x: (at.x - origin.x) / scaleF, y: (at.y - origin.y) / scaleF} : null;
+        }).finally(() => { asking = false; });
+      }, 120);
+      off.push(() => window.clearInterval(poll));
       const update = async (s: AgentStatus) => {
         approval = s.approval;
         const next = allowed && !reduced && BUSY.has(s.taskState);
@@ -112,7 +126,7 @@ export function FlowWindow() {
       const f = stepIslandMotion(motion, {
         mode: flowMode({approval, busy}),
         home: ring,
-        target: busy ? wanderTarget(t, innerWidth, innerHeight) : null,
+        target: busy ? chooseTarget(caret, t, innerWidth, innerHeight) : null,
         reducedMotion: reduced,
         enabled: allowed,
       }, dt);

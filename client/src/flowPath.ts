@@ -17,3 +17,19 @@ export function flowMode(status: {approval: boolean; busy: boolean}): 'awaiting_
   if (status.approval) return 'awaiting_approval';
   return status.busy ? 'working' : 'idle';
 }
+
+/** The droplet's target: the text caret when there is one on this screen, otherwise the slow path.
+ * `caret` is already in the flow window's CSS pixels. A caret outside the window (another monitor,
+ * or an application reporting nonsense) is ignored, never chased off-screen. */
+export function chooseTarget(
+  caret: FlowPoint | null,
+  t: number,
+  width: number,
+  height: number,
+): FlowPoint {
+  if (caret && Number.isFinite(caret.x) && Number.isFinite(caret.y)
+      && caret.x >= 0 && caret.x <= width && caret.y >= 0 && caret.y <= height) {
+    return caret;
+  }
+  return wanderTarget(t, width, height);
+}
