@@ -75,25 +75,25 @@
           </div>
         </div>
       </div>
-      <p class="caption">Every line is spoken in your NVDA voice, sent to your braille display, and kept in a log you can replay.</p>
+      <p class="caption">Every line is spoken in your NVDA voice (or the Windows voice without NVDA), sent to your braille display, and kept in a log you can review.</p>
     </div>
   </section>
 
   <section class="marquee-sec" aria-label="Built on">
-    <p class="marquee-label">Built on tools blind developers already trust</p>
+    <p class="marquee-label">Built with</p>
     <div class="marquee" aria-hidden="true">
       <div class="track"><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>WCAG 2.2</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>WCAG 2.2</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span></div>
-      <div class="track rev"><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Replayable log</span><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Replayable log</span></div>
+      <div class="track rev"><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Reviewable log</span><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Reviewable log</span></div>
     </div>
-    <p class="sr">Built on NVDA, Windows SAPI, Whisper, Claude, Tauri, WCAG 2.2, axe-core, Bandit and Python, with braille display support.</p>
+    <p class="sr">Built on NVDA, Windows SAPI, Whisper, Claude, Tauri, WCAG 2.2, axe-core, Bandit and Python, with braille display support. Features: push-to-talk, spoken diffs, keyboard approvals, security scans, Echo Check, local speech and a reviewable log.</p>
   </section>
 
   <section aria-labelledby="what-title">
     <div class="wrap">
-      <p class="statement" data-light>Code you can hear, changes you approve, results you can trust. Built for screen readers first, and fast where it counts.</p>
       <h2 class="sr" id="what-title">What Artemis does</h2>
+      <p class="statement" data-light>Code you can hear, changes you approve, results you can trust. Built for screen readers first, and fast where it counts.</p>
       <ul class="list" id="what-list">
-        <li><a href="how-it-works.html"><span class="k">Voice</span><strong>Speak or type a request</strong><p>Hold Ctrl+Shift+Space from any app. Artemis reads back what it heard first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="how-it-works.html"><span class="k">Voice</span><strong>Speak or type a request</strong><p>Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app. Artemis reads back what it heard first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="trust.html"><span class="k">Control</span><strong>Approve the exact change</strong><p>Enter approves, Escape rejects. A spoken "yes" never decides.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="how-it-works.html"><span class="k">Runs</span><strong>Run it for real</strong><p>A fixed command, a time limit, and none of Artemis's secrets.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="trust.html"><span class="k">Safety</span><strong>Catch problems before they run</strong><p>Code is scanned first. A serious finding blocks the run until you decide.</p><span class="arr" aria-hidden="true">↗</span></a></li>
@@ -117,10 +117,10 @@
       <h2 class="h2" id="demos-title">From idea to running. <span class="lite">Spoken, step by step.</span></h2>
       <ul class="rail" aria-label="Demo flows, scrolls sideways" tabindex="0">
         <li class="demo"><span class="live">DEMO 1</span><span class="k">First program</span><h3>Hello World, by voice</h3><div class="tags"><span>PYTHON</span><span>2 APPROVALS</span></div><p class="say">"main.py ran successfully. It printed: Hello, World!"</p></li>
-        <li class="demo"><span class="live">DEMO 2</span><span class="k">Debugging</span><h3>A failed run, explained</h3><div class="tags"><span>EXIT CODE</span><span>FIX PROPOSED</span></div><p class="say">"main.py failed with exit code 1. NameError: name 'pritn' is not defined, line 1."</p></li>
-        <li class="demo"><span class="live">DEMO 3</span><span class="k">Security Guardian</span><h3>Risky code, blocked</h3><div class="tags"><span>BANDIT</span><span>REJECT FOCUSED</span></div><p class="say">"1 high-severity issue in main.py line 4: subprocess call with shell=True."</p></li>
+        <li class="demo"><span class="live">DEMO 2</span><span class="k">Debugging</span><h3>A failed run, explained</h3><div class="tags"><span>EXIT CODE</span><span>FIX PROPOSED</span></div><p class="say">"main.py failed with exit code 1. NameError: name 'pritn' is not defined."</p></li>
+        <li class="demo"><span class="live">DEMO 3</span><span class="k">Security Guardian</span><h3>Risky code, blocked</h3><div class="tags"><span>BANDIT</span><span>REJECT FOCUSED</span></div><p class="say">"Blocked: 1 high-severity issue, main.py line 5, subprocess call with shell=True identified, security issue, and 1 more."</p></li>
         <li class="demo"><span class="live">DEMO 4</span><span class="k">Prompt injection</span><h3>A hostile README, ignored</h3><div class="tags"><span>UNTRUSTED DATA</span><span>NO SHELL TOOL</span></div><p class="say">A README tells the AI to delete files. It's read as data, and no tool can delete anything.</p></li>
-        <li class="demo"><span class="live">DEMO 5</span><span class="k">Echo Check</span><h3>A form, made accessible</h3><div class="tags"><span>AXE-CORE</span><span>7 → 0 FINDINGS</span></div><p class="say">Seven accessibility problems found on the sign-up page before the fix, none after.</p></li>
+        <li class="demo"><span class="live">DEMO 5</span><span class="k">Echo Check</span><h3>A form, made accessible</h3><div class="tags"><span>AXE-CORE</span><span>7 TO 0 FINDINGS</span></div><p class="say">Seven accessibility problems found on the sign-up page before the fix, none after.</p></li>
       </ul>
     </div>
   </section>
@@ -135,7 +135,7 @@
           <caption class="sr">Voice versus keyboard</caption>
           <thead><tr><td></td><th scope="col"><small>Way 1</small><strong>Voice</strong></th><th scope="col"><small>Way 2</small><strong>Keyboard</strong></th></tr></thead>
           <tbody>
-            <tr><th scope="row">Start</th><td>Hold Ctrl+Shift+Space and talk</td><td>Type the request, press Enter</td></tr>
+            <tr><th scope="row">Start</th><td>Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> and talk</td><td>Type the request, press Enter</td></tr>
             <tr><th scope="row">Check</th><td>"Heard: …" is read back first</td><td>What you typed is the request</td></tr>
             <tr><th scope="row">Approve</th><td colspan="2">Enter approves, Escape rejects, on the focused dialog. Never by voice.</td></tr>
             <tr><th scope="row">Result</th><td colspan="2">Spoken through NVDA or the Windows voice, and kept in the log.</td></tr>
@@ -151,12 +151,12 @@
       <p class="eyebrow">All in one place</p>
       <h2 class="h2" id="one-title">Stop juggling tools <span class="lite">that were never built to be heard.</span></h2>
       <div class="grid3">
-        <div class="tile"><b><s>A sighted helper</s></b><p>Every step is spoken, so no one has to read the screen for you.</p></div>
-        <div class="tile"><b><s>Hunting through an IDE</s></b><p>Ask for the change in plain words; Artemis finds the files.</p></div>
-        <div class="tile"><b><s>Scanning a terminal</s></b><p>Exit code and first error line, read out word for word.</p></div>
-        <div class="tile"><b><s>Reading a visual diff</s></b><p>A spoken summary built from the real edit, steppable by line.</p></div>
-        <div class="tile"><b><s>Two voices at once</s></b><p>NVDA when it runs, the Windows voice when it doesn't. Never both.</p></div>
-        <div class="tile"><b><s>Guessing what's safe</s></b><p>Code is scanned before it runs, and nothing runs without your keypress.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>A sighted helper</s></b><p>Every step is spoken, so no one has to read the screen for you.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Hunting through an IDE</s></b><p>Ask for the change in plain words; Artemis finds the files.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Scanning a terminal</s></b><p>Exit code and first error line, read out word for word.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Reading a visual diff</s></b><p>A spoken summary built from the real edit, steppable by line.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Two voices at once</s></b><p>NVDA when it runs, the Windows voice when it doesn't. Never both.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Guessing what's safe</s></b><p>Code is scanned before it runs, and nothing runs without your keypress.</p></div>
       </div>
     </div>
   </section>
@@ -190,7 +190,7 @@
 
   <section aria-labelledby="why-title">
     <div class="wrap">
-      <h2 class="h2" id="why-title">Why blind developers <span class="dim">choose</span> Artemis.</h2>
+      <h2 class="h2" id="why-title">Why blind developers <span class="dim">would choose</span> Artemis.</h2>
       <ol class="why">
         <li><small>01</small><h3>You decide every change.</h3><p>Nothing is written or run without your keypress. An approval covers one exact edit.</p></li>
         <li><small>02</small><h3>Every result is real.</h3><p>Programs really run, and you hear what they actually printed.</p></li>
