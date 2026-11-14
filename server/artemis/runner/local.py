@@ -151,6 +151,27 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         pass
 
 
+class _Started:
+    """The run's process, handed from the worker thread to `run()`, so a cancel can kill it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen | None = None
+        self._canceled = False
+
+    def started(self, proc: subprocess.Popen) -> bool:
+        """Record the process. False if the run was canceled first: the thread kills it itself."""
+        with self._lock:
+            self._proc = proc
+            return not self._canceled
+
+    def cancel(self) -> subprocess.Popen | None:
+        """Mark the run canceled; the process to kill, if it has started."""
+        with self._lock:
+            self._canceled = True
+            return self._proc
+
+
 class LocalRunner:
     def __init__(self, projects_dir: Path, python: Path | None = None):
         self.projects_dir = Path(projects_dir)
@@ -206,9 +227,25 @@ class LocalRunner:
 
     async def run(self, project: ProjectRef, entry: str, args: list[str], timeout_s: int = 10) -> RunResult:
         # A thread, not asyncio subprocesses: uvicorn --reload's loop on Windows can't start them.
-        return await asyncio.to_thread(self._run_sync, project, entry, list(args), timeout_s)
+        handle = _Started()
+        try:
+            return await asyncio.to_thread(self._run_sync, project, entry, list(args), timeout_s, handle)
+        except asyncio.CancelledError:
+            # Canceling the await leaves the thread, and the program, running: kill the whole tree
+            # (as on timeout) before the cancel goes on, so "Canceled" is true when it's spoken.
+            proc = handle.cancel()
+            if proc is not None:
+                try:
+                    await asyncio.shield(asyncio.to_thread(_kill_tree, proc))
+                except Exception:
+                    log.exception("couldn't stop the canceled run's process tree")
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+            raise
 
-    def _run_sync(self, project: ProjectRef, entry: str, args: list[str], timeout_s: int) -> RunResult:
+    def _run_sync(self, project: ProjectRef, entry: str, args: list[str], timeout_s: int, handle: _Started) -> RunResult:
         self._inside(project, entry)
         python = self.python
         argv = [str(python), "-I", "-X", "utf8", entry, *args]
@@ -228,6 +265,8 @@ class LocalRunner:
             shell=False,
             **kwargs,
         )
+        if not handle.started(proc):
+            _kill_tree(proc)  # canceled while it was starting
         out, err = _Tail(proc.stdout), _Tail(proc.stderr)
         timed_out = False
         try:
