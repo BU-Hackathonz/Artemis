@@ -11,8 +11,6 @@ test('keyboard demo: separate write/run approvals, trapped focus, result and rep
   await page.keyboard.press('Enter');
   const write = page.getByRole('dialog',{name:'Review file changes'});
   await expect(write).toBeVisible();
-  await expect(write.getByRole('button',{name:'Reject',exact:true})).toBeFocused();
-  await page.keyboard.press('Tab');
   await expect(write.getByRole('button',{name:'Approve',exact:true})).toBeFocused();
   for (let i=0; i<4; i++) {
     await page.keyboard.press('Tab');
@@ -217,10 +215,10 @@ test('request entry gains focus, Enter sends and Shift+Enter adds a line', async
   await page.keyboard.press('Enter');
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole('button',{name:'Reject',exact:true})).toBeFocused();
+  await expect(dialog.getByRole('button',{name:'Approve',exact:true})).toBeFocused();
   // Window activation must preserve a review dialog and intentionally focused controls.
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(dialog.getByRole('button',{name:'Reject',exact:true})).toBeFocused();
+  await expect(dialog.getByRole('button',{name:'Approve',exact:true})).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(input).toBeFocused();
   await input.evaluate(element => element.blur());
@@ -230,4 +228,37 @@ test('request entry gains focus, Enter sends and Shift+Enter adds a line', async
   await cancel.focus();
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(cancel).toBeFocused();
+});
+
+
+test('Enter approves normal proposals and Escape rejects a normal run', async ({page}) => {
+  await page.goto('/');
+  await page.getByRole('button',{name:'Try in-memory demo',exact:true}).click();
+  await page.getByLabel('What would you like to build?').fill('hello world');
+  await page.keyboard.press('Enter');
+  const write=page.getByRole('dialog',{name:'Review file changes'});
+  await expect(write.getByRole('button',{name:'Approve',exact:true})).toBeFocused();
+  await page.keyboard.press('Enter');
+  const run=page.getByRole('dialog',{name:'Review program run'});
+  await expect(run.getByRole('button',{name:'Approve',exact:true})).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('log')).toContainText('main.py created in memory');
+  await expect(page.getByRole('log')).not.toContainText('Demo result:');
+});
+
+
+test('Escape rejects a blocked run even while its Approve button is focused', async ({page}) => {
+  await page.goto('/');
+  await page.getByRole('button',{name:'Try blocked-action demo',exact:true}).click();
+  await page.getByLabel('What would you like to build?').fill('blocked run');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog').getByRole('button',{name:'Approve',exact:true})).toBeFocused();
+  await page.keyboard.press('Enter');
+  const run=page.getByRole('dialog',{name:'Review program run'});
+  await expect(run.getByRole('button',{name:'Reject',exact:true})).toBeFocused();
+  await run.getByRole('button',{name:'Approve blocked action (Shift+Enter)',exact:true}).focus();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('log')).not.toContainText('Demo result:');
 });
