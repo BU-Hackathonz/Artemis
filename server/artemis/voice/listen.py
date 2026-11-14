@@ -187,9 +187,14 @@ class WhisperVoice:
         else:  # the default: no post-roll
             self._earcon("stopped")  # mic is about to close; no need to wait
             audio, rolled = self._close(stream), 0.0
+        # Each drop is logged with its reason and numbers only, never words, so an empty push-to-talk
+        # can be told apart: a tap, a silent hold, or (later) Whisper's no-speech filter.
         if len(audio) < RATE * (MIN_SECONDS + rolled):
+            log.warning("Release dropped: too short (%.2f s of audio, needs %.2f s)", len(audio) / RATE, MIN_SECONDS + rolled)
             return ""
-        if loudest_rms(audio) < MIN_RMS:
+        level = loudest_rms(audio)
+        if level < MIN_RMS:
+            log.warning("Release dropped: silent (loudest 100 ms RMS %.5f, needs %.3f)", level, MIN_RMS)
             return ""  # nobody spoke
         text = await asyncio.to_thread(self._transcribe, audio)
         return strip_wake_word(text)
