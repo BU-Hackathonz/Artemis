@@ -202,6 +202,34 @@ def test_a_risky_file_already_on_disk_blocks_the_run(tmp_path):
     assert s.results()[1]["error"] == "scan_blocked"
 
 
+@pytest.mark.skipif(not scan_module.available(), reason="bandit is not installed")
+def test_check_my_codebase_scans_on_request_and_changes_nothing(tmp_path):
+    project = tmp_path / "old-app"
+    project.mkdir()
+    (project / "main.py").write_text(UNSAFE)
+    (project / "util.py").write_text("print('ok')\n")
+    script = [
+        call("t1", "open_project", name="old-app"),
+        call("t2", "scan_project", path=None),
+        text("main.py passes typed text straight to the shell on line 5, so anyone typing into it can run any command. I can rewrite it without the shell."),
+    ]
+    s = Session(tmp_path, script, scan=scan_module.scan)
+    outcome = asyncio.run(s.ask("check my codebase for security vulnerabilities"))
+
+    assert s.approvals.requests == []  # reading asks for nothing
+    spoken = s.log.spoken()
+    assert "Scanning old-app for security problems." in spoken
+    heard = next(line for line in spoken if line.startswith("Found "))
+    assert heard.startswith("Found 2 security issues in 2 Python files: 1 high, 1 low. The worst is main.py line 5, ")
+    result = s.results()[1]
+    assert result["ok"] and result["data"]["counts"] == {"high": 1, "medium": 0, "low": 1}
+    assert result["data"]["findings"].startswith('<untrusted source="scan:bandit findings">')
+    assert "high: B602 main.py line 5" in result["data"]["findings"]
+    assert s.log.of("security.findings")[0].data["findings"][0]["rule"] == "B602"
+    assert (project / "main.py").read_text() == UNSAFE and s.runner.runs == []
+    assert isinstance(outcome, Answered)
+
+
 # ----- 18. prompt injection -----
 
 INJECTED = (
@@ -280,7 +308,7 @@ def test_if_the_model_obeyed_the_injection_the_gateway_still_refuses(tmp_path, t
 def test_no_destructive_tool_exists():
     assert set(RULES) == {
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
-        "inspect_page",
+        "inspect_page", "scan_project",
     }
     # Everything that changes the disk or starts a process needs the developer's approval.
     assert {name for name, rule in RULES.items() if rule.needs_approval} == {

@@ -130,11 +130,16 @@ temp folder outside the workspace) and again before each run approval; its findi
 | `write_files` | `{files: [{path, content}]}`: one approval for the whole batch. Overwrites only in a project created this session | yes, after a scan | yes |
 | `run_program` | `{entry, args?: [str]}`; the preset comes from the file type | yes, after a scan | yes |
 | `edit_file` | `{path, edits: [{old, new}]}` | yes | after MVP |
-| `inspect_page` | `{url}` (fixture only) | no | Echo Check |
+| `inspect_page` | `{path}`: an `.html` or `.htm` file in the project | no: read-only | Echo Check |
+| `scan_project` | `{path?}`: a file or folder in the project; omitted scans all of it | no: read-only | after MVP |
 
 There is no shell, delete, network or install tool, and the agent can't apply anything without
-approval. `ask_user` and `scan` are not model tools: a question is the agent's final answer, and
-the scan runs inside the gateway.
+approval. `ask_user` is not a model tool: a question is the agent's final answer. The scan
+before a write or a run is not a model tool either; it always runs inside the gateway.
+`scan_project` is the same Bandit scan when the developer asks for one ("check my code for
+security problems"). It changes nothing, emits `security.findings`, and the gateway speaks the
+counts and the worst finding. It fails with `scan_unavailable` when the scanner is missing or
+crashes, and says so when there are no Python files, so it never reports unscanned code as clean.
 Paths are rejected unless `Path(root / p).resolve()` stays under `root`.
 
 ### 3.3 Voice (Yaovi ↔ Avery)

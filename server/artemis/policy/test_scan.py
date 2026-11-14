@@ -76,10 +76,14 @@ def test_bandit_gets_no_secrets_in_its_environment(tmp_path, monkeypatch):
     assert "ANTHROPIC_API_KEY" not in seen["env"]
     assert set(seen["env"]) <= {"SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"}
     assert seen["cwd"] != str(tmp_path)  # Bandit never runs inside the project folder
-    assert seen["argv"][1:8] == ["-m", "bandit", "-r", str(tmp_path), "-f", "json", "-q"]
+    assert seen["argv"][1:8] == ["-m", "bandit", "-r", str(tmp_path.resolve()), "-f", "json", "-q"]
     # Virtual environments and node_modules are excluded, so a run isn't held up by them.
     assert seen["argv"][8] == "-x"
-    assert {str(tmp_path / ".venv"), str(tmp_path / "node_modules")} <= set(seen["argv"][9].split(","))
+    excluded = set(seen["argv"][9].split(","))
+    # Anchored to the scanned folder, at the top and at any depth, and never a bare path.
+    root = str(tmp_path.resolve())
+    assert {f"{root}/.venv/*", f"{root}/*/.venv/*", f"{root}/node_modules/*", f"{root}/*/node_modules/*"} <= excluded
+    assert all(entry.startswith(root) and entry.endswith("/*") for entry in excluded)
     assert seen["timeout"] == 20 and "shell" not in seen
 
 

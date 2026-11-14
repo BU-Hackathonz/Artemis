@@ -53,6 +53,7 @@ from .tools import (
     OpenProjectArgs,
     ReadFileArgs,
     RunProgramArgs,
+    ScanProjectArgs,
     ToolResult,
     WriteFilesArgs,
 )

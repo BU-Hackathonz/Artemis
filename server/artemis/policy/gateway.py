@@ -43,6 +43,7 @@ from artemis.contracts import (
     ReadFileArgs,
     Runner,
     RunProgramArgs,
+    ScanProjectArgs,
     RunResult,
     RunSpec,
     SecurityFindings,
@@ -54,6 +55,7 @@ from artemis.contracts import (
 from .hashing import approval_hash, run_payload, write_payload
 from .paths import (
     MAX_FILES_PER_BATCH,
+    SKIP_DIRS,
     PathRejected,
     check_read_size,
     check_write_size,
@@ -65,9 +67,11 @@ from .redact import redact, redact_obj
 from .rules import RULES
 
 # Scans a folder and returns findings with paths relative to it. None until M2 (Bandit).
-Scan = Callable[[Path], Awaitable[list[Finding]]]
+# scan_project also passes a second argument: the one file or folder inside it to read.
+Scan = Callable[..., Awaitable[list[Finding]]]
 
 MAX_LIST_ENTRIES = 200
+MAX_SCAN_FINDINGS = 50
 SPOKEN_OUTPUT_CHARS = 200
 _SEVERITY_ORDER = ("high", "medium", "low")
 
@@ -109,6 +113,23 @@ def findings_sentence(findings: list[Finding]) -> str:
             )
             return text + (f", and {more} more." if more else ".")
     return "No security findings."
+
+
+def scan_announcement(findings: list[Finding], files: int) -> str:
+    """What the user hears after scan_project. Counts by level, then the worst one."""
+    scanned = plural(files, "Python file")
+    if not findings:
+        return f"No security findings in {scanned}."
+    levels = ", ".join(
+        f"{count} {level}"
+        for level in _SEVERITY_ORDER
+        if (count := sum(f.severity == level for f in findings))
+    )
+    worst = findings[0]
+    return (
+        f"Found {plural(len(findings), 'security issue')} in {scanned}: {levels}. "
+        f"The worst is {worst.path} line {worst.line}, {worst.message.rstrip('.')}."
+    )
 
 
 def run_announcement(entry: str, result: RunResult, timeout_s: int) -> str:
@@ -369,6 +390,82 @@ class ToolGateway:
                 "\n".join(f"{f.rule} at {f.target}: {f.message}" for f in getattr(report, "needs_review", []))
                 or "none",
             ),
+        }
+
+    async def _scan_project(self, task_id: str, a: ScanProjectArgs) -> dict:
+        """The security scan, on request. Read-only, so no approval.
+
+        What the developer hears is written here, not by the model, so a scan that didn't run
+        or found nothing to look at is never reported as clean.
+        """
+        project = self._require_project()
+        root = Path(project.root)
+        base = root.resolve()
+        scope = "the whole project"
+        top = root
+        if a.path:
+            top = safe_resolve(root, a.path)
+            scope = top.relative_to(base).as_posix()
+            # The scan never reads these folders, so it must not answer "clean" for one.
+            # Checked by name before anything else, whatever the case and whether or not
+            # the folder exists, so the answer is the same on every file system.
+            skipped = {name.casefold() for name in SKIP_DIRS}
+            inside = next((part for part in scope.split("/") if part.casefold() in skipped), None)
+            if inside:
+                raise _ToolError(
+                    "invalid_args",
+                    f"{a.path} is inside {inside}, which the security scan never checks. "
+                    "Nothing was scanned.",
+                )
+            if not top.exists():
+                raise _ToolError("not_found", f"There is no file or folder named {a.path}.")
+        if self._scan is None:
+            message = "The security scanner isn't installed."
+            await self._error(task_id, "scan_unavailable", message, "Nothing was scanned.")
+            raise _ToolError("scan_unavailable", f"{message} Run: uv sync --group security")
+
+        # The files Bandit reads: Python files, not behind a link, not in a skipped folder at
+        # any depth. Findings for anything else are dropped, and this is the count we speak.
+        listed = project_files(root, top) if top.is_dir() else [scope]
+        python = {name for name in listed if name.lower().endswith((".py", ".pyw"))}
+        where = project.slug if not a.path else scope
+        if not python:
+            text = f"There are no Python files to scan in {where}. The scan only checks Python."
+            await self._say(task_id, text, "normal")
+            return {"scope": scope, "files_scanned": 0, "note": text}
+
+        await self._say(task_id, f"Scanning {where} for security problems.")
+        try:
+            # Only the requested file or folder is read, so one file in a big project is quick.
+            found = await (self._scan(root, top) if a.path else self._scan(root))
+        except Exception:
+            message = "The security scan could not run."
+            await self._error(task_id, "scan_unavailable", message, "Nothing was scanned.")
+            raise _ToolError("scan_unavailable", f"{message} Nothing was scanned.") from None
+        findings = sorted(
+            (f for f in found if f.path in python),
+            key=lambda f: (_SEVERITY_ORDER.index(f.severity), f.path, f.line),
+        )
+        counts = {level: sum(f.severity == level for f in findings) for level in _SEVERITY_ORDER}
+        shown = findings[:MAX_SCAN_FINDINGS]
+        if shown:
+            await self._emit(
+                task_id,
+                "security.findings",
+                SecurityFindings(op_id=f"op_{uuid.uuid4().hex[:12]}", tool="bandit", findings=shown),
+            )
+        await self._say(task_id, scan_announcement(findings, len(python)), "normal")
+        lines = "\n".join(
+            f"{f.severity}: {f.rule} {f.path} line {f.line}: {f.message}" for f in shown
+        )
+        return {
+            "scope": scope,
+            "files_scanned": len(python),
+            "counts": counts,
+            "truncated": len(findings) > len(shown),
+            # File names and messages come from the project, so they are data, not instructions.
+            "findings": wrap("scan:bandit findings", lines or "none"),
+            "note": "A static check of the Python files only. It does not prove the code is safe.",
         }
 
     # ----- approvals -----

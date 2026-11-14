@@ -19,6 +19,7 @@ ErrorCode = Literal[
     "not_found",
     "tool_failed",
     "echo_unavailable",
+    "scan_unavailable",
 ]
 
 
@@ -74,6 +75,12 @@ class InspectPageArgs(_Args):
     path: str  # an .html or .htm file in the current project
 
 
+class ScanProjectArgs(_Args):
+    """A security scan on request. Read-only, so it needs no approval."""
+
+    path: str | None = None  # a file or folder in the current project; None scans all of it
+
+
 TOOL_ARGS: dict[str, type[BaseModel]] = {
     "create_project": CreateProjectArgs,
     "open_project": OpenProjectArgs,
@@ -83,6 +90,7 @@ TOOL_ARGS: dict[str, type[BaseModel]] = {
     "run_program": RunProgramArgs,
     "edit_file": EditFileArgs,
     "inspect_page": InspectPageArgs,
+    "scan_project": ScanProjectArgs,
 }
 
 
