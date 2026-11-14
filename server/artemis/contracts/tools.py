@@ -63,7 +63,7 @@ class Edit(_Args):
 
 
 class EditFileArgs(_Args):
-    """After the MVP (M3)."""
+    """Search/replace edits to one existing file. Each `old` must match exactly once."""
 
     path: str
     edits: list[Edit] = Field(min_length=1)
@@ -76,6 +76,7 @@ TOOL_ARGS: dict[str, type[BaseModel]] = {
     "read_file": ReadFileArgs,
     "write_files": WriteFilesArgs,
     "run_program": RunProgramArgs,
+    "edit_file": EditFileArgs,
 }
 
 

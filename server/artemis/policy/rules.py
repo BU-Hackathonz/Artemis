@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from artemis.contracts import (
     ApprovalKind,
     CreateProjectArgs,
+    EditFileArgs,
     ListFilesArgs,
     OpenProjectArgs,
     ReadFileArgs,
@@ -37,4 +38,6 @@ RULES: dict[str, Rule] = {
     "read_file": Rule(ReadFileArgs),
     "write_files": Rule(WriteFilesArgs, approval_kind="write_files", scan_before=True),
     "run_program": Rule(RunProgramArgs, approval_kind="run_program", scan_before=True),
+    # Search/replace edits to an existing file, in any project (decisions.md §9).
+    "edit_file": Rule(EditFileArgs, approval_kind="write_files", scan_before=True),
 }
