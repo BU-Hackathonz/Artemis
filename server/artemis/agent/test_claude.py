@@ -558,6 +558,60 @@ def test_live_hello_world(tmp_path):
 # ----- the real SDK client, with the network replaced -----
 
 
+@pytest.mark.parametrize("workspace", ["wrkspc_01TESTnotreal", None])
+def test_workspace_header_is_sent_only_when_a_workspace_is_set(tmp_path, monkeypatch, workspace):
+    """The agent builds its own client here, so this covers the header end to end."""
+    headers = []
+    reply = {
+        "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+        "content": [{"type": "text", "text": "Hello."}],
+        "stop_reason": "end_turn", "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+    def handler(request):
+        headers.append(request.headers)
+        return httpx2.Response(200, json=reply)
+
+    real = anthropic.AsyncAnthropic
+
+    def offline(**kwargs):
+        return real(
+            api_key="test-key-not-real",
+            max_retries=0,
+            http_client=anthropic.DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handler)),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(claude_module.anthropic, "AsyncAnthropic", offline)
+    if workspace:
+        monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", f"  {workspace}  ")
+    else:
+        monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    config = Config.from_env()
+    assert config.workspace_id == workspace
+
+    async def go():
+        w = World(tmp_path, [])
+        w.agent = ClaudeAgent(config)
+        return await w.run()
+
+    assert asyncio.run(go()) == Answered(text="Hello.")
+    assert headers[0].get("anthropic-workspace-id") == workspace
+
+
+def test_an_empty_workspace_setting_means_no_workspace(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "")
+    assert Config.from_env().workspace_id is None
+
+
+def test_the_workspace_id_is_redacted_like_the_key(monkeypatch):
+    from artemis.policy.redact import redact
+
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_01TESTnotreal")
+    assert "wrkspc_01TESTnotreal" not in redact("workspace wrkspc_01TESTnotreal failed")
+
+
 def test_real_sdk_client_builds_the_request_and_replays_thinking_blocks(tmp_path):
     """Everything except the network: the real AsyncAnthropic serializes our request, and the
     second request carries the first response's blocks back unchanged."""

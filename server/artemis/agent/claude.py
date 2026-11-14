@@ -141,7 +141,10 @@ class ClaudeAgent:
 
     async def _request(self):
         if self._client is None:
-            self._client = anthropic.AsyncAnthropic()
+            # A key that isn't tied to one workspace needs the workspace named on every request.
+            workspace = self._config.workspace_id
+            headers = {"anthropic-workspace-id": workspace} if workspace else None
+            self._client = anthropic.AsyncAnthropic(default_headers=headers)
         return await self._client.beta.messages.create(
             model=self._config.model,
             max_tokens=MAX_TOKENS,
