@@ -157,4 +157,28 @@ describe('startup announcement ordering', () => {
       expect(latest?.noticeFailed).toBe(false);
     } finally {act(() => root.unmount());}
   });
+
+  it('announces a shortcut failure exactly once when core voice becomes ready later', async () => {
+    registerPushToTalk.mockReset();
+    registerPushToTalk.mockRejectedValue(new Error('taken'));
+    const core = fakeCore();
+    const root = createRoot(document.createElement('div'));
+    try {
+      await act(async () => root.render(<Probe core={core} sessionId="ses_late" voiceReady={false}/>));
+      await flush();
+      expect(core.announceReady.mock.calls).toEqual([['ses_late', undefined]]);
+      expect(core.reportShortcutFailure).not.toHaveBeenCalled();
+      await act(async () => root.render(<Probe core={core} sessionId="ses_late" voiceReady/>));
+      await flush();
+      expect(core.reportShortcutFailure.mock.calls).toEqual([['ses_late', 'Control+Shift+Space']]);
+      expect(latest?.noticeFailed).toBe(false);
+      await act(async () => root.render(<Probe core={core} sessionId="ses_late" voiceReady={false}/>));
+      await flush();
+      await act(async () => root.render(<Probe core={core} sessionId="ses_late" voiceReady/>));
+      await flush();
+      expect(core.announceReady).toHaveBeenCalledTimes(1);
+      expect(core.reportShortcutFailure).toHaveBeenCalledTimes(1);
+      expect(latest?.noticeFailed).toBe(false);
+    } finally {act(() => root.unmount());}
+  });
 });
