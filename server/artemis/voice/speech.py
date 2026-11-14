@@ -16,6 +16,7 @@ import inspect
 import logging
 import os
 import sys
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -54,6 +55,18 @@ def nvda_running() -> bool:
     find = ctypes.windll.user32.FindWindowW
     find.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
     return bool(find("wxWindowClassNR", "NVDA"))
+
+
+class RateStatus(str, Enum):
+    """What a rate change did. The core says the matching line; the voice never speaks it."""
+
+    FASTER = "faster"
+    SLOWER = "slower"
+    AT_MAX = "at_max"  # already at our fastest: nothing changed
+    AT_MIN = "at_min"  # already at our slowest: nothing changed
+    NVDA = "nvda"  # NVDA's own speech settings are the user's: never touched
+    NO_OUTPUT = "no_output"  # no voice output at all, so there is no rate to change
+    UNCHANGED = "none"  # a zero step
 
 
 class Speaker(Protocol):
@@ -253,20 +266,19 @@ class Announcer:
         if self.last:
             self.current().speak(self.last, interrupt=True)
 
-    async def set_rate(self, delta: int) -> bool:
-        """'Slower' / 'faster' from the conversation controller. Speaks its own confirmation.
+    async def set_rate(self, delta: int) -> RateStatus:
+        """'Slower' / 'faster' from the conversation controller. Speaks nothing: the caller says the outcome.
 
         Only SAPI's rate is ours to change. Under NVDA the voice and rate are the user's own settings,
-        so they are never touched. Returns True when the rate changed.
+        so they are never touched.
         """
         speaker = self.current()
         if speaker.name == "nvda":
-            await self.announce("I'm using your NVDA voice. Change its speed in NVDA's speech settings.", "normal")
-            return False
+            return RateStatus.NVDA
         if not hasattr(speaker, "set_rate"):
-            return False  # no voice output at all; there is nothing to make faster or slower
+            return RateStatus.NO_OUTPUT  # no voice output at all; there is nothing to make faster or slower
         if not delta:
-            return False
+            return RateStatus.UNCHANGED
         step = 1 if delta > 0 else -1
         before = speaker.rate
         # The user's own Windows rate can sit outside our range (we keep it unless asked). Stepping
@@ -274,7 +286,5 @@ class Announcer:
         at_limit = before >= RATE_MAX if step > 0 else before <= RATE_MIN
         after = before if at_limit else speaker.set_rate(before + step)
         if after == before:
-            await self.announce("That's the fastest I go." if delta > 0 else "That's the slowest I go.", "normal")
-            return False
-        await self.announce("Speaking faster." if delta > 0 else "Speaking slower.", "normal")
-        return True
+            return RateStatus.AT_MAX if delta > 0 else RateStatus.AT_MIN
+        return RateStatus.FASTER if delta > 0 else RateStatus.SLOWER

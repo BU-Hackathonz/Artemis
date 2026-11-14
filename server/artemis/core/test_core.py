@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from artemis.agent.stub import StubAgent
+from artemis.conversation.controller import NVDA_RATE_LINE
 from artemis.contracts import Approval, Decision, EventDraft
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
@@ -544,13 +545,19 @@ async def test_diagnostics_need_the_token_and_a_session(client):
 # ----- spoken rate change with conversation on (§5.4) -----
 
 
-async def say_slower(client, core, voice, monkeypatch, *, voice_ready):
+async def say_rate(client, core, voice, monkeypatch, *, transcript, result, voice_ready=True, screen_reader=None):
     monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
-    voice.announcer.state = (voice_ready, None)
-    voice.set_rate = lambda delta: False  # no change made (no output, or at a limit)
+    voice.announcer.state = (voice_ready, screen_reader)
+    voice.rate_calls = []
+
+    def set_rate(delta):
+        voice.rate_calls.append(delta)
+        return result
+
+    voice.set_rate = set_rate
     sid, session = await start(client, core)
     before = len(session.bus.history)
-    voice.transcript = "slower"
+    voice.transcript = transcript
     await client.post("/voice/listen", headers=AUTH, json={"action": "start"})
     await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
     await wait_for(session, lambda s: any(e.type == "transcript.final" for e in s.bus.history[before:]))
@@ -558,14 +565,55 @@ async def say_slower(client, core, voice, monkeypatch, *, voice_ready):
     return [e for e in session.bus.history[before:] if e.type == "agent.message"]
 
 
-async def test_slower_with_no_voice_output_is_still_answered(client, core, voice, monkeypatch):
-    lines = await say_slower(client, core, voice, monkeypatch, voice_ready=False)
+@pytest.mark.parametrize("transcript, status, line", [
+    ("slower", "slower", "Speaking slower."),
+    ("faster", "faster", "Speaking faster."),
+    ("slower", "at_min", "That's the slowest I go."),
+    ("faster", "at_max", "That's the fastest I go."),
+    ("slower", "nvda", NVDA_RATE_LINE),
+])
+async def test_each_rate_status_is_one_agent_message_and_spoken_once(client, core, voice, monkeypatch, transcript, status, line):
+    from artemis.voice.speech import RateStatus
+
+    lines = await say_rate(client, core, voice, monkeypatch, transcript=transcript, result=RateStatus(status))
+    assert [e.announce.text for e in lines] == [line]
+    assert [t for _, t in voice.spoken].count(line) == 1  # reaches the voice once, through the bus
+
+
+async def test_no_voice_output_gets_the_controller_fallback_once(client, core, voice, monkeypatch):
+    from artemis.voice.speech import RateStatus
+
+    lines = await say_rate(client, core, voice, monkeypatch, transcript="slower",
+                           result=RateStatus.NO_OUTPUT, voice_ready=False)
     assert [e.announce.text for e in lines] == ["I can't change how fast I speak yet."]
 
 
-async def test_slower_with_voice_output_is_not_answered_twice(client, core, voice, monkeypatch):
-    # With output, the voice already said its own line (e.g. "That's the slowest I go.").
-    assert await say_slower(client, core, voice, monkeypatch, voice_ready=True) == []
+async def test_an_unchanged_rate_says_nothing_extra(client, core, voice, monkeypatch):
+    from artemis.voice.speech import RateStatus
+
+    assert await say_rate(client, core, voice, monkeypatch, transcript="slower", result=RateStatus.UNCHANGED) == []
+
+
+async def test_nvda_wording_is_the_controllers_one_sentence(client, core, voice, monkeypatch):
+    # Stale screen-reader state (controller sees no NVDA) reaches the core's rate branch and says NVDA's line.
+    from artemis.voice.speech import RateStatus
+
+    via_rate = await say_rate(client, core, voice, monkeypatch, transcript="slower", result=RateStatus.NVDA)
+    assert [e.announce.text for e in via_rate] == [NVDA_RATE_LINE]
+    assert voice.rate_calls == [-1]  # the stale path: the controller did not know about NVDA
+    # Fresh NVDA state: the controller answers in its own branch, and set_rate never runs.
+    via_controller = await say_rate(client, core, voice, monkeypatch, transcript="slower",
+                                    result=RateStatus.NVDA, screen_reader="nvda")
+    assert [e.announce.text for e in via_controller] == [NVDA_RATE_LINE]
+    assert voice.rate_calls == []
+
+
+async def test_bool_results_from_an_older_voice_still_work(client, core, voice, monkeypatch):
+    assert [e.announce.text for e in await say_rate(client, core, voice, monkeypatch, transcript="slower", result=True)] == ["Speaking slower."]
+    assert [e.announce.text for e in await say_rate(client, core, voice, monkeypatch, transcript="faster", result=True)] == ["Speaking faster."]
+    lines = await say_rate(client, core, voice, monkeypatch, transcript="slower", result=False, voice_ready=False)
+    assert [e.announce.text for e in lines] == ["I can't change how fast I speak yet."]
+    assert await say_rate(client, core, voice, monkeypatch, transcript="slower", result=False, voice_ready=True) == []
 
 
 # ----- ready line (§1) -----
