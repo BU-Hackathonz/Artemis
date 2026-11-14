@@ -12,19 +12,20 @@
 <script src="motion.js" defer></script>
 </head>
 <body>
-<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header glass">
-  <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
-  <nav class="site-nav" aria-label="Main">
-    <ul>
-      <li><a href="index.html">Home</a></li>
-      <li><a href="how-it-works.html">How it works</a></li>
-      <li><a href="trust.html">Accessibility and safety</a></li>
-      <li><a href="get-started.html">Get started</a></li>
-      <li><a href="team.html" aria-current="page">Team</a></li>
-    </ul>
-  </nav>
+<header class="site-header">
+  <div class="nav-pill">
+    <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="how-it-works.html">How it works</a></li>
+        <li><a href="trust.html">Accessibility and safety</a></li>
+        <li><a href="team.html" aria-current="page">Team</a></li>
+      </ul>
+    </nav>
+    <a class="button button-solid button-small" href="get-started.html">Get started</a>
+  </div>
 </header>
 
 <main id="main">
@@ -36,14 +37,14 @@
   <section class="block" aria-labelledby="people-title">
     <h2 id="people-title" class="visually-hidden">People</h2>
     <ul class="team">
-      <li class="glass"><img src="team/david.png" alt="" width="182" height="182"><h3>David Ribeiro</h3><p>Team lead. The coding agent and the safety gate.</p></li>
-      <li class="glass"><span class="initial" aria-hidden="true">A</span><h3>Avery</h3><p>The core service, the runner and the launcher.</p></li>
-      <li class="glass"><img src="team/jun.png" alt="" width="182" height="182"><h3>Jun Olea</h3><p>The desktop app, keyboard navigation and screen-reader experience.</p></li>
-      <li class="glass"><img src="team/yaovi.png" alt="" width="182" height="182"><h3>Yaovi Agblami</h3><p>Voice: push-to-talk, speech recognition and spoken output. Presenter.</p></li>
+      <li><img src="team/david.png" alt="" width="182" height="182"><h3>David Ribeiro</h3><p>Team lead. The coding agent and the safety gate.</p></li>
+      <li><span class="initial" aria-hidden="true">A</span><h3>Avery</h3><p>The core service, the runner and the launcher.</p></li>
+      <li><img src="team/jun.png" alt="" width="182" height="182"><h3>Jun Olea</h3><p>The desktop app, keyboard navigation and screen-reader experience.</p></li>
+      <li><img src="team/yaovi.png" alt="" width="182" height="182"><h3>Yaovi Agblami</h3><p>Voice: push-to-talk, speech recognition and spoken output. Presenter.</p></li>
     </ul>
   </section>
 
-  <section class="block panel glass prose" aria-labelledby="source-title">
+  <section class="block panel prose" aria-labelledby="source-title">
     <h2 id="source-title">Open source</h2>
     <p>All of Artemis, including this site, is on <a href="https://github.com/BU-Hackathonz/Artemis">GitHub</a>.</p>
   </section>
@@ -53,6 +54,5 @@
   <p>artemis. Built at HackUMass 2026.</p>
   <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
 </footer>
-<button class="pause glass" type="button" aria-pressed="false">Pause motion</button>
 </body>
 </html>

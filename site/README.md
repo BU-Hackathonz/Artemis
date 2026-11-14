@@ -1,12 +1,14 @@
 # artemis. landing site
 
 Public site for Artemis: plain HTML, one stylesheet and one small script (`motion.js`, which runs
-the home page marquee and the Pause motion button). No cookies, analytics or third-party requests.
+the home page marquee, the scroll-lit statement and the Pause motion button). No cookies, analytics or third-party requests.
 Every page sets a `default-src 'self'` Content Security Policy, and `vercel.json` sends the same
 policy plus `frame-ancestors 'none'` as headers.
 
-Design ("Velocity"): black background, a slow purple gradient, liquid-glass panels, and the
-`artemis.` wordmark in purple (`#B794FF`).
+Design: a dark, monochrome studio style with the `artemis.` wordmark in purple (`#B794FF`):
+a floating pill nav, a large tight headline whose second line fades, true stats, a framed view of
+the approval dialog and spoken log, marquee rows, a statement that lights up word by word as you
+scroll, and stacked feature cards.
 
 Preview locally:
 

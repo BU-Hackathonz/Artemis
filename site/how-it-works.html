@@ -12,19 +12,20 @@
 <script src="motion.js" defer></script>
 </head>
 <body>
-<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header glass">
-  <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
-  <nav class="site-nav" aria-label="Main">
-    <ul>
-      <li><a href="index.html">Home</a></li>
-      <li><a href="how-it-works.html" aria-current="page">How it works</a></li>
-      <li><a href="trust.html">Accessibility and safety</a></li>
-      <li><a href="get-started.html">Get started</a></li>
-      <li><a href="team.html">Team</a></li>
-    </ul>
-  </nav>
+<header class="site-header">
+  <div class="nav-pill">
+    <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="how-it-works.html" aria-current="page">How it works</a></li>
+        <li><a href="trust.html">Accessibility and safety</a></li>
+        <li><a href="team.html">Team</a></li>
+      </ul>
+    </nav>
+    <a class="button button-solid button-small" href="get-started.html">Get started</a>
+  </div>
 </header>
 
 <main id="main">
@@ -36,19 +37,19 @@
   <section class="block" aria-labelledby="flow-title">
     <h2 id="flow-title">One request, start to finish</h2>
     <ol class="steps">
-      <li class="glass"><div><strong>You speak or type</strong>Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> from any app. Artemis stops talking, plays a short rising tone, then starts listening. Release the keys and it transcribes on your own computer.</div></li>
-      <li class="glass"><div><strong>Artemis reads it back</strong>"Heard: create a Python program that prints Hello World." The text stays in an editable field, so a misheard word is easy to fix.</div></li>
-      <li class="glass"><div><strong>The agent plans the work</strong>The coding agent decides which files to create or edit. It can only ask for actions through a fixed set of tools. It has no shell and cannot install anything.</div></li>
-      <li class="glass"><div><strong>You review the exact change</strong>Writes pause for approval. Artemis speaks a summary built from the real edit, such as "1 file, main.py, 1 line", and the full diff is there to step through. Enter approves, Escape rejects.</div></li>
-      <li class="glass"><div><strong>The code is scanned</strong>Before a run, the code is checked for security problems. A serious finding blocks the run, and Artemis says what it found and where.</div></li>
-      <li class="glass"><div><strong>You approve the run</strong>Runs need their own approval. The program starts with a fixed command, a time limit and none of Artemis's secrets.</div></li>
-      <li class="glass"><div><strong>You hear the result</strong>Success says what the program printed. Failure says the exit code and the first error line, word for word, then an explanation and a proposed fix.</div></li>
+      <li><div><strong>You speak or type</strong>Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> from any app. Artemis stops talking, plays a short rising tone, then starts listening. Release the keys and it transcribes on your own computer.</div></li>
+      <li><div><strong>Artemis reads it back</strong>"Heard: create a Python program that prints Hello World." The text stays in an editable field, so a misheard word is easy to fix.</div></li>
+      <li><div><strong>The agent plans the work</strong>The coding agent decides which files to create or edit. It can only ask for actions through a fixed set of tools. It has no shell and cannot install anything.</div></li>
+      <li><div><strong>You review the exact change</strong>Writes pause for approval. Artemis speaks a summary built from the real edit, such as "1 file, main.py, 1 line", and the full diff is there to step through. Enter approves, Escape rejects.</div></li>
+      <li><div><strong>The code is scanned</strong>Before a run, the code is checked for security problems. A serious finding blocks the run, and Artemis says what it found and where.</div></li>
+      <li><div><strong>You approve the run</strong>Runs need their own approval. The program starts with a fixed command, a time limit and none of Artemis's secrets.</div></li>
+      <li><div><strong>You hear the result</strong>Success says what the program printed. Failure says the exit code and the first error line, word for word, then an explanation and a proposed fix.</div></li>
     </ol>
   </section>
 
   <section class="block" aria-labelledby="parts-title">
     <h2 id="parts-title">The parts</h2>
-    <dl class="parts panel glass">
+    <dl class="parts panel">
       <dt>Desktop app</dt>
       <dd>A small Windows app with a request field, the approval dialog and a reviewable activity log. Every control works from the keyboard, and focus moves deliberately.</dd>
       <dt>Core</dt>
@@ -69,6 +70,5 @@
   <p>artemis. Built at HackUMass 2026.</p>
   <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
 </footer>
-<button class="pause glass" type="button" aria-pressed="false">Pause motion</button>
 </body>
 </html>

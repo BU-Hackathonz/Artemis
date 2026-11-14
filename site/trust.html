@@ -12,19 +12,20 @@
 <script src="motion.js" defer></script>
 </head>
 <body>
-<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header glass">
-  <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
-  <nav class="site-nav" aria-label="Main">
-    <ul>
-      <li><a href="index.html">Home</a></li>
-      <li><a href="how-it-works.html">How it works</a></li>
-      <li><a href="trust.html" aria-current="page">Accessibility and safety</a></li>
-      <li><a href="get-started.html">Get started</a></li>
-      <li><a href="team.html">Team</a></li>
-    </ul>
-  </nav>
+<header class="site-header">
+  <div class="nav-pill">
+    <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="how-it-works.html">How it works</a></li>
+        <li><a href="trust.html" aria-current="page">Accessibility and safety</a></li>
+        <li><a href="team.html">Team</a></li>
+      </ul>
+    </nav>
+    <a class="button button-solid button-small" href="get-started.html">Get started</a>
+  </div>
 </header>
 
 <main id="main">
@@ -33,7 +34,7 @@
     <p class="lede">Artemis is designed around a screen reader, and around one rule: the developer decides every change.</p>
   </div>
 
-  <section class="block panel glass prose" aria-labelledby="a11y-title">
+  <section class="block panel prose" aria-labelledby="a11y-title">
     <h2 id="a11y-title">Built for screen readers</h2>
     <ul>
       <li><strong>Your voice, not a second one.</strong> When NVDA is running, Artemis speaks through it, in your voice and at your speed, and sends the same text to your braille display. Without NVDA it uses the Windows voice. It never uses both at once.</li>
@@ -44,7 +45,7 @@
     </ul>
   </section>
 
-  <section class="block panel glass prose" aria-labelledby="control-title">
+  <section class="block panel prose" aria-labelledby="control-title">
     <h2 id="control-title">You approve every change</h2>
     <ul>
       <li><strong>Exact approvals.</strong> An approval covers one exact edit or one exact run. If the files change before you decide, it is cancelled and asked again.</li>
@@ -55,17 +56,17 @@
     </ul>
   </section>
 
-  <section class="block panel glass prose" aria-labelledby="data-title">
+  <section class="block panel prose" aria-labelledby="data-title">
     <h2 id="data-title">Your data</h2>
     <ul>
       <li><strong>Speech stays on your computer.</strong> Recognition runs locally. Audio is held in memory only while you speak and is discarded after transcription. It is never saved or uploaded.</li>
       <li><strong>The agent uses Claude.</strong> Your request and the project files the agent reads are sent to Anthropic's Claude API to plan changes. The API key is never put in prompts, logs or speech.</li>
-      <li><strong>Local only.</strong> The core listens on your own computer and requires a secret token for each launch, so websites and other programs can't control it.</li>
+      <li><strong>Local only.</strong> The core listens on your own computer and requires a secret token for each launch, so websites can't control it.</li>
       <li><strong>This site</strong> has no cookies, analytics or scripts, and loads nothing from other servers.</li>
     </ul>
   </section>
 
-  <section class="block panel glass prose" aria-labelledby="limits-title">
+  <section class="block panel prose" aria-labelledby="limits-title">
     <h2 id="limits-title">Known limits</h2>
     <ul>
       <li>Programs run with approval, a static scan, a time limit and a minimal environment. That is gated and limited, but it is not an operating-system sandbox.</li>
@@ -79,6 +80,5 @@
   <p>artemis. Built at HackUMass 2026.</p>
   <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
 </footer>
-<button class="pause glass" type="button" aria-pressed="false">Pause motion</button>
 </body>
 </html>
