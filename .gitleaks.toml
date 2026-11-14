@@ -14,3 +14,8 @@ condition = "AND"
 paths = ['''server/artemis/policy/test_redact\.py''']
 regexTarget = "line"
 regexes = ['''PRIVATE KEY-----\\nMIIEow''']
+
+[[allowlists]]
+description = "Windows Credential Manager target names in the launcher (infra/credstore.ps1), not secrets"
+targetRules = ["generic-api-key"]
+regexes = ['''^Artemis/Anthropic(ApiKey|WorkspaceId)$''']
