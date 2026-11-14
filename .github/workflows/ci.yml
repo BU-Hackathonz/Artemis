@@ -55,6 +55,33 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  client-browser:
+    name: client browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      # The config runs headless and uses no release channel, so the headless shell is enough.
+      - run: npx playwright install --with-deps chromium-headless-shell
+      # Adds the HTML report on top of the list reporter in playwright.config.ts (uploaded on failure only).
+      - run: npx playwright test --reporter=list,html
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: client/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
   secrets:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
