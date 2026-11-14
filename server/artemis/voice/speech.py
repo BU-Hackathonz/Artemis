@@ -17,6 +17,8 @@ import logging
 import json
 import os
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -215,7 +217,13 @@ ELEVEN_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
 ELEVEN_PCM_RATE = 22_050  # output_format=pcm_22050: 16-bit mono, playable as each chunk arrives
 SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
 FAILURES_BEFORE_SAPI = 3
-FALLBACK_NOTICE = "My natural voice isn't reachable, so I'm using the Windows voice."
+def fallback_notice() -> str:
+    """The give-up line. On Linux it never names Windows, SAPI or NVDA."""
+    local = "the Windows voice" if sys.platform == "win32" else "the offline voice"
+    return f"My natural voice isn't reachable, so I'm using {local}."
+
+
+FALLBACK_NOTICE = fallback_notice()
 # Short fixed lines worth keeping as audio so they play at once. Only these exact strings are cached:
 # never transcripts, code, file contents or anything the agent wrote.
 CACHED_LINES = frozenset({
@@ -513,14 +521,15 @@ class ElevenLabsSpeaker:
         if not self._current(gen):
             return  # canceled meanwhile: say nothing
         self._failures += 1
-        log.warning("ElevenLabs failed (%s); this line uses the Windows voice", reason)
+        log.warning("ElevenLabs failed (%s); this line uses the local voice", reason)
         if self._failures >= FAILURES_BEFORE_SAPI and not self.gave_up:
             self.gave_up = True
-            log.warning("ElevenLabs failed %d times in a row; using the Windows voice for this session", self._failures)
+            log.warning("ElevenLabs failed %d times in a row; using the local voice for this session", self._failures)
+            notice = fallback_notice()
             if self.on_give_up is not None:
-                self._on_loop(self.on_give_up, FALLBACK_NOTICE)
+                self._on_loop(self.on_give_up, notice)
             else:
-                log.warning("Not spoken yet (the core doesn't wire it): %s", FALLBACK_NOTICE)
+                log.warning("Not spoken yet (the core doesn't wire it): %s", notice)
         if self.fallback is not None and self.fallback.available():
             self._on_loop(self.fallback.speak, text, False)
 
@@ -548,6 +557,69 @@ class NullSpeaker:
 
     def busy(self) -> bool:
         return False
+
+
+# ----- Linux: the offline voice (speech-dispatcher), and Orca detection -----
+
+
+def orca_running(proc: Path = Path("/proc")) -> bool:
+    """True while the Orca screen reader runs (Linux). Detection only: voice.status can't report it yet."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        for comm in proc.glob("[0-9]*/comm"):
+            try:
+                if comm.read_text(encoding="utf-8", errors="ignore").strip() == "orca":
+                    return True
+            except OSError:
+                continue  # the process ended while we looked
+    except OSError:
+        pass
+    return False
+
+
+class SpeechDispatcherSpeaker:
+    """Offline Linux voice through speech-dispatcher's spd-say, which ships with Ubuntu and Orca.
+
+    argv only, never a shell, and "--" before the text so a line starting with "-" is never read as an
+    option. --wait keeps each child alive until its line is spoken, so busy() is exact. cancel() asks
+    speech-dispatcher to stop and kills our children, so push-to-talk cuts it off at once.
+    """
+
+    name = "offline"
+
+    def __init__(self, which=shutil.which, popen=subprocess.Popen) -> None:
+        self._spd = which("spd-say")
+        self._popen = popen
+        self._children: list = []
+
+    def available(self) -> bool:
+        return self._spd is not None
+
+    def speak(self, text: str, interrupt: bool) -> None:
+        if interrupt:
+            self.cancel()
+        self._children = [c for c in self._children if c.poll() is None]
+        self._children.append(self._popen(
+            [self._spd, "--wait", "--", text],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ))
+
+    def cancel(self) -> None:
+        if self._spd is None:
+            return
+        try:
+            self._popen([self._spd, "--cancel"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+        for child in self._children:
+            if child.poll() is None:
+                child.kill()
+        self._children = []
+
+    def busy(self) -> bool:
+        return any(c.poll() is None for c in self._children)
 
 
 class _Fallback:
@@ -592,7 +664,9 @@ class Announcer:
     def __init__(self, nvda: Speaker | None = None, sapi: Speaker | None = None, is_nvda_running: Callable[[], bool] = nvda_running,
                  eleven: Speaker | None = None) -> None:
         self.nvda = nvda or NvdaSpeaker()
-        self.sapi = sapi or SapiSpeaker()
+        # The local voice: SAPI on Windows, speech-dispatcher elsewhere. NVDA only ever runs on Windows
+        # (nvda_running() is False elsewhere), so on Linux the order is ElevenLabs, offline, silence.
+        self.sapi = sapi or (SapiSpeaker() if sys.platform == "win32" else SpeechDispatcherSpeaker())
         self.is_nvda_running = is_nvda_running
         self.engine = voice_engine()
         if eleven is None and self.engine == "elevenlabs":
