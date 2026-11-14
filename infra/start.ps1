@@ -176,17 +176,22 @@ try {
     }
 
     # Polling instead of WaitForExit, so Ctrl+C reaches the finally block.
+    $coreDied = $false
     while (-not $app.HasExited) {
         if ($core.HasExited) {
             Show-CoreLog
             Write-Host "The core stopped while the app was running." -ForegroundColor Red
+            $coreDied = $true
             break
         }
         Start-Sleep -Milliseconds 500
     }
-    Write-Host "The app closed. Stopping the core."
+    if (-not $coreDied) { Write-Host "The app closed. Stopping the core." }
 } finally {
     Stop-Tree $app
     Stop-Tree $core
     $token = $null
 }
+# Exit codes for wrappers such as a double-click launcher: 0 = the app was closed normally,
+# 1 = could not start, 2 = the core stopped while the app was running.
+if ($coreDied) { exit 2 }
