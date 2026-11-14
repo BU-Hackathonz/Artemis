@@ -397,6 +397,42 @@ def test_stub_voice_passes_set_rate_through():
     assert asyncio.run(v.set_rate(1)) is RateStatus.FASTER and sapi.rate == 1
 
 
+
+def test_earcons_short_quiet_and_distinct():
+    import numpy as np
+
+    from artemis.voice.earcons import MAX_MS, RATE, SOUNDS, VOLUME
+
+    for name, sound in SOUNDS.items():
+        assert len(sound) * 1000 / RATE <= MAX_MS, name
+        assert float(np.abs(sound).max()) <= VOLUME + 1e-6, name  # never louder than today's cues
+    names = list(SOUNDS)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            same_len = len(SOUNDS[a]) == len(SOUNDS[b])
+            assert not (same_len and np.allclose(SOUNDS[a], SOUNDS[b])), (a, b)
+
+
+def test_result_earcons_have_their_own_shape():
+    import numpy as np
+
+    from artemis.voice.earcons import RATE, SOUNDS
+
+    def pitch(chunk):  # dominant frequency of one note
+        spectrum = np.abs(np.fft.rfft(chunk))
+        return np.fft.rfftfreq(len(chunk), 1 / RATE)[int(spectrum.argmax())]
+
+    def notes(name, count):
+        return [pitch(c) for c in np.array_split(SOUNDS[name], count)]
+
+    up = notes("success", 3)
+    assert up[0] < up[1] < up[2]  # rising
+    down = notes("failure", 2)
+    assert down[0] > down[1] and max(down) < 660  # falling, and lower than every other cue
+    knock = SOUNDS["approval"]
+    third = len(knock) // 3
+    assert float(np.abs(knock[third:2 * third]).max()) == 0.0  # the silent gap between the two knocks
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
