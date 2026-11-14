@@ -175,8 +175,11 @@ def speak_report(report: EchoReport, top: int = 3) -> str:
     review = _review_sentence(report)
     if not report.findings:
         if review:
-            return f"Echo Check found no definite problems on {report.title or 'the page'}, but {review}"
-        return f"Echo Check found no problems on {report.title or 'the page'}."
+            return (
+                f"Echo Check's automated checks found no definite problems on "
+                f"{report.title or 'the page'}, but {review}"
+            )
+        return f"Echo Check's automated checks found no problems on {report.title or 'the page'}."
     n = len(report.findings)
     counts = {i: sum(1 for f in report.findings if f.impact == i) for i in IMPACT_ORDER}
     by_impact = ", ".join(f"{c} {i}" for i, c in counts.items() if c)

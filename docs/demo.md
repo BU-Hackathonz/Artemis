@@ -208,7 +208,7 @@ version is not in the project, so the agent has to make the fix.
 - **Keys:** Enter.
 - **Hear:** "Changed index.html, N lines." "Checking index.html for accessibility." then, if the fix
   is complete:
-  "Before: 7 problems. After: 0. Fixed: a button has no accessible name, some text doesn't have enough contrast, the page doesn't say which language it is in, an image has no text alternative, the page has no main landmark, the page has no top-level heading, some content is outside any landmark. Echo Check found no problems on Join the club."
+  "Before: 7 problems. After: 0. Fixed: a button has no accessible name, some text doesn't have enough contrast, the page doesn't say which language it is in, an image has no text alternative, the page has no main landmark, the page has no top-level heading, some content is outside any landmark. Echo Check's automated checks found no problems on Join the club."
 - **Point out:** this is the real accessibility tree from a headless browser (the same roles and
   names NVDA reads) plus axe-core, run before and after, not a model describing a screenshot. The
   page is loaded offline and treated as untrusted data.

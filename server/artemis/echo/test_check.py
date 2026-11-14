@@ -69,7 +69,7 @@ def test_speak_report_counts_then_top_three_in_plain_words():
     assert "Critical: a button has no accessible name" in text
     assert "Serious: some text doesn't have enough contrast (2 places)" in text
     assert text.endswith("And 1 more; ask me to list them.")
-    assert speak_report(report([])) == "Echo Check found no problems on Join the club."
+    assert speak_report(report([])) == "Echo Check's automated checks found no problems on Join the club."
     unknown = speak_report(report([Finding(rule="x-rule", impact="minor", target="a", message="Links Must Work.")]))
     assert unknown == "Echo Check found 1 problem: 1 minor. Minor: links must work."
 
