@@ -1,6 +1,8 @@
 """WhisperVoice: contracts.md 3.3 Voice with a real microphone.
 
-Push-to-talk: the client calls start on key down and stop on key up. sounddevice records 16 kHz
+Push-to-talk: the client calls start on key down and stop on key up. Start stops current speech,
+plays the "listening" earcon to the end, and only then opens the mic, so neither Artemis's voice
+nor the beep is transcribed (contracts.md 5.1). sounddevice records 16 kHz
 mono into memory; faster-whisper transcribes locally on the CPU. Audio is never written to disk
 and is dropped as soon as it is transcribed (handoff: minimal audio retention).
 
@@ -14,6 +16,7 @@ import threading
 
 import numpy as np
 
+from . import earcons
 from .speech import Announcer, Priority
 from .text import strip_wake_word, vocabulary_prompt
 
@@ -33,12 +36,14 @@ def _input_stream(callback):
 
 
 class WhisperVoice:
-    def __init__(self, announcer: Announcer | None = None, model_name: str = "small.en", model=None, stream_factory=None) -> None:
+    def __init__(self, announcer: Announcer | None = None, model_name: str = "small.en", model=None, stream_factory=None, earcon=earcons.play) -> None:
         self.announcer = announcer or Announcer()
         self.model_name = model_name
         self._model = model
         self._stream_factory = stream_factory or _input_stream
+        self._earcon = earcon
         self._stream = None
+        self._wanted = False  # key is held; cleared by stop, even while the start earcon plays
         self._chunks: list[np.ndarray] = []
         self._frames = 0
         self._lock = threading.Lock()  # the audio callback runs on PortAudio's thread
@@ -62,21 +67,29 @@ class WhisperVoice:
                 self._frames += frames
 
     async def start_listening(self) -> None:
-        if self._stream is not None:
+        if self._wanted:
             return  # key repeat while held
+        self._wanted = True
+        await self.announcer.stop_speech()
+        await asyncio.sleep(self._earcon("listening"))  # let the beep finish before the mic opens
+        if not self._wanted:
+            return  # key released during the earcon
         with self._lock:
             self._chunks, self._frames = [], 0
         try:
             stream = self._stream_factory(self._on_audio)
             stream.start()
         except Exception as e:  # no device, device busy, permission denied
+            self._wanted = False
             raise VoiceError(f"Microphone not available: {e}") from e
         self._stream = stream
 
     async def stop_listening(self, client_request_id: str) -> str:
+        self._wanted = False
         if self._stream is None:
             return ""
         stream, self._stream = self._stream, None
+        self._earcon("stopped")  # mic is about to close; no need to wait
         try:
             stream.stop()
             stream.close()

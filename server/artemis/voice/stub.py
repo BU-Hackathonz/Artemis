@@ -19,6 +19,7 @@ class StubVoice:
         self.listening = False
 
     async def start_listening(self) -> None:
+        await self.announcer.stop_speech()  # contracts.md 5.1, same as WhisperVoice
         self.listening = True
 
     async def stop_listening(self, client_request_id: str) -> str:
