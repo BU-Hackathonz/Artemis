@@ -63,15 +63,32 @@ class _Task:
     progress: str = ""  # the latest progress line
     answer: str = ""
     files: list[str] = field(default_factory=list)
+    run: str = ""  # the last program run, as observed ("exited with code 0", "timed out")
+    scan: str = ""  # the last security scan result, as observed
 
     @property
     def active(self) -> bool:
         return self.state not in FINAL_STATES
 
+    def verified(self) -> list[str]:
+        """Sentences about checks that actually reported, in the order they happened to be learned."""
+        facts = []
+        if self.run:
+            facts.append(f"The last run {self.run}.")
+        if self.scan:
+            facts.append(f"The security scan {self.scan}.")
+        return facts
+
 
 def _short(text: str) -> str:
     text = " ".join(text.split()).rstrip(".")
     return text if len(text) <= _MAX_SPOKEN_REQUEST else text[:_MAX_SPOKEN_REQUEST].rstrip() + "…"
+
+
+def _end(text: str) -> str:
+    """The text as the end of a sentence: a question or exclamation keeps its mark, anything
+    else gets one full stop, so "add a docstring?" is never spoken as "add a docstring?."."""
+    return text if text.endswith(("?", "!")) else text + "."
 
 
 def _names(files: list[str]) -> str:
@@ -125,6 +142,20 @@ class Controller:
             path = data.get("path")
             if path and path not in task.files:
                 task.files.append(path)
+        elif event.type == "run.result":
+            if data.get("timed_out"):
+                task.run = "timed out"
+            elif isinstance(data.get("exit_code"), int):
+                task.run = f"exited with code {data['exit_code']}"
+        elif event.type == "security.findings":
+            findings = data.get("findings")
+            if isinstance(findings, list):
+                high = sum(1 for f in findings if isinstance(f, dict) and f.get("severity") == "high")
+                if not findings:
+                    task.scan = "reported no findings"
+                else:
+                    count = "1 finding" if len(findings) == 1 else f"{len(findings)} findings"
+                    task.scan = f"reported {count}" + (f", {high} high severity" if high else "")
 
     def next_request(self) -> "FollowUp | None":
         """Call when a task has ended: what to do with the request that was waiting, if any.
@@ -139,7 +170,7 @@ class Controller:
         if self.task is not None and self.task.state == "succeeded":
             # The core then announces "Working on: <request>" as for any task: that is the read-back.
             return FollowUp("Starting the follow-up.", start=text)
-        return FollowUp(f"Dropped the follow-up, because the task before it didn't finish: {_short(text)}.")
+        return FollowUp(f"Dropped the follow-up, because the task before it didn't finish: {_end(_short(text))}")
 
     # ----- what the developer said -----
 
@@ -159,7 +190,7 @@ class Controller:
         if intent == "cancel":
             if self.queued is not None:
                 # The follow-up goes first: it hasn't started, so dropping it loses nothing.
-                said = f"Dropped: {_short(self.queued)}."
+                said = f"Dropped: {_end(_short(self.queued))}"
                 self.queued = None
                 if active:
                     said += " The current task is still going. Say cancel again to stop it."
@@ -220,7 +251,7 @@ class Controller:
         if active:
             if self.queued is not None:
                 # One slot, and it is never replaced silently.
-                said = f"I already have one waiting: {_short(self.queued)}. Say cancel to drop it."
+                said = f"I already have one waiting: {_end(_short(self.queued))} Say cancel to drop it."
                 return Decision("request", "say", said, reminder=reminder)
             self.queued = transcript
             said = "I'll do that next."
@@ -235,25 +266,31 @@ class Controller:
         task = self.task
         if task is None:
             return "I'm not working on anything yet."
-        about = _short(task.request)
+        about = _end(_short(task.request))
         if task.state == "awaiting_approval" and self.approval:
             said = f"I'm waiting for your decision. {self.approval}"
         elif task.state == "running":
-            said = f"I'm running the program for: {about}."
+            said = f"I'm running the program for: {about}"
         elif task.active:
-            said = f"I'm working on: {about}."
+            said = f"I'm working on: {about}"
             if task.progress:
                 said += f" Last step: {task.progress.rstrip('.')}."
+            if task.files:
+                said += f" So far I changed {_names(task.files)}."
         elif task.state == "succeeded":
-            said = f"I finished: {about}."
+            said = f"I finished: {about}"
             if task.files:
                 said += f" I changed {_names(task.files)}."
         elif task.state == "canceled":
-            said = f"The last request was canceled: {about}."
+            said = f"The last request was canceled: {about}"
         else:
-            said = f"The last request failed: {about}."
+            said = f"The last request failed: {about}"
+        # Only what was actually observed: a run exit code and a scan result. Nothing is said about
+        # a check that never reported, and nothing here calls a failure a success.
+        if not (task.state == "awaiting_approval" and self.approval):  # the decision comes first, alone
+            said += "".join(f" {fact}" for fact in task.verified())
         if self.queued:
-            said += f" Next up: {_short(self.queued)}."
+            said += f" Next up: {_end(_short(self.queued))}"
         return said
 
     def changed_files(self) -> str:
