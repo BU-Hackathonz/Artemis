@@ -1,35 +1,54 @@
 @import "tailwindcss";
-:root { font-family: system-ui, sans-serif; color: #e9eef7; background: #0b1220; font-size: 18px; line-height: 1.6; color-scheme: dark; }
+/* Artemis, liquid agent theme: near-black violet, quiet hairlines, one glowing agent ring.
+   Every text colour clears WCAG AA on its background; focus keeps the high-contrast yellow outline. */
+:root {
+  --bg: #0b0814; --surface: #140e20; --surface-2: #1b1429; --line: #3a2f52;
+  --text: #ece6f7; --muted: #bcaed6; --accent: #c4b5fd; --accent-ink: #1a0f2e; --accent-hover: #ddd6fe;
+  --focus: #ffdb70; --danger: #ffc5c5;
+  font-family: system-ui, sans-serif; color: var(--text); background: var(--bg); font-size: 18px; line-height: 1.6; color-scheme: dark;
+}
 * { box-sizing: border-box; }
-body { margin: 0; }
-header, main, footer { max-width: 76rem; margin: auto; padding: 1.5rem 2rem; }
-header { border-bottom: 1px solid #52617a; }
-header > p:first-child { color: #8edddd; letter-spacing: .15em; font-weight: 700; }
-h1 { font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.2; font-weight: 700; margin: .5rem 0; }
-h2 { font-size: 1.4rem; font-weight: 700; margin: 0 0 .75rem; }
-h3 { font-weight: 700; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(60rem 36rem at 50% 10rem, #1a1030 0%, var(--bg) 70%) no-repeat, var(--bg); }
+header, main, footer { max-width: 46rem; margin: auto; padding: 1.5rem 1.5rem; }
+header { text-align: center; padding-top: .5rem; }
+header > p:first-of-type { color: var(--muted); letter-spacing: .3em; font-size: .75rem; font-weight: 600; margin-top: -1rem; }
+header > p:last-child { color: var(--muted); }
+h1 { font-size: clamp(2rem, 4vw, 2.6rem); line-height: 1.2; font-weight: 300; letter-spacing: -.01em; margin: .25rem 0; color: #fff; }
+h2 { font-size: .8rem; font-weight: 600; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); margin: 0 0 .75rem; }
+h3 { font-weight: 600; }
 p { margin: .65rem 0; }
-section { border: 1px solid #52617a; border-radius: .6rem; padding: 1.3rem; margin-bottom: 1.3rem; min-width: 0; }
-label { display: block; font-weight: 650; margin-top: .7rem; }
-input, textarea { display: block; width: 100%; color: #fff; background: #101d31; border: 1px solid #8193af; border-radius: .25rem; padding: .65rem; margin: .3rem 0 .8rem; font: inherit; }
+section { border: 0; border-top: 1px solid var(--line); padding: 1.6rem 0 .4rem; margin-bottom: 1rem; min-width: 0; }
+label { display: block; font-weight: 500; margin-top: .7rem; color: var(--text); }
+input, textarea { display: block; width: 100%; color: #fff; background: var(--surface); border: 1px solid var(--line); border-radius: 1rem; padding: .7rem 1rem; margin: .35rem 0 .8rem; font: inherit; }
+input:hover, textarea:hover { border-color: #5a4a80; }
 input { max-width: 32rem; }
 textarea { resize: vertical; }
-button, .react-aria-Button { font: inherit; font-weight: 650; color: #071321; background: #91e4db; border: 2px solid transparent; border-radius: .35rem; padding: .6rem 1rem; min-height: 44px; cursor: pointer; margin: .25rem .4rem .25rem 0; }
-button:disabled, [aria-disabled="true"], [data-disabled] { color: #b7c3d3; background: #28374c; cursor: default; }
-:focus-visible, [data-focus-visible] { outline: 3px solid #ffdb70; outline-offset: 4px; }
+textarea::placeholder, input::placeholder { color: #9d90b8; }
+button, .react-aria-Button { font: inherit; font-size: .95rem; font-weight: 600; color: var(--accent-ink); background: var(--accent); border: 1px solid transparent; border-radius: 999px; padding: .55rem 1.2rem; min-height: 44px; cursor: pointer; margin: .25rem .4rem .25rem 0; }
+button:hover, .react-aria-Button[data-hovered] { background: var(--accent-hover); }
+.actions button { color: var(--text); background: transparent; border-color: var(--line); font-weight: 500; }
+.actions button:hover { background: var(--surface-2); }
+button:disabled, [aria-disabled="true"], [data-disabled] { color: #b4a7cc; background: var(--surface-2); border-color: transparent; cursor: default; }
+:focus-visible, [data-focus-visible] { outline: 3px solid var(--focus); outline-offset: 4px; }
 .actions { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .7rem; }
-.workspace { display: grid; grid-template-columns: 1fr 1fr; gap: 1.3rem; }
-.log { max-height: 32rem; overflow: auto; min-height: 8rem; padding: .3rem; }
-.log article { border-bottom: 1px solid #52617a; padding: .5rem 0; }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #08101b; padding: .8rem; font-size: .9rem; max-height: 20rem; overflow: auto; }
+.workspace { display: grid; grid-template-columns: 1fr; gap: 0; }
+.log { max-height: 26rem; overflow: auto; min-height: 7rem; padding: .4rem 1rem; background: var(--surface); border-radius: 1rem; }
+.log article { border-bottom: 1px solid var(--line); padding: .5rem 0; }
+.log article:last-child { border-bottom: 0; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #0f0a18; padding: .8rem 1rem; border-radius: .8rem; font-size: .9rem; max-height: 20rem; overflow: auto; }
 summary { cursor: pointer; padding: .6rem; }
 ul { padding-left: 1.4rem; list-style: disc; }
-[role=alert] { color: #ffc5c5; }
-.react-aria-ModalOverlay { position: fixed; inset: 0; background: #000b; display: flex; align-items: center; justify-content: center; padding: 1.2rem; overflow: auto; }
-.react-aria-Modal { width: min(44rem, 100%); max-height: 90dvh; overflow: auto; background: #132036; border: 2px solid #91e4db; border-radius: .6rem; padding: 1.6rem; }
+[role=alert] { color: var(--danger); }
+.react-aria-ModalOverlay { position: fixed; inset: 0; background: #000c; backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 1.2rem; overflow: auto; }
+.react-aria-Modal { width: min(36rem, 100%); max-height: 90dvh; overflow: auto; background: var(--surface); border: 1px solid #6d5aa0; border-radius: 1.5rem; padding: 1.6rem; box-shadow: 0 0 4rem #7c3aed40; }
 .react-aria-Dialog { outline: none; }
-.skip { position: absolute; top: -10rem; left: 1rem; background: #ffdb70; color: #111; padding: .7rem; z-index: 10; }
+.react-aria-Dialog h2 { font-size: 1.2rem; letter-spacing: 0; text-transform: none; color: #fff; }
+.skip { position: absolute; top: -10rem; left: 1rem; background: var(--focus); color: #111; padding: .7rem; z-index: 10; border-radius: .5rem; }
 .skip:focus { top: 1rem; }
-footer { color: #b7c3d3; }
-@media (max-width: 800px) { .workspace { grid-template-columns: 1fr; } header,main,footer { padding: 1rem; } }
+footer { color: var(--muted); text-align: center; font-size: .85rem; }
+/* The agent ring: decorative (aria-hidden), mirrors the state the text announces. */
+.agent-ring { width: 15rem; height: 15rem; margin: 0 auto; }
+.agent-ring canvas { display: block; width: 100%; height: 100%; }
+.agent-ring-fallback { width: 50%; height: 50%; margin: 25%; border-radius: 50%; border: 10px solid #a78bfa80; box-shadow: 0 0 2.5rem #7c3aed66; }
+@media (max-width: 800px) { header,main,footer { padding: 1rem; } .agent-ring { width: 12rem; height: 12rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
