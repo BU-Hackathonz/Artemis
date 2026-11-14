@@ -258,8 +258,10 @@ export const COMMANDS = [
         name: 'VS Code: type "Hello world"',
         summary: 'Opened VS Code and typed “Hello world”.',
         async run(r) {
-            const appId = 'com.microsoft.VSCode.desktop';
-            if (!Shell.AppSystem.get_default().lookup_app(appId)) throw new Error('Visual Studio Code is not installed');
+            // Flatpak, snap (Ubuntu) or .deb install
+            const appId = ['com.microsoft.VSCode.desktop', 'code_code.desktop', 'code.desktop']
+                .find((id) => Shell.AppSystem.get_default().lookup_app(id));
+            if (!appId) throw new Error('Visual Studio Code is not installed');
             await visitIcon(r, appId);
             const win = await openWindow(r, ['code', '--new-window'], /vscode|code/i, 'VS Code');
             const c = centreOf(win);
@@ -275,9 +277,13 @@ export const COMMANDS = [
         name: 'Terminal: run echo "Hello from Artemis"',
         summary: 'Opened a terminal and ran echo “Hello from Artemis”.',
         async run(r) {
-            const appId = 'org.gnome.Ptyxis.desktop';
+            // Ptyxis (GNOME 47+), else GNOME Terminal (Ubuntu 24.04)
+            const ptyxis = !!GLib.find_program_in_path('ptyxis');
+            const appId = ptyxis ? 'org.gnome.Ptyxis.desktop' : 'org.gnome.Terminal.desktop';
             await visitIcon(r, appId);
-            const win = await openWindow(r, ['ptyxis', '--new-window'], /ptyxis/i, 'Terminal');
+            const win = ptyxis
+                ? await openWindow(r, ['ptyxis', '--new-window'], /ptyxis/i, 'Terminal')
+                : await openWindow(r, ['gnome-terminal', '--window'], /gnome-terminal|org\.gnome\.Terminal/i, 'Terminal');
             const c = centreOf(win);
             await r.fly(c.x, c.y, 550, -0.2);
             r.tap(1);

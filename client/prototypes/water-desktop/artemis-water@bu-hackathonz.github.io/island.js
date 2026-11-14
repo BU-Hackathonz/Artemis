@@ -35,7 +35,8 @@ export class Island {
         // The light along the edge (non-reactive: clicks pass through to the top bar and windows).
         this._edge = new St.DrawingArea({reactive: false});
         this._edge.connect('repaint', (area) => this._paintEdge(area));
-        Main.layoutManager.addChrome(this._edge, {affectsStruts: true, trackFullscreen: true});
+        // No strut: reserving the strip pushed maximized windows below the pill (a gap under the bar).
+        Main.layoutManager.addChrome(this._edge, {affectsStruts: false, trackFullscreen: true});
 
         // The pill.
         this._pill = new St.BoxLayout({style_class: 'artemis-island', reactive: true, y_align: Clutter.ActorAlign.CENTER});

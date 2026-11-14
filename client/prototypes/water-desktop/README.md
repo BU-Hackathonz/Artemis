@@ -1,6 +1,6 @@
 # Artemis desktop agent (GNOME prototype)
 
-A GNOME Shell extension (GNOME 48–50) for trying the Artemis agent on a Linux desktop. Its default
+A GNOME Shell extension (GNOME 46 and 48–50; 46 is Ubuntu 24.04, the demo laptop) for trying the Artemis agent on a Linux desktop. Its default
 look is the **top-edge island**: a small frosted pill under the top bar with the glassy liquid ring,
 voice bars and a chevron. This is a design prototype; the Windows app is in `client/src-tauri`.
 
