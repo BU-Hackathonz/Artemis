@@ -6,3 +6,6 @@ node_modules/
 __pycache__/
 .venv/
 dist/
+
+# NVDA controller client DLL (download from NV Access; see server/artemis/voice/speech.py)
+server/artemis/voice/bin/

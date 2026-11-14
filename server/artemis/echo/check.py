@@ -1,0 +1,236 @@
+"""Echo Check (Avery + Jun): what a screen reader actually gets from a page, spoken.
+
+Loads a local page in headless Chromium, reads the accessibility tree with Playwright's
+aria_snapshot() (roles and accessible names, the same tree NVDA reads), runs axe-core on it, and
+turns the result into one short spoken summary. Run it before and after a fix to prove the fix.
+
+Only local pages: file:// URLs (or plain paths) and http://127.0.0.1 / localhost. Nothing on the
+internet is ever loaded, so a generated page can't be used to reach the network through us.
+"""
+
+import os
+import re
+from pathlib import Path
+from typing import Literal
+from urllib.parse import urlparse
+
+from pydantic import BaseModel
+
+AXE_JS = Path(__file__).parent / "vendor" / "axe.min.js"
+Impact = Literal["critical", "serious", "moderate", "minor"]
+IMPACT_ORDER: list[str] = ["critical", "serious", "moderate", "minor"]
+MAX_OUTLINE = 40  # lines of the aria outline kept in the report
+
+
+class EchoError(Exception):
+    """A problem the user should hear (bad target, no browser). The message is spoken."""
+
+
+class Finding(BaseModel):
+    rule: str  # axe rule id, e.g. "button-name"
+    impact: Impact
+    target: str  # CSS selector of the first offending element
+    message: str  # axe's help text, e.g. "Buttons must have discernible text"
+    count: int = 1  # how many elements fail this rule
+
+
+class EchoReport(BaseModel):
+    url: str
+    title: str
+    findings: list[Finding]
+    outline: list[str]  # headings, landmarks and controls with their accessible names
+
+    @property
+    def ok(self) -> bool:
+        return not self.findings
+
+
+def resolve_target(url_or_file: str) -> str:
+    """Return a URL Echo Check may load, or raise EchoError. Paths become file:// URLs."""
+    text = url_or_file.strip()
+    parsed = urlparse(text)
+    if parsed.scheme in ("http", "https"):
+        if parsed.hostname not in ("127.0.0.1", "localhost"):
+            raise EchoError("Echo Check only opens pages on this computer, not on the internet.")
+        return text
+    if parsed.scheme == "file":
+        path = Path(parsed.path.lstrip("/") if os.name == "nt" else parsed.path)
+    elif parsed.scheme and len(parsed.scheme) > 1:  # "C:" parses as a one-letter scheme
+        raise EchoError(f"Echo Check can't open {parsed.scheme} links.")
+    else:
+        path = Path(text)
+    path = path.resolve()
+    if not path.is_file():
+        raise EchoError(f"I couldn't find the page {path.name}.")
+    return path.as_uri()
+
+
+# ----- the aria outline -----
+
+_OUTLINE_ROLES = (
+    "heading", "banner", "navigation", "main", "contentinfo", "region", "form", "search",
+    "complementary", "button", "link", "textbox", "checkbox", "radio", "combobox", "img",
+    "slider", "switch", "tab", "dialog", "alert",
+)
+_LINE = re.compile(r"^(\s*)-\s+([a-z]+)(?:\s+\"((?:[^\"\\]|\\.)*)\")?(.*)$")
+
+
+def outline_from_snapshot(snapshot: str) -> list[str]:
+    """Keep the lines a blind user navigates by: landmarks, headings and controls, with names.
+
+    aria_snapshot() is YAML-like: '- heading "Sign up" [level=1]', '- button', '- textbox "Email"'.
+    An unnamed control is written as 'button (no name)' so the gap is audible.
+    """
+    out: list[str] = []
+    for raw in snapshot.splitlines():
+        m = _LINE.match(raw)
+        if not m:
+            continue
+        indent, role, name, rest = m.groups()
+        if role not in _OUTLINE_ROLES:
+            continue
+        level = re.search(r"\[level=(\d)\]", rest or "")
+        label = f"{role} {level.group(1)}" if role == "heading" and level else role
+        depth = len(indent) // 2
+        shown = f'"{name}"' if name else "(no name)"
+        if role in ("banner", "navigation", "main", "contentinfo", "form", "search", "complementary") and not name:
+            shown = ""
+        out.append(("  " * depth + f"{label} {shown}").rstrip())
+        if len(out) >= MAX_OUTLINE:
+            out.append("…")
+            break
+    return out
+
+
+# ----- axe results -> findings -----
+
+
+def findings_from_axe(violations: list[dict]) -> list[Finding]:
+    findings = []
+    for v in violations:
+        nodes = v.get("nodes") or []
+        target = nodes[0].get("target", [""])[0] if nodes else ""
+        impact = v.get("impact") or "minor"
+        findings.append(
+            Finding(
+                rule=v.get("id", "unknown"),
+                impact=impact if impact in IMPACT_ORDER else "minor",
+                target=str(target),
+                message=v.get("help", v.get("description", "")),
+                count=max(1, len(nodes)),
+            )
+        )
+    findings.sort(key=lambda f: (IMPACT_ORDER.index(f.impact), f.rule))
+    return findings
+
+
+# ----- speech -----
+
+# Plain-words versions of the rules a generated page most often breaks.
+_PLAIN = {
+    "button-name": "a button has no accessible name",
+    "label": "a form field has no label",
+    "image-alt": "an image has no text alternative",
+    "html-has-lang": "the page doesn't say which language it is in",
+    "color-contrast": "some text doesn't have enough contrast",
+    "link-name": "a link has no accessible name",
+    "document-title": "the page has no title",
+    "landmark-one-main": "the page has no main landmark",
+    "page-has-heading-one": "the page has no top-level heading",
+    "region": "some content is outside any landmark",
+    "input-button-name": "an input button has no accessible name",
+    "select-name": "a select box has no label",
+}
+
+
+def _plain(f: Finding) -> str:
+    text = _PLAIN.get(f.rule) or f.message.rstrip(".").lower() or f.rule
+    if f.count > 1:
+        text += f" ({f.count} places)"
+    return text
+
+
+def speak_report(report: EchoReport, top: int = 3) -> str:
+    """One short spoken summary: total, counts by impact, then the worst few in plain words."""
+    if not report.findings:
+        return f"Echo Check found no problems on {report.title or 'the page'}."
+    n = len(report.findings)
+    counts = {i: sum(1 for f in report.findings if f.impact == i) for i in IMPACT_ORDER}
+    by_impact = ", ".join(f"{c} {i}" for i, c in counts.items() if c)
+    worst = "; ".join(f"{f.impact.capitalize()}: {_plain(f)}" for f in report.findings[:top])
+    more = f" And {n - top} more in the log." if n > top else ""
+    noun = "problem" if n == 1 else "problems"
+    return f"Echo Check found {n} {noun}: {by_impact}. {worst}.{more}"
+
+
+def compare(before: EchoReport, after: EchoReport) -> str:
+    """Spoken before/after line for the demo."""
+    fixed = {f.rule for f in before.findings} - {f.rule for f in after.findings}
+    new = {f.rule for f in after.findings} - {f.rule for f in before.findings}
+    parts = [f"Before: {len(before.findings)} problems. After: {len(after.findings)}."]
+    if fixed:
+        parts.append(f"Fixed: {', '.join(_PLAIN.get(r, r) for r in sorted(fixed))}.")
+    if new:
+        parts.append(f"New: {', '.join(_PLAIN.get(r, r) for r in sorted(new))}.")
+    return " ".join(parts)
+
+
+# ----- the browser part -----
+
+
+async def _launch(p):
+    """Bundled Chromium, else the installed Chrome or Edge (the demo laptop has Edge), else fail."""
+    attempts = [{}, {"channel": "chrome"}, {"channel": "msedge"}]
+    exe = os.environ.get("ARTEMIS_CHROME")
+    if exe:
+        attempts.insert(0, {"executable_path": exe})
+    last: Exception | None = None
+    for kwargs in attempts:
+        try:
+            return await p.chromium.launch(headless=True, **kwargs)
+        except Exception as exc:  # each missing browser raises; try the next one
+            last = exc
+    raise EchoError(
+        "Echo Check needs a browser. Run: uv run --group echo python -m playwright install chromium"
+    ) from last
+
+
+async def echo_check(url_or_file: str, timeout_s: float = 15) -> EchoReport:
+    url = resolve_target(url_or_file)
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError as exc:
+        raise EchoError("Echo Check isn't installed. Run: uv sync --group echo") from exc
+
+    async with async_playwright() as p:
+        browser = await _launch(p)
+        try:
+            context = await browser.new_context(java_script_enabled=True, offline=url.startswith("file:"))
+
+            async def only_local(route):
+                target = urlparse(route.request.url)
+                if target.scheme in ("file", "data", "blob") or target.hostname in ("127.0.0.1", "localhost"):
+                    await route.continue_()
+                else:
+                    await route.abort()  # a page may not pull anything from the internet
+
+            await context.route("**/*", only_local)
+            page = await context.new_page()
+            await page.goto(url, timeout=timeout_s * 1000, wait_until="load")
+            title = await page.title()
+            snapshot = await page.locator("body").aria_snapshot(timeout=timeout_s * 1000)
+            await page.add_script_tag(content=AXE_JS.read_text(encoding="utf-8"))
+            result = await page.evaluate(
+                "async () => { const r = await axe.run(document, {resultTypes: ['violations']});"
+                " return r.violations.map(v => ({id: v.id, impact: v.impact, help: v.help,"
+                " description: v.description, nodes: v.nodes.map(n => ({target: n.target}))})); }"
+            )
+        finally:
+            await browser.close()
+
+    return EchoReport(
+        url=url,
+        title=title,
+        findings=findings_from_axe(result),
+        outline=outline_from_snapshot(snapshot),
+    )

@@ -11,25 +11,25 @@ ISO 8601 UTC, and workspace paths are always **relative** to the project root.
 ## 1. Client → core (HTTP, `127.0.0.1` only)
 
 Every request sends `Authorization: Bearer <launch token>`. `infra/start.ps1` generates the token
-and passes it to both processes.
+and passes it to both processes (§6).
 
 | Method | Path | Body → Response | Notes |
 |---|---|---|---|
 | GET | `/health` | → `{ok, version, voice_ready, screen_reader}` | `screen_reader`: `"nvda"` or `null` |
 | POST | `/sessions` | `{}` → `{session_id}` | One session per app launch |
 | GET | `/sessions/{sid}/events` | SSE stream of `Event` (§2) | Resumes from `Last-Event-ID` |
-| POST | `/sessions/{sid}/tasks` | `{client_request_id, source: "voice"\|"keyboard", text}` → `{task_id}` | Idempotent per `client_request_id` |
+| POST | `/sessions/{sid}/tasks` | `{client_request_id, source: "voice"\|"keyboard", text}` → `{task_id}`, or `409 {error: "task_active", task_id}` | Idempotent per `client_request_id`; one active task per session (§5.2) |
 | POST | `/tasks/{tid}/reply` | `{text, source}` → `204` | **Reserved, unused in the MVP.** The agent asks a question by ending its turn; the user's next request is the answer |
 | POST | `/approvals/{aid}` | `{decision: "approve"\|"reject", approval_hash}` → `204`, `409` if stale | The hash must match the one that was offered |
 | POST | `/tasks/{tid}/cancel` | `{}` → `204` | Stops active work; the event reports what was already applied |
-| POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; the transcript arrives as events |
+| POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events |
 | POST | `/speech` | `{action: "stop"\|"repeat"}` → `204` | Stop speaking / repeat the last announcement |
 
 ## 2. Core → client: the event stream
 
 One envelope for everything. The client renders every event's `announce.text` in the log
 region. **Speech happens in the core** (`announce()` → NVDA or SAPI), so the client's live region
-stays silent unless `/health` reports no voice output.
+stays silent while the core can speak, and turns on whenever it can't (§5.3).
 
 ```jsonc
 {
@@ -57,6 +57,7 @@ stays silent unless `/health` reports no voice output.
 | `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}` |
 | `security.findings` | `{op_id, tool: "bandit"\|"semgrep", findings: [{rule, severity, path, line, message}]}` |
 | `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on |
+| `voice.status` | `{voice_ready, screen_reader}`, emitted at session start and whenever either value changes (§5.3) |
 
 ```jsonc
 // Approval
@@ -184,3 +185,70 @@ class Runner(Protocol):
    ```
 5. **Successful run:** `exit_code` 0, `stdout_tail` `"Hello, World!\n"`, announce "main.py ran successfully. It printed: Hello, World!"
 6. **Security block (Phase 4):** `security.findings` with `{"rule":"B602","severity":"high","path":"main.py","line":4,"message":"subprocess call with shell=True"}`, then `approval.requested` for `run_program` listing that finding.
+
+## 5. Turn-taking rules (voice and tasks)
+
+### 5.1 Push-to-talk cuts off speech
+On `POST /voice/listen {action: "start"}`, the core only calls `voice.start_listening()`. That
+call does the whole sequence: stop current speech (SAPI purge, or NVDA's `cancelSpeech`), play the
+"listening" earcon to the end, then open the mic. `stop_listening()` plays the "stopped" earcon.
+The core doesn't call `stop_speech()` itself here. Artemis's own voice (SAPI through the speakers)
+must never be recorded and transcribed as a request. The client's own "Stop speech" control is
+unchanged.
+
+### 5.2 One active task per session
+A task is active from `queued` until `succeeded`, `failed` or `canceled`.
+- **Typed request while a task is active:** `POST /sessions/{sid}/tasks` returns
+  `409 {error: "task_active", task_id}`. No second task starts.
+- **Spoken request while a task is active:** the core still emits `transcript.final` (so the text
+  stays in the editable field) but doesn't create a task. It emits `error`
+  `{code: "task_active", message, recovery}` with `announce` at `high`:
+  "Still working on the last request. Say cancel to stop it, or wait."
+- **Spoken control words.** The core checks the final transcript after stripping the wake word,
+  lowercasing and removing punctuation. Only a whole-utterance match counts, and no model is
+  involved:
+
+  | Utterance | While a task is active | No active task |
+  |---|---|---|
+  | `cancel`, `stop`, `cancel that`, `never mind` | same as `POST /tasks/{id}/cancel` | "Nothing to cancel." |
+  | `repeat`, `say that again` | same as `POST /speech {action: "repeat"}` | same |
+  | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | not applied; announce "Use the keyboard to decide: Enter on the dialog to approve, Escape to reject." | treated as a normal request |
+
+  Approvals stay keyboard-only in the MVP: a misheard "yes" must never write or run anything.
+
+### 5.3 Speech availability can change at runtime
+`voice_ready` and `screen_reader` can change while the app runs: NVDA starts or stops, or NVDA is
+running but its controller DLL is missing, which makes the core silent. The core emits
+`voice.status` at session start and on every change. The client turns its log's live region on
+(`aria-live="polite"`) whenever `voice_ready` is false and off when it's true, instead of deciding
+once from `/health` at connect.
+
+## 6. Launcher and launch token (decided 2026-11-14)
+
+**`infra/start.ps1` (Avery)**
+1. Generates a 32-byte random token (base64url) and picks a free port on `127.0.0.1`.
+2. Starts the core with `ARTEMIS_TOKEN` in its environment
+   (`uv run uvicorn ... --host 127.0.0.1 --port <port>`).
+3. Waits until `GET /health` with the token answers.
+4. Launches the Tauri app with `ARTEMIS_CORE_URL` and `ARTEMIS_TOKEN` in the app's environment.
+5. Stops the core when the app exits.
+
+Environment variables, not command-line arguments: on Windows any process can list other
+processes' command lines. Malware running as the same user is out of scope for the weekend.
+
+**Client (Jun)**
+- Reads `ARTEMIS_CORE_URL` and `ARTEMIS_TOKEN` once into native state, and exposes only one Tauri
+  command, `get_core_config`, to the main window. The capability file allows nothing else.
+- Checks that the address is loopback, then connects automatically: no address or token form.
+- If either value is missing or partial, it shows an actionable launch error. It never falls back
+  to a remote or unauthenticated connection.
+- Browser dev mode (`npm run dev`) keeps the manual address and token form.
+
+**Core (Avery)**
+- Requires `Authorization: Bearer <token>` on every route, the SSE stream included.
+- CORS allows only `http://tauri.localhost` and `http://127.0.0.1:1420`.
+- Origin check: a request **with no `Origin`** (the launcher's readiness probe, curl) is allowed
+  when the token is valid; a **listed** Origin is allowed; **any other** Origin gets `403`,
+  including `Origin: null` (sandboxed frames, `file:` pages), which counts as unlisted. That way
+  a website open in the user's browser can't drive the local core.
+- The token is never logged, spoken, put in a URL, or included in an event.

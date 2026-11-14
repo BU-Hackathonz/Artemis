@@ -41,7 +41,7 @@ take another teammate's work, ask the lead on the board.
 
 ## 3. Git
 
-- Never push to `main`. Work on `<area>/<short-task>` branches and open a PR; the area owner reviews and @dribeiro0 (David) approves the merge to `main` (see `.github/CODEOWNERS`).
+- Never push to `main`. Work on `<area>/<short-task>` branches and open a PR. @DxubleBTW (Avery) reviews every PR, with the area owner for their folder; @dribeiro0 (David) merges to `main` (see `.github/CODEOWNERS`).
 - **Commit as the human you work for.** Use their existing `git config user.name` / `user.email`; never change them.
 - **No AI attribution anywhere.** Do not add `Co-Authored-By:` trailers for any agent (Claude, Codex, Copilot, Cursor...), and no "Generated with ..." lines in commit messages or PR descriptions. Claude Code has this off via `.claude/settings.json`; other agents must follow this rule themselves.
 - When a PR merges, post it on the board with `needs:` someone or `needs: none`.
@@ -59,9 +59,10 @@ headless Python + FastAPI core in `server/` (one `uv` project, package `artemis`
 | Security: tool policy gate, injection defenses, secret handling | @dribeiro0 (David) | `server/artemis/policy/` |
 | Backend / orchestration: FastAPI app, sessions, task state, approvals, cancel, event stream | @DxubleBTW (Avery) | `server/artemis/core/`, `server/artemis/contracts/`, `server/pyproject.toml` |
 | Infrastructure: runner, Echo Check, demo fixture, startup scripts | @DxubleBTW (Avery) | `server/artemis/runner/`, `server/artemis/echo/`, `fixture/`, `infra/` |
+| Landing site: public static site for judges and users (no tracking, no third-party scripts) | @unseentrader007 (Yaovi) | `site/` |
 | Shared | anyone, via PR | `docs/`, `tools/`, `.claude/`, `.github/`, `README.md`, `AGENTS.md` |
 
 `server/artemis/contracts/` (Pydantic models) is the single source of truth for every message
 between components; `client/src/generated/` is generated from the core's OpenAPI and never edited
-by hand. Anyone may propose a contract change on the board; Avery merges it (David until Avery is on site). Change the contract
+by hand. Anyone may propose a contract change on the board; Avery merges it. Change the contract
 first, then code. Stack decisions and their reasoning: `docs/decisions.md`.
