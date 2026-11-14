@@ -19,11 +19,14 @@ test('compact status has keyboard access to controls and never opens a core sess
   await expect(page.getByText('Task working', {exact:true})).toBeVisible();
   const open = page.getByRole('button', {name:'Open controls', exact:true});
   await expect(open).toBeFocused();
+  await expect(open).toHaveAccessibleDescription('Task working');
+  await expect(page.locator('#desktop-status')).toHaveAttribute('aria-live','off');
   expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
   await page.keyboard.press('Enter');
   await expect.poll(() => page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.filter(c => c === 'show_main').length)).toBe(1);
   await page.evaluate(() => {(window as unknown as {companionProbe:{status:{approval:boolean}}}).companionProbe.status.approval = true;});
   await expect(page.getByText('Approval needed · open controls', {exact:true})).toBeVisible();
+  await expect(open).toHaveAccessibleDescription('Approval needed · open controls');
   await page.keyboard.press('Escape');
   await expect.poll(() => page.evaluate(() => (window as unknown as {companionProbe:{commands:string[]}}).companionProbe.commands.filter(c => c === 'show_main').length)).toBe(2);
   expect(coreRequests).toEqual([]);
@@ -93,3 +96,32 @@ for (const background of [true, false]) {
     } finally {server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
   });
 }
+
+
+test('recovered polling clears its feedback without erasing a failed Open controls action', async ({page}) => {
+  await page.addInitScript(() => {
+    const probe={failPoll:true,failOpen:false,polls:0};
+    Object.defineProperty(window,'feedbackProbe',{value:probe});
+    Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{invoke:async(command:string)=>{
+      if(command==='get_companion_status') {
+        probe.polls++;
+        if(probe.failPoll) throw new Error('Transient native failure');
+        return{connection:'ready',task:'working',microphone:'idle',approval:false,speech_ready:true};
+      }
+      if(command==='show_main') {if(probe.failOpen) throw new Error('Native focus failure');return;}
+      throw new Error('Unexpected command');
+    }}});
+  });
+  await page.goto('/#companion');
+  await expect(page.getByRole('status')).toHaveText('Open controls to check Artemis.');
+  await page.evaluate(() => {(window as unknown as {feedbackProbe:{failPoll:boolean}}).feedbackProbe.failPoll=false;});
+  const open=page.getByRole('button',{name:'Open controls',exact:true});
+  await expect(open).toHaveAccessibleDescription('Task working');
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await page.evaluate(() => {(window as unknown as {feedbackProbe:{failOpen:boolean}}).feedbackProbe.failOpen=true;});
+  await open.click();
+  await expect(page.getByRole('alert')).toContainText('Could not open controls.');
+  const polls=await page.evaluate(()=>(window as unknown as {feedbackProbe:{polls:number}}).feedbackProbe.polls);
+  await expect.poll(()=>page.evaluate(()=>(window as unknown as {feedbackProbe:{polls:number}}).feedbackProbe.polls)).toBeGreaterThan(polls);
+  await expect(page.getByRole('alert')).toContainText('Could not open controls.');
+});
