@@ -475,9 +475,20 @@ def test_system_prompt_is_frozen_and_covers_the_rules():
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
-# sha256 of main's SYSTEM_PROMPT before contracts.md §5.4: with ARTEMIS_CONVERSATION off the
-# agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "fc08c24151eb7ce889b6459025678a8e90ae5494258f2bb2c3ee839a874664a5"
+# sha256 of main's SYSTEM_PROMPT: with ARTEMIS_CONVERSATION off the agent must see exactly that
+# prompt. Updated on purpose when a rejected change stopped being proposed again for the rest of
+# the conversation (the sentence added after "look for another way to do it"); it was
+# fc08c241... before that.
+MAIN_SYSTEM_PROMPT_SHA256 = "4fa8cd5ab0348703848e1ccbd0abeb2b97f1fb84d6eeeef7b1f6f0bf6964e89e"
+
+
+def test_a_rejected_change_is_not_proposed_again_unless_asked():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    # The original rule stays, and the new one is about the whole conversation and about asking first.
+    assert "do not try the same thing again or look for another way to do it" in flat
+    assert "for the rest of the conversation" in flat
+    assert "do not propose a change the developer rejected again unless they ask for it" in flat
+    assert "ask first in one short sentence" in flat
 
 
 def test_flag_off_system_prompt_is_mains():
