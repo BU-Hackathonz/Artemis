@@ -27,6 +27,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname -- "$SCRIPT_DIR")"
 SERVER="$REPO/server"
 
+# The Linux venv lives outside the repo. On a drive shared with Windows, server/.venv is the Windows
+# venv, and uv would delete and rebuild it as a Linux one (found by David's Ubuntu Claude).
+export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-${XDG_DATA_HOME:-$HOME/.local/share}/artemis/venv}"
+
 AGENT="stub"
 VOICE="whisper"
 CONVERSATION="off"
@@ -228,7 +232,7 @@ echo "Starting the Artemis core on $URL (agent: $AGENT, voice: $VOICE, conversat
     if [[ -n "$ANTHROPIC_KEY" ]]; then export ANTHROPIC_API_KEY="$ANTHROPIC_KEY"; fi
     if [[ -n "$WORKSPACE_ID" ]]; then export ANTHROPIC_WORKSPACE_ID="$WORKSPACE_ID"; fi
     cd -- "$SERVER"
-    exec uv run --project "$SERVER" "${UV_GROUPS[@]}" uvicorn artemis.core.main:app --host 127.0.0.1 --port "$PORT"
+    exec uv run --frozen --project "$SERVER" "${UV_GROUPS[@]}" uvicorn artemis.core.main:app --host 127.0.0.1 --port "$PORT"
 ) >>"$CORE_LOG" 2>&1 &
 CORE_PID=$!
 

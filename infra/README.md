@@ -140,6 +140,10 @@ it on a shared account. `-NoPause` never prompts or saves; it only reads what is
 
 ## Ubuntu
 
+The Linux venv lives at `${XDG_DATA_HOME:-~/.local/share}/artemis/venv` (set `UV_PROJECT_ENVIRONMENT`
+to move it), never in `server/.venv`, so a checkout on a drive shared with Windows keeps its Windows
+venv. Both scripts run uv with `--frozen`, so a launch never rewrites `uv.lock`.
+
 On Ubuntu the core runs from the same repository with `infra/start.sh`. The GNOME Shell extension is
 the client (there is no Tauri app for the Linux demo), so the script starts the core only and writes
 the launch info the extension reads.

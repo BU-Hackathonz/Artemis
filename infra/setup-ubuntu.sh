@@ -21,6 +21,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname -- "$SCRIPT_DIR")"
 SERVER="$REPO/server"
 
+# The Linux venv lives outside the repo. On a drive shared with Windows, server/.venv is the Windows
+# venv, and uv would delete and rebuild it as a Linux one (found by David's Ubuntu Claude).
+export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-${XDG_DATA_HOME:-$HOME/.local/share}/artemis/venv}"
+
 ASSUME_YES=0
 NO_APT=0
 NO_MODEL=0
@@ -144,7 +148,7 @@ fi
 # ----- 3. Python dependencies -----
 
 note "3. Python dependencies: uv sync for server/ (security, voice, agent and echo groups)."
-uv sync --project "$SERVER" --group security --group voice --group agent --group echo
+uv sync --frozen --project "$SERVER" --group security --group voice --group agent --group echo
 
 # ----- 4. Whisper model -----
 
@@ -155,7 +159,7 @@ else
     note "   The download is large (hundreds of MB) and needs the internet."
     (
         cd -- "$SERVER"
-        uv run --project "$SERVER" --group security --group voice --group agent --group echo python -c '
+        uv run --frozen --project "$SERVER" --group security --group voice --group agent --group echo python -c '
 import time
 from faster_whisper import WhisperModel
 from artemis.voice.listen import whisper_model
@@ -166,6 +170,16 @@ WhisperModel(name, device="cpu", compute_type="int8")  # the same construction a
 print(f"Whisper {name} ready ({time.time() - start:.1f} s).")
 '
     )
+fi
+
+# ----- 4b. Chromium for Echo Check (inspect_page) -----
+
+if (( NO_MODEL )); then
+    note "   Chromium for Echo Check: skipped with --no-model (run: uv run --frozen --project server --group echo python -m playwright install chromium)."
+else
+    note "   Chromium for Echo Check: playwright install chromium (once, into your home folder, not the repo)."
+    ( cd -- "$SERVER" && uv run --frozen --project "$SERVER" --group security --group voice --group agent --group echo python -m playwright install chromium ) \
+        || note "   Chromium could not be installed; Echo Check will say so. Everything else works."
 fi
 
 # ----- 5. GNOME Shell extension -----
