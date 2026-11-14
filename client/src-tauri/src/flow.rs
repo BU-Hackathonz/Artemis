@@ -61,8 +61,11 @@ pub fn create(app: &AppHandle) -> Option<WebviewWindow> {
         .ok()?
         .build()
         .ok()?;
-    place(app, &window).ok()?;
-    window.set_ignore_cursor_events(true).ok()?;
+    // Never leave a full-screen overlay that takes clicks: close it unless it is placed and click-through.
+    if place(app, &window).is_err() || window.set_ignore_cursor_events(true).is_err() {
+        let _ = window.destroy();
+        return None;
+    }
     Some(window)
 }
 

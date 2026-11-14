@@ -117,7 +117,6 @@ pub fn controls_view_ready(
     Ok(())
 }
 fn place(window: &WebviewWindow, view: View) -> Result<(), String> {
-    // Keep both controls views below the status strip, in the current monitor's work area.
     let monitor = window
         .current_monitor()
         .ok()
@@ -126,6 +125,29 @@ fn place(window: &WebviewWindow, view: View) -> Result<(), String> {
         .ok_or("No monitor available.")?;
     let area = monitor.work_area();
     let scale = monitor.scale_factor();
+    if view == View::Settings {
+        // A small drop-down hanging from the notch: no title bar, centred under the pill.
+        let width = 320.0_f64.min((area.size.width as f64 / scale - 24.0).max(1.0));
+        let height = 400.0_f64.min((area.size.height as f64 / scale - 84.0).max(1.0));
+        let _ = window.set_decorations(false);
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_min_size(Some(tauri::LogicalSize::new(width, height)));
+        window
+            .set_size(tauri::LogicalSize::new(width, height))
+            .map_err(|_| "Could not size controls.")?;
+        let (cx, bottom) = window
+            .app_handle()
+            .get_webview_window("companion")
+            .and_then(|c| Some((c.outer_position().ok()?, c.outer_size().ok()?)))
+            .map(|(p, s)| (p.x + s.width as i32 / 2, p.y + s.height as i32))
+            .unwrap_or((area.position.x + area.size.width as i32 / 2, area.position.y + (60.0 * scale) as i32));
+        let x = (cx - (width * scale / 2.0) as i32).max(area.position.x);
+        return window
+            .set_position(PhysicalPosition::new(x, bottom + (4.0 * scale) as i32))
+            .map_err(|_| "Could not position controls.".into());
+    }
+    let _ = window.set_decorations(true);
+    let _ = window.set_always_on_top(false);
     let available_width = area.size.width as f64 / scale;
     let available_height = area.size.height as f64 / scale;
     let inner = window
@@ -136,18 +158,8 @@ fn place(window: &WebviewWindow, view: View) -> Result<(), String> {
         .map_err(|_| "Could not measure controls.")?;
     let chrome_width = outer.width.saturating_sub(inner.width) as f64 / scale;
     let chrome_height = outer.height.saturating_sub(inner.height) as f64 / scale;
-    let width = (if view == View::Settings {
-        420.0_f64
-    } else {
-        680.0_f64
-    })
-    .min((available_width - 24.0 - chrome_width).max(1.0));
-    let height = (if view == View::Settings {
-        520.0_f64
-    } else {
-        680.0_f64
-    })
-    .min((available_height - 84.0 - chrome_height).max(1.0));
+    let width = 680.0_f64.min((available_width - 24.0 - chrome_width).max(1.0));
+    let height = 680.0_f64.min((available_height - 84.0 - chrome_height).max(1.0));
     window
         .set_min_size(Some(tauri::LogicalSize::new(
             320.0_f64.min(width),

@@ -29,6 +29,7 @@
         "width": 232,
         "height": 48,
         "transparent": true,
+        "shadow": false,
         "decorations": false,
         "resizable": false,
         "alwaysOnTop": true,
@@ -49,6 +50,7 @@
         "resizable": false,
         "alwaysOnTop": true,
         "focus": false,
+        "focusable": false,
         "visible": false,
         "skipTaskbar": true
       }

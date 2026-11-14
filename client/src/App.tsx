@@ -222,15 +222,13 @@ export function App() {
         else void changeView('full');
       }
     }}>
-      <h1 ref={settingsHeading} tabIndex={-1}>Settings and controls</h1>
-      <p role="status">{status} · Task: {taskLabel(state, pendingTaskId)}</p>
+      <h1 ref={settingsHeading} tabIndex={-1}>Artemis</h1>
+      <p role="status" className="settings-status">{status} · Task: {taskLabel(state, pendingTaskId)}</p>
       {error && <p role="alert">{error}</p>}{companionError && <p role="alert">{companionError}</p>}
-      <button onClick={() => void changeView('full')}>Open request and activity controls</button>
+      <button onClick={() => void changeView('full')}>Requests and activity</button>
       {compact && <button disabled={state.approvals.length > 0} onClick={() => void platform.enterCompact().catch(() => setCompanionError('Could not return to the notch.'))}>Return to notch</button>}
-      <section aria-label="Task and speech controls"><h2>Task and speech</h2>{taskControls}</section>
-      {connection && !connection.demo && <VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/>}
-      <p>Answer style, conversation mode, and voice selection are currently configured through the launcher or spoken commands. Their settings controls will be available when the core supports them.</p>
-      <p>Open request and activity controls for setup, typed requests, approvals, and the activity log.</p>
+      <section aria-label="Task and speech controls">{taskControls}</section>
+      {connection && !connection.demo && <details className="settings-voice"><summary>Voice</summary><VoiceInput voice={voiceInput} ready={ready} voiceReady={voiceReady}/></details>}
     </main>}
     <div hidden={controlsView !== 'full'}>{platform.native ? <><a className="skip" href="#request">Skip to request</a><header className="controls-header"><h1>Artemis controls</h1></header></> : <><a className="skip" href="#request">Skip to request</a><header><LiquidRing kick={ringKick} inputs={ringInputs}/><p>ARTEMIS · {platform.name}</p><h1>Build with words.</h1><p>Direct a change, review each action, and hear the result.</p></header></>}
     <main className={platform.native ? 'native-controls' : undefined}>
