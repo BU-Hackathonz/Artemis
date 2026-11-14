@@ -49,10 +49,10 @@ Work from one PowerShell window in the repo root. Core log: `%LOCALAPPDATA%\Arte
 - **API down** ("The task failed. No internet connection to Claude." or "Claude is still busy"): close
   Artemis, run `.\infra\Artemis.cmd -Agent stub -NoConversation`, and say the agent is now scripted. The
   stub only does Hello World; for demos 2 to 5 use the offline commands under each demo in demo.md.
-- **App closed or crashed:** read the console and `$LASTEXITCODE`. `0`: the app closed ("The app closed.
-  Stopping the core."); a crash looks the same: relaunch. `1`: could not start (the red lines at the
-  bottom say why, below the end of core.log) or the core stopped while the app ran (`2` from start.ps1 alone).
-  Other: PowerShell's own code. Core slow to start ("/health within 120 seconds"): start.ps1 `-HealthTimeoutS 300`.
+- **App closed or crashed:** read the console and `$LASTEXITCODE`. `0`: the app closed normally ("The app
+  closed. Stopping the core."). `3`: the app crashed ("The app exited with code …"): relaunch. `1`: could not
+  start (the red lines at the bottom say why, below the end of core.log) or the core stopped while the app ran
+  (`2` from start.ps1 alone). Other: PowerShell's own code. Core slow to start ("/health within 120 seconds"): start.ps1 `-HealthTimeoutS 300`.
 - **Core stuck:** Tab to **Cancel task**, Enter ("Canceled."). Still stuck: Alt+F4 the Artemis window
   (the launcher kills the core's process tree), run the launch command again, wait for the ready line.
   Under 1 minute (check on the laptop). A restart forgets the Claude conversation and Echo Check's "before".
