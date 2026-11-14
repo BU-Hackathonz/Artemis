@@ -13,10 +13,10 @@
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site-header">
-  <div class="nav-pill">
-    <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
-    <nav class="site-nav" aria-label="Main">
+<header class="nav">
+  <div class="nav-in">
+    <a class="logo" href="index.html" aria-label="artemis, home">artemis.</a>
+    <nav aria-label="Main">
       <ul>
         <li><a href="index.html">Home</a></li>
         <li><a href="how-it-works.html">How it works</a></li>
@@ -24,14 +24,15 @@
         <li><a href="team.html" aria-current="page">About</a></li>
       </ul>
     </nav>
-    <a class="button button-solid button-small" href="get-started.html">Get started</a>
+    <a class="btn btn-white" href="get-started.html">Get started</a>
   </div>
 </header>
 <main id="main">
+<div class="wrap">
   <div class="page-head">
     <h1>About Artemis</h1>
     <p class="lede">Four students, one weekend, one goal: a blind developer builds and runs real software by voice and keyboard, with no sighted help.</p>
-    <dl class="stats">
+    <dl class="stats-inline">
       <div><dt>4</dt><dd>people, each owning one part</dd></div>
       <div><dt>6</dt><dd>parts, from voice to runner</dd></div>
       <div><dt>49</dt><dd>pull requests merged by 8 AM Saturday</dd></div>
@@ -85,10 +86,18 @@
     <h2 id="source-title">Open source</h2>
     <p>All of Artemis, including this site, is on <a href="https://github.com/BU-Hackathonz/Artemis">GitHub</a>.</p>
   </section>
+</div>
 </main>
-<footer class="site-footer">
-  <p>artemis. Built at HackUMass 2026.</p>
-  <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
+<footer>
+  <div class="wrap">
+    <div class="foot-top"><span class="logo">artemis.</span><p>A voice-first development environment for blind developers. Built at HackUMass 2026.</p></div>
+    <div class="cols">
+      <div><h2>Product</h2><ul><li><a href="how-it-works.html">How it works</a></li><li><a href="get-started.html">Get started</a></li></ul></div>
+      <div><h2>Trust</h2><ul><li><a href="trust.html">Accessibility and safety</a></li></ul></div>
+      <div><h2>Team</h2><ul><li><a href="team.html">About</a></li><li><a href="https://github.com/BU-Hackathonz/Artemis">GitHub</a></li></ul></div>
+    </div>
+    <div class="foot-bottom"><span>artemis. Built at HackUMass 2026.</span><span>No cookies, no analytics, no tracking.</span></div>
+  </div>
 </footer>
 </body>
 </html>
