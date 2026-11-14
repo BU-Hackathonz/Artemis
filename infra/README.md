@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly       # just 
 | `-CoreOnly` | | Start only the core and print its address |
 | `-Agent stub\|claude` | `stub` | Sets `ARTEMIS_AGENT`; `claude` also syncs the `agent`, `security` and `echo` groups |
 | `-Voice whisper\|stub` | `whisper` | Sets `ARTEMIS_VOICE`; `whisper` syncs the `voice` group |
-| `-Conversation` | off | Sets `ARTEMIS_CONVERSATION=on`: built-in spoken phrases ("what are you doing", "keep it brief") and one waiting follow-up request (contracts.md §5.4). Rehearse with it before using it in the demo |
+| `-Conversation` | off | Sets `ARTEMIS_CONVERSATION=on`: built-in spoken phrases ("what are you doing", "keep it brief") and one waiting follow-up request (contracts.md §5.4). Remembers the answer style ("keep it brief") between launches in `%USERPROFILE%\.artemis\preferences.json`; `setup-demo.ps1 -Force` or saying "reset my preferences" forgets it. Rehearse with it before using it in the demo |
 | `-HealthTimeoutS` | `120` | How long to wait for the core's `/health` |
 
 ## Speech voice and rate (Windows voice only)
@@ -65,7 +65,7 @@ Prepares the demo projects before a demo or rehearsal ([`docs/demo.md`](../docs/
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1          # asks before deleting or resetting
-powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets without asking
+powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets and forgets the answer style without asking
 ```
 
 - Copies `fixture/injected-readme` to `calc`, `fixture/risky-run` to `old-app`, and
@@ -74,7 +74,11 @@ powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets 
 - Asks (y/N) before deleting an earlier `hello-world`, so the Hello World demo starts clean.
 - Idempotent: projects that already match the fixture are left alone; one that differs (say,
   `signup-page` after the agent fixed it) is reset only after a y. Other projects are listed, never
-  touched. It deletes nothing outside the projects folder and removes links without following them.
+  touched. It removes links without following them.
+- Forgets the answer style conversation mode remembers between launches (`ARTEMIS_PREFS_FILE` or
+  `%USERPROFILE%\.artemis\preferences.json`), after a y, so a "keep it brief" said in a rehearsal
+  doesn't carry into the stage run. That file is the only thing it deletes outside the projects
+  folder, and only when it looks like an Artemis preferences file.
 - Restart `start.ps1` afterwards, so the session starts fresh.
 
 ## Double-click launcher (demo/dev, not an installer)

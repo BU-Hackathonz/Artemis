@@ -85,9 +85,10 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1
    ```
    Copies `calc`, `old-app` and `signup-page` into `%USERPROFILE%\ArtemisProjects` and asks before
-   deleting an old `hello-world`. Run it again after every rehearsal (`-Force` answers yes to every
-   question), then restart Artemis: a running session remembers the project names it created and
-   the Claude conversation.
+   deleting an old `hello-world`. It also forgets the answer style conversation mode remembers
+   between launches, so a "keep it brief" from a rehearsal doesn't make the stage run's answers
+   short. Run it again after every rehearsal (`-Force` answers yes to every question), then restart
+   Artemis: a running session remembers the project names it created and the Claude conversation.
 7. **API key, in this PowerShell window only.** Never on a command line, in a file, in `setx`, or on
    the board. Typed hidden, so it isn't on the projector or in the history:
    ```powershell
@@ -268,7 +269,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 | 9 | Demo 4 injection | Run demo 4 | No approval dialog, `calc` still has its two files | key holder | not run |
 | 10 | Demo 5 Echo Check | Run demo 5 | "Before: 7 problems. After: 0." or the remainder read out and fixed | key holder | not run |
 | 11 | Demo 3b security scan (optional) | Run demo 3b on `old-app` | "Found 2 security issues in 1 Python file: 1 high, 1 low." and no approval dialog | key holder | not run |
-| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered; the second request gets "I'll do that next." (a typed one still gets 409) | key holder | not run |
+| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered; the second request gets "I'll do that next." (a typed one still gets 409). "keep it brief" is remembered at the next launch until `setup-demo.ps1 -Force` or "reset my preferences" | key holder | not run |
 | 13 | Fallbacks | `-Agent stub`, typed requests, `setup-demo.ps1 -Force` between runs | Each recovers in under a minute | anyone | not run |
 
 Launch, in order (full steps are in the setup checklist above): `setup-demo.ps1`, set the API key
@@ -304,7 +305,8 @@ API error, Escape on every approval).
       request.
 - [ ] The core speaks even when the Artemis window is not focused: send a request, Alt+Tab to
       another window before the result, and the result is still spoken (NVDA or SAPI, not the window).
-- [ ] Reset between runs: `infra\setup-demo.ps1 -Force`, restart `start.ps1`.
+- [ ] Reset between runs: `infra\setup-demo.ps1 -Force` (projects and the remembered answer style),
+      restart `start.ps1`.
 
 ## What is real and what is simulated (say this in the pitch)
 

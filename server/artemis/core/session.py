@@ -32,6 +32,7 @@ from artemis.contracts import (
 )
 from artemis.conversation import Controller
 from artemis.conversation.controller import NVDA_RATE_LINE
+from artemis.conversation.prefs import load_style, save_style
 from artemis.policy.gateway import ToolGateway
 
 from .approvals import SessionApprovals
@@ -103,6 +104,7 @@ class Session:
         on_project: Callable[[object], None] | None = None,
         heartbeat_s: float = HEARTBEAT_S,
         conversation: bool | None = None,
+        prefs_path: Path | None = None,
     ):
         self.session_id = session_id
         self.voice = voice
@@ -127,7 +129,15 @@ class Session:
         # contracts.md §5.4, off by default: None means today's §5.2 rules, unchanged.
         if conversation is None:
             conversation = os.environ.get("ARTEMIS_CONVERSATION", "off").lower() == "on"
-        self.conversation: Controller | None = Controller() if conversation else None
+        self.conversation: Controller | None = None
+        if conversation and prefs_path is not None:
+            # The answer style is remembered only in conversation mode, and only when the caller
+            # names the file (main.py does; tests and the in-memory demo never do).
+            self.conversation = Controller(
+                style=load_style(prefs_path), on_style=lambda style: save_style(prefs_path, style)
+            )
+        elif conversation:
+            self.conversation = Controller()
 
     async def emit(self, draft: EventDraft) -> None:
         if draft.announce or draft.type == "task.state":
