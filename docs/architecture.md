@@ -55,7 +55,7 @@ a CLI or a VS Code extension later.
 
 ## How one MVP request flows
 
-1. User holds **Ctrl+Alt+Space** (Tauri global shortcut, works from any app) and says
+1. User holds **Ctrl+Shift+Space** (Tauri global shortcut, works from any app) and says
    "Artemis, create a Python program that prints Hello World". The client calls `voice/listen/start`
    and `stop`; the core records and transcribes. The leading "Artemis" is stripped. No wake-word
    engine is needed.
@@ -93,7 +93,7 @@ Every pause, failure and completion is spoken. Silence longer than about 3 secon
 | 12 | **Tauri toolchain** (Rust, MSVC Build Tools) | Hours lost | Time-box 1 h at kickoff on the demo laptop; the client also runs in Chrome against the core |
 | 13 | **Semgrep on Windows** (native support is newer; registry rules need network) | Scan step fails on stage | Time-box install; vendor the rules locally; Bandit (pure Python) is the fallback for the Python MVP |
 | 14 | **Mic device, permissions and noise** | Bad transcripts on stage | Device picker in settings; test in a noisy room; transcript read back before the task starts; typed input always available |
-| 15 | **Global shortcut collisions** with NVDA (Insert or Caps Lock modifiers) and Windows (Win+H) | Shortcut swallowed | Ctrl+Alt+Space, configurable |
+| 15 | **Global shortcut collisions** with NVDA (Insert or Caps Lock modifiers) and Windows (Win+H) | Shortcut swallowed | Ctrl+Shift+Space by default (Ctrl+Alt+Space was taken by another app on both test laptops), changeable in the app; Start listening button as fallback |
 
 Not needed for the MVP (deliberately cut): Windows UI Automation for inspecting other apps, Docker,
 a database (state is in memory plus a JSONL event log), WebSockets, wake-word detection,

@@ -108,7 +108,8 @@ approval, so a misheard request can't change anything on its own. A hosted STT c
 behind the same `voice/` interface as a fallback.
 
 **Shortcut choice.** Pick something that doesn't collide with NVDA (Insert or Caps Lock modifiers)
-or Windows (Win+H is dictation), e.g. Ctrl+Alt+Space.
+or Windows (Win+H is dictation). We started with Ctrl+Alt+Space, but another app already held it
+on both Windows test laptops (RegisterHotKey error 1409), so the default is now Ctrl+Shift+Space (#54).
 
 ## 7. Agent loop
 
