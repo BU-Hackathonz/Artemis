@@ -4,7 +4,7 @@ export interface VoiceControl { listen(action: VoiceAction): Promise<void> }
 
 // Key repeats do not open extra microphones. A release sends stop immediately,
 // even when the start response is still pending during the listening earcon.
-export function createPushToTalk(core: VoiceControl, notify: (status: TalkStatus) => void, shortcutLabel = 'Ctrl+Alt+Space') {
+export function createPushToTalk(core: VoiceControl, notify: (status: TalkStatus) => void, shortcutLabel = 'Ctrl+Shift+Space') {
   let held = false;
   let disposed = false;
   let blocked = false;

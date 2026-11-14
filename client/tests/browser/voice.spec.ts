@@ -79,9 +79,9 @@ test('native key repeats, release after blur, configurable chord and unload clea
     await send(page,'Released');
     await expect.poll(()=>core.actions).toEqual(['start','stop']);
     await expect(page.getByLabel('Microphone status')).toContainText('Microphone stopped');
-    await page.getByLabel('Global voice shortcut').fill('Control+Shift+Space');
+    await page.getByLabel('Global voice shortcut').fill('Control+Alt+Space');
     await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
-    await expect.poll(()=>page.evaluate(()=>(window as unknown as {voiceBridge:Bridge}).voiceBridge.commands.filter(c=>c.command==='plugin:global-shortcut|register').map(c=>c.shortcut))).toEqual(['Control+Alt+Space','Control+Shift+Space']);
+    await expect.poll(()=>page.evaluate(()=>(window as unknown as {voiceBridge:Bridge}).voiceBridge.commands.filter(c=>c.command==='plugin:global-shortcut|register').map(c=>c.shortcut))).toEqual(['Control+Shift+Space','Control+Alt+Space']);
     await page.getByLabel('Global voice shortcut').fill('Shift+A');
     await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
     await expect(page.getByRole('alert')).toContainText('another modifier');
@@ -114,7 +114,7 @@ test('registration failure retains a focusable toggle that works with screen-rea
     await expect.poll(()=>core.actions).toEqual(['start','stop']);
     await expect(page.getByLabel('Microphone status')).toContainText('Microphone stopped');
     await expect(page.getByRole('button',{name:'Start listening',exact:true})).toBeFocused();
-    await page.getByLabel('Global voice shortcut').fill('Control+Shift+Space');
+    await page.getByLabel('Global voice shortcut').fill('Control+Alt+Space');
     await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
     await expect(page.getByText('Global shortcut is registered.',{exact:true})).toBeVisible();
     await expect(page.getByRole('alert')).toHaveCount(0);
@@ -142,19 +142,19 @@ test('SAPI-ready registration failure uses the bounded core diagnostic without a
   try{
     await bridge(page,core.url,'always');await page.goto('/');
     await expect.poll(()=>core.diagnostics.length).toBe(1);
-    expect(core.diagnostics).toEqual([{code:'shortcut_registration_failed',shortcut:'Control+Alt+Space'}]);
+    expect(core.diagnostics).toEqual([{code:'shortcut_registration_failed',shortcut:'Control+Shift+Space'}]);
     await expect(page.locator('#shortcut-error')).toContainText('Could not register');
     await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.getByRole('log')).toContainText("shortcut couldn't be registered");
     await expect(page.getByRole('log')).toHaveAttribute('aria-live','off');
     await expect(page.getByRole('button',{name:'Start listening',exact:true})).toBeEnabled();
-    await page.getByLabel('Global voice shortcut').fill('Control+Shift+Space');
+    await page.getByLabel('Global voice shortcut').fill('Control+Alt+Space');
     await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
-    await expect(page.locator('#shortcut-error')).toContainText('Could not register Control+Shift+Space');
+    await expect(page.locator('#shortcut-error')).toContainText('Could not register Control+Alt+Space');
     await expect.poll(()=>core.diagnostics.length).toBe(2);
     await expect(page.getByRole('alert')).toHaveCount(0);
     await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
-    await expect(page.getByRole('alert')).toContainText('Could not register Control+Shift+Space');
+    await expect(page.getByRole('alert')).toContainText('Could not register Control+Alt+Space');
     expect(core.diagnostics).toHaveLength(2);
   }finally{await core.close();}
 });
