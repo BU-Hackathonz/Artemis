@@ -664,3 +664,74 @@ async def test_a_quick_taps_two_empty_transcripts_count_once(client, core, voice
     await asyncio.sleep(0.1)
     finals = [e for e in session.bus.history[before:] if e.type == "transcript.final"]
     assert len(finals) == 1
+
+
+# ----- unknown ids and reserved routes -----
+
+
+async def test_unknown_task_and_approval_ids_are_404(client):
+    for path in ("/tasks/tsk_nope/cancel", "/tasks/tsk_nope/reply"):
+        r = await client.post(path, headers=AUTH)
+        assert r.status_code == 404 and r.json()["detail"] == {"error": "task_not_found"}
+    r = await client.post("/approvals/apr_nope", headers=AUTH, json={"decision": "approve", "approval_hash": "sha256:x"})
+    assert r.status_code == 404 and r.json()["detail"] == {"error": "approval_not_found"}
+
+
+async def test_reply_is_501_for_a_known_task(client, core):
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "hello"})).json()["task_id"]
+    await wait_for(session, lambda s: pending(s) is not None)
+    r = await client.post(f"/tasks/{tid}/reply", headers=AUTH)
+    assert r.status_code == 501 and r.json() == {"error": "not_supported"}
+    assert session.tasks[tid].active  # reserved, so it changes nothing
+    await client.post(f"/tasks/{tid}/cancel", headers=AUTH)
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+
+
+# ----- voice errors are spoken; bad actions are rejected (§5.1) -----
+
+
+async def test_voice_errors_are_spoken_and_bad_actions_rejected(client, core, voice):
+    r = await client.post("/voice/listen", headers=AUTH, json={"action": "start"})
+    assert r.status_code == 409 and r.json()["detail"] == {"error": "no_session"}
+    _, session = await start(client, core)
+    assert (await client.post("/voice/listen", headers=AUTH, json={"action": "pause"})).status_code == 422
+    assert (await client.post("/speech", headers=AUTH, json={"action": "pause"})).status_code == 422
+
+    async def mic_down():
+        raise RuntimeError("No input device")
+
+    async def stop_fails(client_request_id):
+        raise RuntimeError("x" * 200)  # too long to speak, so a fixed sentence is used
+
+    voice.start_listening = mic_down
+    voice.stop_listening = stop_fails
+    assert (await client.post("/voice/listen", headers=AUTH, json={"action": "start"})).status_code == 204
+    assert (await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})).status_code == 204
+    await wait_for(session, lambda s: sum(e.type == "error" for e in s.bus.history) == 2)
+    errors = [e.data for e in session.bus.history if e.type == "error"]
+    assert [e["code"] for e in errors] == ["mic_error", "mic_error"]
+    assert errors[0]["message"] == "No input device"
+    assert errors[1]["message"] == "The microphone didn't work."
+    assert (("high", "No input device Check the microphone, or type the request.")) in voice.spoken
+    assert not [e for e in session.bus.history if e.type == "transcript.final"]  # no transcript came back
+    assert not session.tasks
+
+
+# ----- event bus failure isolation (§2) -----
+
+
+async def test_bus_keeps_streaming_when_speech_or_the_log_fails(tmp_path):
+    async def broken_speech(text, priority):
+        raise RuntimeError("no audio device")
+
+    blocker = tmp_path / "not-a-dir"  # a file where the log's folder should be
+    blocker.write_text("")
+    bus = EventBus("ses_2", speak=broken_speech, log_path=blocker / "ses.jsonl")
+    q = bus.subscribe()
+    for i in range(3):
+        await bus.emit(EventDraft(type="agent.message", announce={"text": f"m{i}", "priority": "normal"},
+                                  data={"text": f"m{i}", "kind": "answer"}))
+    assert [q.get_nowait().seq for _ in range(3)] == [1, 2, 3]
+    assert [e.seq for e in bus.history] == [1, 2, 3]
