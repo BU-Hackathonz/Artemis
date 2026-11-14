@@ -70,6 +70,13 @@ test('native key repeats, release after blur, configurable chord and unload clea
     await page.getByLabel('Global voice shortcut').fill('Control+Shift+Space');
     await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
     await expect.poll(()=>page.evaluate(()=>(window as unknown as {voiceBridge:Bridge}).voiceBridge.commands.filter(c=>c.command==='plugin:global-shortcut|register').map(c=>c.shortcut))).toEqual(['Control+Alt+Space','Control+Shift+Space']);
+    await page.getByLabel('Global voice shortcut').fill('Shift+A');
+    await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
+    await expect(page.getByRole('alert')).toContainText('another modifier');
+    await page.getByLabel('Global voice shortcut').fill('Control+Alt+Delete');
+    await page.getByRole('button',{name:'Apply shortcut',exact:true}).click();
+    await expect(page.getByRole('alert')).toContainText('system shortcut');
+    expect(await page.evaluate(()=>(window as unknown as {voiceBridge:Bridge}).voiceBridge.commands.filter(c=>c.command==='plugin:global-shortcut|register').length)).toBe(2);
     await send(page,'Pressed');await expect.poll(()=>core.actions.length).toBe(3);
     await expect(page.getByLabel('Microphone status')).toContainText('Listening.');
     await page.evaluate(()=>window.dispatchEvent(new Event('beforeunload')));
@@ -77,17 +84,19 @@ test('native key repeats, release after blur, configurable chord and unload clea
   }finally{await core.close();}
 });
 
-test('registration failure announces the problem and retains a focusable hold button',async({page})=>{
+test('registration failure retains a focusable toggle that works with screen-reader clicks',async({page})=>{
   const core=await coreFixture();
   try{
     await bridge(page,core.url,true);await page.goto('/');
     await expect(page.getByRole('alert')).toContainText('Could not register');
     expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
-    const talk=page.getByRole('button',{name:'Hold to talk',exact:true});
+    const talk=page.getByRole('button',{name:'Start listening',exact:true});
     await expect(talk).toBeEnabled();await talk.focus();
-    await page.keyboard.down('Space');
+    await talk.dispatchEvent('click',{detail:0});
     await expect.poll(()=>core.actions).toEqual(['start']);
-    await page.keyboard.up('Space');
+    const stop=page.getByRole('button',{name:'Stop listening',exact:true});
+    await expect(stop).toBeVisible();
+    await stop.dispatchEvent('click',{detail:0});
     await expect.poll(()=>core.actions).toEqual(['start','stop']);
     await expect(page.getByLabel('Microphone status')).toContainText('Microphone stopped');
     await page.getByLabel('Global voice shortcut').fill('Control+Shift+Space');
