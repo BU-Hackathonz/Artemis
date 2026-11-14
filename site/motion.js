@@ -16,10 +16,8 @@
   var button = document.querySelector(".pause");
   function sync() {
     root.classList.toggle("motion-paused", paused);
-    if (button) {
-      button.setAttribute("aria-pressed", String(paused));
-      button.textContent = paused ? "Play motion" : "Pause motion";
-    }
+    // The label names the action, so no aria-pressed: "Play motion, pressed" would contradict it.
+    if (button) button.textContent = paused ? "Play motion" : "Pause motion";
     onChange.forEach(function (f) { f(); });
   }
   if (button) {
