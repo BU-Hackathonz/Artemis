@@ -656,6 +656,19 @@ def test_failed_run_is_spoken_verbatim_and_returned_to_the_agent(tmp_path):
     assert "NameError" in result.data["stderr"]
 
 
+@pytest.mark.parametrize("last, spoken", [
+    # Python 3.12+ adds a suggestion ending in "?": no "." after it.
+    ("NameError: name 'pritn' is not defined. Did you mean: 'print'?",
+     "NameError: name 'pritn' is not defined. Did you mean: 'print'?"),
+    ("ValueError: bad value.", "ValueError: bad value."),
+    ("KeyError: 'x'", "KeyError: 'x'."),
+])
+def test_the_last_error_line_ends_with_exactly_one_mark(last, spoken):
+    stderr = f'Traceback (most recent call last):\n  File "main.py", line 1\n{last}\n'
+    text = run_announcement("main.py", result_of(exit_code=1, stderr=stderr), 30)
+    assert text == f"main.py failed with exit code 1. {spoken}"
+
+
 def test_timeout(tmp_path):
     async def go():
         w = World(tmp_path, result=result_of(exit_code=None, timed_out=True))

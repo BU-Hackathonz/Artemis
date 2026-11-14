@@ -147,7 +147,9 @@ def run_announcement(entry: str, result: RunResult, timeout_s: int) -> str:
     lines = [line.strip() for line in result.stderr_tail.splitlines() if line.strip()]
     text = f"{entry} failed with exit code {result.exit_code}."
     if lines:
-        text += f" {lines[-1].rstrip('.')}."
+        last = lines[-1].rstrip(".")
+        # Python 3.12+ ends NameError with "Did you mean: 'print'?": don't add "." after "?".
+        text += f" {last}" + ("" if last.endswith(("?", "!")) else ".")
     if "EOFError" in result.stderr_tail:
         text += " The program asked for input, which isn't supported yet."
     return text
