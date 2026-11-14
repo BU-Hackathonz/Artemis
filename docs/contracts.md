@@ -286,7 +286,7 @@ pointer to NVDA's own rate setting. The controller knows which applies from `voi
 On SAPI the rate is the user's Windows setting unless `ARTEMIS_SAPI_RATE` replaces it, clamped to
 -3..6. Conversation's "faster" and "slower" change only the SAPI rate, one step at a time, and say
 so when a limit is reached. **Proposed (Yaovi, needs Avery; issue #134):** ElevenLabs is Artemis's
-voice by default when `ELEVENLABS_API_KEY` and `ARTEMIS_ELEVEN_VOICE_ID` are set, even while NVDA runs
+voice by default when `ELEVENLABS_API_KEY` is set (the voice is Artemis's own, `ARTEMIS_ELEVEN_VOICE_ID` overrides it), even while NVDA runs
 (`ARTEMIS_VOICE_ENGINE`, decisions.md §5a); NVDA then gets Artemis's lines on braille only and is
 never cancelled by Artemis, and `screen_reader` is "nvda" only when Artemis speaks through NVDA.
 Without a key, or with `ARTEMIS_VOICE_ENGINE=nvda` or `sapi`, the order above is unchanged. With

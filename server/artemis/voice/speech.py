@@ -229,7 +229,8 @@ CACHED_LINES = frozenset({
     "That's the slowest I go.",
     "Still working.",
 })
-PLACEHOLDER_VOICE = "<PASTE_VOICE_ID>"
+PLACEHOLDER_VOICE = "<PASTE_VOICE_ID>"  # what the setup docs show; treated as unset
+DEFAULT_VOICE_ID = "fPIfC3elMLbN9tNwMXkw"  # Artemis's voice, chosen by Avery; ARTEMIS_ELEVEN_VOICE_ID overrides it
 
 
 def _env_float(name: str, default: float, low: float | None = None, high: float | None = None) -> float:
@@ -298,7 +299,8 @@ class ElevenLabsSpeaker:
                  fallback: Speaker | None = None, opener=_open_stream, output=_output_stream,
                  on_give_up: Callable[[str], None] | None = None) -> None:
         self._key = api_key if api_key is not None else os.environ.get("ELEVENLABS_API_KEY", "").strip()
-        self.voice_id = voice_id or os.environ.get("ARTEMIS_ELEVEN_VOICE_ID", "").strip() or PLACEHOLDER_VOICE
+        env_voice = os.environ.get("ARTEMIS_ELEVEN_VOICE_ID", "").strip()
+        self.voice_id = voice_id or (env_voice if env_voice and env_voice != PLACEHOLDER_VOICE else DEFAULT_VOICE_ID)
         self.model = model or os.environ.get("ARTEMIS_ELEVEN_MODEL", "").strip() or "eleven_flash_v2_5"
         self.speed = clamp_speed(speed if speed is not None else _env_float("ARTEMIS_ELEVEN_SPEED", 1.0))
         self.stability = stability if stability is not None else _env_float("ARTEMIS_ELEVEN_STABILITY", 0.5, 0.0, 1.0)
