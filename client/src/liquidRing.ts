@@ -51,6 +51,7 @@ uniform float uWobble;
 uniform vec2 uSplash;    // splash amount, seed
 uniform float uGlow;
 uniform vec2 uOrbit;     // droplet offset (ring units)
+uniform vec2 uTrail;     // droplet orbit angle (rad), orbit radius (ring units): for its trailing tail
 uniform float uLevel;
 uniform float uDim;
 
@@ -70,6 +71,7 @@ float liquid(vec2 q) {
   float pr = sqrt(max(max(uWobble, uSplash.x), 0.0)) * (1.0 - m);
   float sd0 = uSplash.y;
   q -= pr * 0.06 * vec2(sin(t * 11.0 + sd0), cos(t * 8.7 + sd0 * 1.7));
+  vec2 q0 = q;
   q -= uOrbit * m;
   float d = length(q);
   float ang = atan(q.y, q.x);
@@ -84,6 +86,16 @@ float liquid(vec2 q) {
   float swell = 1.0 + (0.14 * sin(ang - spin) + 0.07 * sin(2.0 * ang - spin * 1.3 + t * 0.4)) * (1.0 - m)
               + pr * thick + lv * 0.3 * (0.5 + 0.5 * sin(4.0 * ang - t * 9.0));
   float sd = abs(d - rc) - halfWidth() * max(swell, 0.25);
+  // The flow: a collapsed droplet drags a tapering tail of liquid along its orbit.
+  float tm = smoothstep(0.5, 1.0, m) * step(0.01, uTrail.y);
+  if (tm > 0.0) {
+    for (int k = 1; k <= 6; k++) {
+      float fk = float(k);
+      float a = uTrail.x - fk * 0.2;
+      vec2 c = vec2(cos(a), sin(a)) * uTrail.y;
+      sd = smin(sd, length(q0 - c) - halfWidth() * (1.0 - 0.14 * fk) * tm, 0.12);
+    }
+  }
   float sp = sqrt(max(uSplash.x, 0.0)) * (1.0 - m);
   if (sp > 0.02) {
     for (int k = 0; k < 3; k++) {
@@ -161,7 +173,7 @@ void main() {
   o = vec4(col, inside);
 }`
 
-const NAMES = ['uRes', 'uRadius', 'uTime', 'uSpin', 'uMorph', 'uWobble', 'uSplash', 'uGlow', 'uOrbit', 'uLevel', 'uDim'] as const
+const NAMES = ['uRes', 'uRadius', 'uTime', 'uSpin', 'uMorph', 'uWobble', 'uSplash', 'uGlow', 'uOrbit', 'uTrail', 'uLevel', 'uDim'] as const
 
 export class AgentRing {
   private gl: WebGL2RenderingContext
@@ -253,6 +265,7 @@ export class AgentRing {
     gl.uniform2f(this.u.uSplash, this.splash, this.seed)
     gl.uniform1f(this.u.uGlow, c.glow)
     gl.uniform2f(this.u.uOrbit, Math.cos(this.orbitAngle) * c.orbit, Math.sin(this.orbitAngle) * c.orbit)
+    gl.uniform2f(this.u.uTrail, this.orbitAngle % (Math.PI * 2), c.orbit)
     gl.uniform1f(this.u.uLevel, c.level)
     gl.uniform1f(this.u.uDim, c.dim)
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf)
