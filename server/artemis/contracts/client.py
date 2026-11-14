@@ -29,6 +29,7 @@ class ClientReady(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # The push-to-talk chord the client registered, e.g. "Control+Shift+Space"; None when there
-    # is none (in a browser, or registration failed, which the client reports as a diagnostic).
+    # The push-to-talk chord the client registered, e.g. "Control+Shift+Space"; None when
+    # registration failed (the client also reports that as a diagnostic). Only the native app
+    # calls /ready: a browser has no Start listening button, which the no-chord line names.
     shortcut: str | None = Field(default=None, pattern=CHORD_PATTERN)
