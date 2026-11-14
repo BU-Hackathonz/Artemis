@@ -156,8 +156,8 @@ def _plain(f: Finding) -> str:
 
 # What a person should check when axe couldn't decide.
 _REVIEW = {
-    "color-contrast": "whether text over a gradient or image has enough contrast",
-    "color-contrast-enhanced": "whether text over a gradient or image has enough contrast",
+    "color-contrast": "whether some text has enough contrast",
+    "color-contrast-enhanced": "whether some text has enough contrast",
 }
 
 
@@ -181,7 +181,7 @@ def speak_report(report: EchoReport, top: int = 3) -> str:
     counts = {i: sum(1 for f in report.findings if f.impact == i) for i in IMPACT_ORDER}
     by_impact = ", ".join(f"{c} {i}" for i, c in counts.items() if c)
     worst = "; ".join(f"{f.impact.capitalize()}: {_plain(f)}" for f in report.findings[:top])
-    more = f" And {n - top} more in the log." if n > top else ""
+    more = f" And {n - top} more; ask me to list them." if n > top else ""
     noun = "problem" if n == 1 else "problems"
     tail = f" Also, {review}" if review else ""
     return f"Echo Check found {n} {noun}: {by_impact}. {worst}.{more}{tail}"

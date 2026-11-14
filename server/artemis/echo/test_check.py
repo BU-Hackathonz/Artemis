@@ -68,7 +68,7 @@ def test_speak_report_counts_then_top_three_in_plain_words():
     assert text.startswith("Echo Check found 4 problems: 2 critical, 1 serious, 1 moderate. ")
     assert "Critical: a button has no accessible name" in text
     assert "Serious: some text doesn't have enough contrast (2 places)" in text
-    assert text.endswith("And 1 more in the log.")
+    assert text.endswith("And 1 more; ask me to list them.")
     assert speak_report(report([])) == "Echo Check found no problems on Join the club."
     unknown = speak_report(report([Finding(rule="x-rule", impact="minor", target="a", message="Links Must Work.")]))
     assert unknown == "Echo Check found 1 problem: 1 minor. Minor: links must work."
@@ -137,7 +137,7 @@ def test_undecided_checks_are_never_reported_as_no_problems():
     spoken = speak_report(report)
     assert "no definite problems" in spoken and "manual check" in spoken and "no problems" not in spoken.replace("no definite problems", "")
     worse = report.model_copy(update={"findings": review})
-    assert speak_report(worse).endswith("Also, 1 thing needs a manual check, because axe couldn't decide: whether text over a gradient or image has enough contrast.")
+    assert speak_report(worse).endswith("Also, 1 thing needs a manual check, because axe couldn't decide: whether some text has enough contrast.")
 
 
 @pytest.mark.skipif(not _browser_available(), reason="needs the echo group and a Chromium/Chrome/Edge")

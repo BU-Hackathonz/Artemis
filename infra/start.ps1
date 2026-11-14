@@ -114,7 +114,7 @@ $url = "http://127.0.0.1:$port"
 
 $groups = ""
 if ($Voice -eq "whisper") { $groups += " --group voice" }
-if ($Agent -eq "claude") { $groups += " --group agent --group security" }
+if ($Agent -eq "claude") { $groups += " --group agent --group security --group echo" }  # echo: inspect_page
 
 $core = $null
 $app = $null
