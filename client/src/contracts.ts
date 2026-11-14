@@ -3,6 +3,7 @@
 export type TaskState = 'queued' | 'working' | 'awaiting_reply' | 'awaiting_approval' | 'running' | 'succeeded' | 'failed' | 'canceled';
 export type Decision = 'approve' | 'reject';
 export interface Approval {
+  blocking?: boolean;
   approval_id: string; approval_hash: string; kind: 'write_files' | 'run_program'; summary: string;
   files: { path: string; action: string; lines_added: number; lines_removed: number }[];
   diff: string | null; run: { preset: string; entry: string; timeout_s: number } | null;

@@ -2,7 +2,9 @@ import { fetchEventSource } from '@microsoft/fetch-event-source';
 import type { Approval, Core, CoreEvent, Decision, Health } from './contracts';
 
 export class HttpError extends Error {
-  constructor(readonly status: number) { super(status === 409 ? 'Approval is stale. Wait for a new proposal.' : `Core returned HTTP ${status}. Check the core and launch token, then reconnect.`); }
+  constructor(readonly status: number, readonly code?: string, readonly taskId?: string) {
+    super(code === 'task_active' ? 'Still working on the last request. Wait for it to finish, or use Cancel task.' : code === 'stale_approval' ? 'Approval is stale. Wait for a new proposal.' : `Core returned HTTP ${status}. Check the core and launch token, then reconnect.`);
+  }
 }
 export function createHttpCore(address: string, token: string): Core {
   const url = new URL(address);
@@ -14,7 +16,13 @@ export function createHttpCore(address: string, token: string): Core {
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   async function request<T>(path: string, body?: unknown): Promise<T> {
     const response = await fetch(url.origin + path, { method: body === undefined ? 'GET' : 'POST', headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10000), cache: 'no-store', redirect: 'error' });
-    if (!response.ok) throw new HttpError(response.status);
+    if (!response.ok) {
+      if (response.status === 409 && path.endsWith('/tasks')) {
+        const body: unknown = await response.json().catch(() => null);
+        if (body && typeof body === 'object' && 'error' in body && body.error === 'task_active' && 'task_id' in body && typeof body.task_id === 'string') throw new HttpError(409, 'task_active', body.task_id);
+      }
+      throw new HttpError(response.status, response.status === 409 && path.startsWith('/approvals/') ? 'stale_approval' : undefined);
+    }
     return response.status === 204 ? undefined as T : response.json() as Promise<T>;
   }
   return {
@@ -29,7 +37,7 @@ export function createHttpCore(address: string, token: string): Core {
       const controller = new AbortController();
       let last = cursors.get(sid) ?? 0;
       void fetchEventSource(url.origin + `/sessions/${encodeURIComponent(sid)}/events`, {
-        headers: {Authorization: headers.Authorization, ...(last ? {'Last-Event-ID': String(last)} : {})}, signal: controller.signal, openWhenHidden: true, redirect:'error',
+        headers: {Authorization: headers.Authorization, ...(last ? {'last-event-id': String(last)} : {})}, signal: controller.signal, openWhenHidden: true, redirect:'error',
         async onopen(response) {
           if (!response.ok) throw new HttpError(response.status);
           if (!response.headers.get('content-type')?.startsWith('text/event-stream')) throw new Error('Core did not return an event stream.');

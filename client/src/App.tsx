@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { createHttpCore } from './api';
+import { createHttpCore, HttpError } from './api';
 import { createDemoCore } from './demo';
 import { ApprovalDialog } from './ApprovalDialog';
 import { initialState, reduceEvent } from './state';
@@ -11,6 +11,7 @@ import { platform } from './platform';
 interface Connection {core: Core; sid: string; health: Health; demo: boolean}
 const message = (e: unknown) => e instanceof TypeError ? 'Artemis core is not reachable. Start the core, check its address and token, then reconnect.' : e instanceof Error ? e.message : 'Request failed. Check the core and try again.';
 function eventText(event: CoreEvent) {
+  if (event.type === 'voice.status' && typeof event.data.voice_ready === 'boolean') return event.data.voice_ready ? 'Core speech is available.' : 'Core speech is unavailable. Screen reader announcements enabled.';
   if (event.announce?.text) return event.announce.text;
   if (typeof event.data.text === 'string') return event.data.text;
   if (typeof event.data.message === 'string') return event.data.message;
@@ -30,6 +31,7 @@ export function App() {
   const hadApproval = useRef(false);
   const [submittedTask, setSubmittedTask] = useState<string | null>(null);
   const generation = useRef(0);
+  const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
   const ready = status === 'Connected' || status === 'Demo connected';
   useEffect(() => {
     if (!connection) return;
@@ -76,7 +78,10 @@ export function App() {
         setSubmittedTask(taskId);
       }
       requestRef.current = null; setText('');
-    } catch (e) {setError(message(e));}
+    } catch (e) {
+      if (e instanceof HttpError && e.code === 'task_active' && e.taskId) setSubmittedTask(e.taskId);
+      setError(message(e));
+    }
     finally {setBusy(false);}
   }
   return <><a className="skip" href="#request">Skip to request</a><header><p>ARTEMIS · {platform.name}</p><h1>Build with words.</h1><p>Direct a change, review each action, and hear the result.</p></header>
@@ -88,7 +93,7 @@ export function App() {
           <label htmlFor="token">Launch token</label><input id="token" type="password" value={token} onChange={e => setToken(e.target.value)} required autoComplete="off" disabled={busy}/>
           <button disabled={busy}>Connect to core</button>
         </form><p>Launch the core first. Your token stays in memory for this connection.</p><button disabled={busy} onClick={() => void connect(true)}>Try in-memory demo</button></> : <>
-          <p>{connection.demo ? 'Demo only: fixed Hello World proposals. No files, code execution or microphone access.' : `Core ${connection.health.version}. ${connection.health.voice_ready ? 'Core handles spoken announcements.' : 'Screen reader live announcements enabled.'}`}</p>
+          <p>{connection.demo ? 'Demo only: fixed Hello World proposals. No files, code execution or microphone access.' : `Core ${connection.health.version}. ${voiceReady ? 'Core handles spoken announcements.' : 'Screen reader live announcements enabled.'}`}</p>
           <button onClick={() => window.location.reload()}>Disconnect and reset</button>
           {!ready && <button onClick={() => setConnection({...connection})}>Reconnect event stream</button>}
         </>}
@@ -107,7 +112,7 @@ export function App() {
             <button disabled={!ready || connection?.demo} onClick={() => void command(() => connection!.core.speech('stop'))}>Stop speech</button></div>
         </section>
         <section aria-labelledby="log-heading"><h2 id="log-heading">Activity log</h2><p>Latest 500 events. Tab into the log and use arrow keys to scroll.</p>
-          <div role="log" aria-label="Activity log" aria-live={connection?.health.voice_ready ? 'off' : 'polite'} aria-relevant="additions" tabIndex={0} className="log">
+          <div role="log" aria-label="Activity log" aria-live={voiceReady ? 'off' : 'polite'} aria-relevant="additions" tabIndex={0} className="log">
             {state.events.length === 0 ? <p>Events will appear here.</p> : state.events.map((event, index) => <article key={`${event.seq}-${index}`}><p><strong>{eventText(event)}</strong></p>
               {event.type === 'run.result' && <><p>Exit code: {String(event.data.exit_code)}{event.data.timed_out ? ' · Timed out' : ''}{event.data.truncated ? ' · Output truncated' : ''}</p><pre>{String(event.data.stdout_tail ?? '')}{String(event.data.stderr_tail ?? '')}</pre></>}
               {event.type === 'error' && typeof event.data.recovery === 'string' && <p>{event.data.recovery}</p>}

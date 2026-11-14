@@ -1,14 +1,14 @@
 import type { Approval, CoreEvent, TaskState } from './contracts';
 export interface ViewState {
   seq: number; events: CoreEvent[]; approvals: {approval: Approval; taskId: string | null}[];
-  taskId: string | null; taskState: TaskState; transcript: string | null;
+  taskId: string | null; taskState: TaskState; transcript: string | null; voiceReady: boolean | null;
 }
-export const initialState: ViewState = {seq:0, events:[], approvals:[], taskId:null, taskState:'succeeded', transcript:null};
+export const initialState: ViewState = {seq:0, events:[], approvals:[], taskId:null, taskState:'succeeded', transcript:null, voiceReady:null};
 function validApproval(value: unknown): value is Approval {
   if (!value || typeof value !== 'object') return false;
   const a = value as Approval;
   return typeof a.approval_id === 'string' && !!a.approval_id && typeof a.approval_hash === 'string' && !!a.approval_hash &&
-    ['write_files','run_program'].includes(a.kind) && typeof a.summary === 'string' &&
+    (a.blocking === undefined || typeof a.blocking === 'boolean') && ['write_files','run_program'].includes(a.kind) && typeof a.summary === 'string' &&
     Array.isArray(a.files) && a.files.every(f => f && typeof f === 'object' && typeof f.path === 'string' && typeof f.action === 'string' && typeof f.lines_added === 'number' && typeof f.lines_removed === 'number') &&
     (a.diff === null || typeof a.diff === 'string') &&
     (a.run === null || (typeof a.run === 'object' && typeof a.run.entry === 'string' && typeof a.run.preset === 'string' && typeof a.run.timeout_s === 'number')) &&
@@ -32,6 +32,7 @@ export function reduceEvent(state: ViewState, event: CoreEvent): ViewState {
       if (['succeeded','failed','canceled'].includes(value)) next.approvals = next.approvals.filter(item => item.taskId !== event.task_id);
     }
   }
+  if (event.type === 'voice.status' && typeof event.data.voice_ready === 'boolean') next.voiceReady = event.data.voice_ready;
   if (event.type === 'transcript.final' && typeof event.data.text === 'string') next.transcript = event.data.text;
   return next;
 }
