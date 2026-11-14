@@ -405,10 +405,10 @@ class ToolGateway:
         top = root
         if a.path:
             top = safe_resolve(root, a.path)
-            if not top.exists():
-                raise _ToolError("not_found", f"There is no file or folder named {a.path}.")
             scope = top.relative_to(base).as_posix()
             # The scan never reads these folders, so it must not answer "clean" for one.
+            # Checked by name before anything else, whatever the case and whether or not
+            # the folder exists, so the answer is the same on every file system.
             skipped = {name.casefold() for name in SKIP_DIRS}
             inside = next((part for part in scope.split("/") if part.casefold() in skipped), None)
             if inside:
@@ -417,6 +417,8 @@ class ToolGateway:
                     f"{a.path} is inside {inside}, which the security scan never checks. "
                     "Nothing was scanned.",
                 )
+            if not top.exists():
+                raise _ToolError("not_found", f"There is no file or folder named {a.path}.")
         if self._scan is None:
             message = "The security scanner isn't installed."
             await self._error(task_id, "scan_unavailable", message, "Nothing was scanned.")
