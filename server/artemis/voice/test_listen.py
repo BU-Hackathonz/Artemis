@@ -203,6 +203,22 @@ def test_dropped_segments_are_logged_without_their_words(caplog):
     assert "no_speech_prob 0.80" in caplog.text and "secret" not in caplog.text
 
 
+
+def test_dropped_releases_log_their_reason_without_words(caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="artemis.voice.listen")
+    v, model, _ = make(0.1)  # a tap
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_1")) == ""
+    assert "Release dropped: too short" in caplog.text
+    hiss = (np.random.default_rng(2).standard_normal(RATE * 2) * 0.0002).astype(np.float32)
+    v, model, _ = make(2, audio=hiss)  # a silent hold
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_2")) == ""
+    assert "Release dropped: silent" in caplog.text and not model.calls
+    assert "create a Python program" not in caplog.text  # numbers only, never words
+
 def test_room_silence_never_reaches_whisper():
     # The loudest room silence measured on the demo laptop's headset mic: RMS 0.00022.
     rng = np.random.default_rng(1)
