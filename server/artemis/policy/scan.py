@@ -13,6 +13,8 @@ from pathlib import Path
 
 from artemis.contracts import Finding, Severity
 
+from .paths import SKIP_DIRS
+
 TIMEOUT_S = 20
 # No API keys. The profile folders are needed: without them Python on Windows writes its
 # caches into a literal "~" folder under the current directory.
@@ -36,16 +38,35 @@ def available() -> bool:
 
 def parse_bandit(output: str, folder: Path) -> list[Finding]:
     try:
-        results = json.loads(output)["results"]
-    except (ValueError, KeyError, TypeError) as exc:
+        report = json.loads(output)
+        results = report["results"]
+        errors = report.get("errors") or []
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
         raise ScanError("Bandit did not return a report.") from exc
-    findings = []
-    for item in results:
-        path = Path(item["filename"])
+
+    def relative(filename: str) -> str:
+        path = Path(filename)
         try:
-            rel = path.resolve().relative_to(folder.resolve()).as_posix()
+            return path.resolve().relative_to(folder.resolve()).as_posix()
         except ValueError:
-            rel = path.name
+            return path.name
+
+    findings = []
+    # A file Bandit couldn't parse was not scanned. Say so, rather than let the approval
+    # claim there are no findings in code nobody looked at.
+    for item in errors:
+        reason = str(item.get("reason") or "unknown reason")
+        findings.append(
+            Finding(
+                rule="SCAN",
+                severity="medium",
+                path=relative(str(item.get("filename") or "unknown file")),
+                line=1,
+                message=f"couldn't be scanned: {reason}",
+            )
+        )
+    for item in results:
+        rel = relative(item["filename"])
         level = _LEVELS.get(item["issue_severity"], {}).get(item["issue_confidence"], "medium")
         findings.append(
             Finding(
@@ -64,9 +85,11 @@ def _run_bandit(folder: Path) -> str:
     # Bandit is our own tool, so it runs on the core's interpreter, with a minimal
     # environment: no API keys reach it.
     env = {name: os.environ[name] for name in _ENV_NAMES if name in os.environ}
+    # Don't crawl a virtual environment or node_modules before every run.
+    excluded = ",".join(str(folder / name) for name in sorted(SKIP_DIRS))
     try:
         done = subprocess.run(
-            [sys.executable, "-m", "bandit", "-r", str(folder), "-f", "json", "-q"],
+            [sys.executable, "-m", "bandit", "-r", str(folder), "-f", "json", "-q", "-x", excluded],
             capture_output=True,
             text=True,
             encoding="utf-8",

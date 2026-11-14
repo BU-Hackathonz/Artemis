@@ -76,7 +76,10 @@ def test_bandit_gets_no_secrets_in_its_environment(tmp_path, monkeypatch):
     assert "ANTHROPIC_API_KEY" not in seen["env"]
     assert set(seen["env"]) <= {"SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"}
     assert seen["cwd"] != str(tmp_path)  # Bandit never runs inside the project folder
-    assert seen["argv"][1:] == ["-m", "bandit", "-r", str(tmp_path), "-f", "json", "-q"]
+    assert seen["argv"][1:8] == ["-m", "bandit", "-r", str(tmp_path), "-f", "json", "-q"]
+    # Virtual environments and node_modules are excluded, so a run isn't held up by them.
+    assert seen["argv"][8] == "-x"
+    assert {str(tmp_path / ".venv"), str(tmp_path / "node_modules")} <= set(seen["argv"][9].split(","))
     assert seen["timeout"] == 20 and "shell" not in seen
 
 
@@ -120,3 +123,47 @@ def test_real_bandit_on_clean_code_finds_nothing(tmp_path):
     (tmp_path / "main.py").write_text(CLEAN)
     assert asyncio.run(scan(tmp_path)) == []
     assert [p.name for p in tmp_path.iterdir()] == ["main.py"]  # the scan leaves nothing behind
+
+
+# ----- files Bandit can't parse, and folders it shouldn't crawl -----
+
+UNPARSEABLE = "import subprocess\nsubprocess.call(input(), shell=True)\ndef (:\n"
+
+
+def test_a_file_bandit_cannot_parse_is_a_finding_not_a_clean_scan(tmp_path):
+    out = json.dumps(
+        {
+            "errors": [{"filename": str(tmp_path / "main.py"), "reason": "syntax error while parsing AST from file"}],
+            "results": [],
+        }
+    )
+    finding = parse_bandit(out, tmp_path)[0]
+    assert (finding.rule, finding.severity, finding.path, finding.line) == ("SCAN", "medium", "main.py", 1)
+    assert finding.message == "couldn't be scanned: syntax error while parsing AST from file"
+
+
+@needs_bandit
+def test_real_bandit_unparseable_file_is_said_in_the_approval(tmp_path):
+    projects = tmp_path / "projects"
+    projects.mkdir()
+
+    async def go():
+        log, approvals = EventLog(), FakeApprovals([Decision.reject])
+        gateway = ToolGateway(FakeRunner(projects), approvals, log, projects_dir=projects, scan=scan)
+        await gateway.call("tsk_1", "create_project", {"name": "broken"})
+        await gateway.call("tsk_1", "write_files", {"files": [{"path": "main.py", "content": UNPARSEABLE}]})
+        return approvals.requests[0]
+
+    approval = asyncio.run(go())
+    assert "No security findings" not in approval.summary
+    assert "main.py line 1, couldn't be scanned: syntax error" in approval.summary
+    assert approval.findings[0].rule == "SCAN"
+
+
+@needs_bandit
+def test_real_bandit_skips_virtual_environments_and_node_modules(tmp_path):
+    risky = "import subprocess\nsubprocess.call(input(), shell=True)\n"
+    for rel in [".venv/lib/v.py", "node_modules/x/n.py", "src/s.py"]:
+        (tmp_path / rel).parent.mkdir(parents=True)
+        (tmp_path / rel).write_text(risky)
+    assert {f.path for f in asyncio.run(scan(tmp_path))} == {"src/s.py"}

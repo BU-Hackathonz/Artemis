@@ -56,6 +56,19 @@ class ClaudeAgent:
         for _ in range(self._config.max_iterations):
             try:
                 response = await self._create(task, emit)
+            except asyncio.CancelledError:
+                # Canceled while Claude was thinking. An unanswered request must not stay in
+                # the conversation, or the next task would replay it along with its own.
+                if len(self.messages) == start + 1:
+                    del self.messages[start:]
+                else:
+                    self.messages.append(
+                        {
+                            "role": "user",
+                            "content": "The developer canceled this task. Do not continue it.",
+                        }
+                    )
+                raise
             except anthropic.AuthenticationError:
                 return await fail("auth", "The Claude API key is missing or invalid.")
             except (anthropic.RateLimitError, anthropic.InternalServerError):
