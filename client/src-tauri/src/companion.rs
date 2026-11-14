@@ -65,7 +65,12 @@ impl CompanionState {
             .status
             .lock()
             .map_err(|_| "Desktop status is unavailable.")?;
-        let busy = matches!(status.task, Task::Queued | Task::Working | Task::Running);
+        // The droplet moves while you speak to Artemis (the microphone is open) and while it works.
+        let busy = matches!(status.task, Task::Queued | Task::Working | Task::Running)
+            || matches!(
+                status.microphone,
+                Microphone::Starting | Microphone::Listening | Microphone::Stopping
+            );
         Ok((busy, status.approval))
     }
     fn update(&self, status: Status, changed: bool, focused: bool) -> Result<Reveal, String> {
