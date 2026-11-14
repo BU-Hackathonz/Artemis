@@ -18,7 +18,7 @@ run.
 | Real Claude agent, `edit_file`, Bandit scan (#11, #12), live Hello World test passed (17.9 s) | merged |
 | `inspect_page`, Echo Check for the agent (#25, #26) | merged |
 | `scan_project`, the security scan on request (#35); the scan can't be switched off by `.bandit` or `# nosec` (#37) | merged |
-| Push-to-talk Ctrl+Alt+Space + Hold to talk button (#32) | merged; native Windows check by Yaovi in progress |
+| Push-to-talk Ctrl+Alt+Space + **Start listening / Stop listening** toggle (#32, #38) | merged; native Windows check by Yaovi in progress |
 | Approval focus: Approve for normal approvals, Reject for blocked ones (#33) | merged |
 | "Still working" cue after about 3 s of silence while working (#28) | merged: a low-priority spoken "Still working." (an earcon may replace it) |
 
@@ -36,10 +36,11 @@ the real agent isn't installed: run the uv sync from the setup checklist again.
 | Approval dialog | Escape | Reject. |
 | Blocked approval | Tab, then Shift+Enter | Override: on **Approve blocked action (Shift+Enter)**, only Shift+Enter approves. Enter and clicks do nothing there. |
 | Main window | Tab to the buttons | **Cancel task**, **Repeat last speech**, **Stop speech**. |
-| Anywhere | hold Ctrl+Alt+Space (or hold the **Hold to talk** button) | Push-to-talk: rising earcon, speak, release, falling earcon, then "Heard: ...". |
+| Anywhere | hold Ctrl+Alt+Space | Push-to-talk: rising earcon, speak, release, falling earcon, then "Heard: ...". Works without window focus. |
+| Main window | **Start listening**, then **Stop listening** | The same, as a toggle: press once to start, again to stop. Works with NVDA browse-mode clicks. |
 
-With NVDA on, the **Hold to talk** button only works as a hold in focus mode (NVDA+Space); in
-browse mode NVDA turns Space or Enter into a single click. Prefer Ctrl+Alt+Space in the demo.
+If another app already owns Ctrl+Alt+Space, Artemis says so once ("The push-to-talk shortcut Control
+Alt Space couldn't be registered…") and the **Start listening** toggle still works.
 
 The core's spoken summary ends with "Enter to approve, Escape to reject." That matches the contract
 (contracts.md §2: only a *blocked* approval defaults to Reject), and since #33 the client focuses
