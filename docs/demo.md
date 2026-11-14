@@ -40,7 +40,10 @@ the real agent isn't installed: run the uv sync from the setup checklist again.
 | Main window | **Start listening**, then **Stop listening** | The same, as a toggle: press once to start, again to stop. Works with NVDA browse-mode clicks. |
 
 If another app already owns Ctrl+Alt+Space, Artemis says so once ("The push-to-talk shortcut Control
-Alt Space couldn't be registered…") and the **Start listening** toggle still works.
+Alt Space couldn't be registered…") and the **Start listening** toggle still works. To get a held
+shortcut back, type `Control+Shift+Space` into **Global voice shortcut** and choose **Apply shortcut**
+(it applies to this launch). On Yaovi's laptop another desktop app held Ctrl+Alt+Space even with
+Artemis closed (Windows can't say which), while Ctrl+Shift+Space was free.
 
 The core's spoken summary ends with "Enter to approve, Escape to reject." That matches the contract
 (contracts.md §2: only a *blocked* approval defaults to Reject), and since #33 the client focuses
@@ -54,7 +57,7 @@ so a misheard "yes" never writes or runs anything.
 
 Do this at least 30 minutes before judging. The first `npm run tauri dev` build takes minutes.
 
-1. **Code.** `git pull` on the branch you demo from (`main` once the PRs merge, else `demo-local` above).
+1. **Code.** `git pull` on `main` (everything the demo uses is merged).
 2. **Dependencies, all groups in one command.** `uv sync` removes groups you don't list, and
    `start.ps1` doesn't add the `echo` group, so the last sync must include all of them:
    ```powershell
@@ -68,9 +71,13 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
      the user's NVDA voice. If the DLL is missing, the core goes silent and the app's activity log
      speaks through NVDA instead.
    - Off: the core speaks with Windows SAPI. Never both at once.
-4. **Microphone.** Set the Windows default input device and test it in Sound settings. Push-to-talk
+4. **Global shortcut.** Quit apps that may take Ctrl+Alt+Space as a global shortcut (desktop
+   assistants' quick-entry keys are likely suspects). Start Artemis and listen: if it says the
+   push-to-talk shortcut couldn't be registered, apply `Control+Shift+Space` (see Keys above)
+   before the judges arrive.
+5. **Microphone.** Set the Windows default input device and test it in Sound settings. Push-to-talk
    (#32) uses it; `-Voice stub` skips the mic entirely, and typing always works.
-5. **Demo projects.**
+6. **Demo projects.**
    ```powershell
    powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1
    ```
@@ -78,20 +85,20 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    deleting an old `hello-world`. Run it again after every rehearsal (`-Force` answers yes to every
    question), then restart Artemis: a running session remembers the project names it created and
    the Claude conversation.
-6. **API key, in this PowerShell window only.** Never on a command line, in a file, in `setx`, or on
+7. **API key, in this PowerShell window only.** Never on a command line, in a file, in `setx`, or on
    the board. Typed hidden, so it isn't on the projector or in the history:
    ```powershell
    $k = Read-Host -AsSecureString "Anthropic API key"
    $env:ANTHROPIC_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($k)); Remove-Variable k
    ```
    Close the window after the demo.
-7. **Start.**
+8. **Start.**
    ```powershell
    powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude
    ```
    Wait for "Core is ready." and the app window. Focus lands in the request field. Core log:
    `%LOCALAPPDATA%\Artemis\logs\core.log`.
-8. **Smoke test** before the judges arrive: run demo 1, then re-run `setup-demo.ps1` and restart.
+9. **Smoke test** before the judges arrive: run demo 1, then re-run `setup-demo.ps1` and restart.
 9. Volume up, notifications off (Focus assist), laptop on power, screen mirrored for the judges.
 
 ## The scripted demo
