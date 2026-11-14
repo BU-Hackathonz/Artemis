@@ -125,9 +125,9 @@ def test_busy_is_exact_while_the_line_plays():
     spd, popen = offline()
     assert not spd.busy()
     spd.speak("main.py ran successfully.", interrupt=False)
-    assert spd.busy()
+    assert spd.busy() and spd.speaking() and spd.name == "speechd"
     popen.children[0].done = True
-    assert not spd.busy()
+    assert not spd.busy() and not spd.speaking()
 
 
 def test_cancel_stops_speech_dispatcher_and_kills_our_child():

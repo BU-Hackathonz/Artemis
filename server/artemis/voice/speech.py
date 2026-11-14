@@ -586,7 +586,7 @@ class SpeechDispatcherSpeaker:
     speech-dispatcher to stop and kills our children, so push-to-talk cuts it off at once.
     """
 
-    name = "offline"
+    name = "speechd"  # what Announcer.speaking_engine() reports (#141, the wake word)
 
     def __init__(self, which=shutil.which, popen=subprocess.Popen) -> None:
         self._spd = which("spd-say")
@@ -620,6 +620,10 @@ class SpeechDispatcherSpeaker:
 
     def busy(self) -> bool:
         return any(c.poll() is None for c in self._children)
+
+    def speaking(self) -> bool:
+        """spd-say --wait lives exactly as long as its line plays, so speaking and busy are the same here."""
+        return self.busy()
 
 
 class _Fallback:
