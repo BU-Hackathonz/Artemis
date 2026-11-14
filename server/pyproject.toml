@@ -25,6 +25,10 @@ agent = [
 security = [
     "bandit>=1.9",
 ]
+# Echo Check (Avery + Jun): Playwright for the accessibility tree; axe-core is vendored.
+echo = [
+    "playwright>=1.48",
+]
 dev = [
     "pytest",
     "pytest-asyncio",
