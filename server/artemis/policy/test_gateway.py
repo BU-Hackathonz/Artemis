@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -763,3 +765,84 @@ def test_tool_result_text_for_the_model(tmp_path):
     assert json.loads(bad.to_model_text()) == {
         "ok": False, "error": "not_found", "message": "There is no tool named nope.",
     }
+
+
+# ----- links, and anything unexpected -----
+
+
+def make_link(link, target):
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def test_list_files_does_not_follow_a_link_out_of_the_project(tmp_path):
+    async def go():
+        w = World(tmp_path)
+        root = await w.hello()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("do not list me")
+        make_link(root / "link", outside)
+        return (
+            await w.call("list_files"),
+            await w.call("list_files", dir="link"),
+            await w.call("read_file", path="link/secret.txt"),
+        )
+
+    listed, through_link, read = asyncio.run(go())
+    assert listed.ok and listed.data["count"] == 1
+    assert "secret" not in listed.data["files"] and "outside" not in listed.data["files"]
+    assert through_link.error == "path_rejected" and read.error == "path_rejected"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="file symlinks need admin rights on Windows")
+def test_list_files_leaves_out_a_file_link_that_points_outside(tmp_path):
+    async def go():
+        w = World(tmp_path)
+        root = await w.hello()
+        (tmp_path / "secret.txt").write_text("x")
+        os.symlink(tmp_path / "secret.txt", root / "alias.txt")
+        return await w.call("list_files")
+
+    assert "alias" not in asyncio.run(go()).data["files"]
+
+
+@pytest.mark.parametrize("error", [PermissionError("C:/Users/someone/secret.txt"), ValueError("contents: hunter2")])
+def test_an_unexpected_exception_becomes_a_spoken_tool_failure(tmp_path, monkeypatch, error):
+    async def go():
+        w = World(tmp_path)
+        await w.hello()
+
+        def boom(*args, **kwargs):
+            raise error
+
+        monkeypatch.setattr("artemis.policy.gateway.project_files", boom)
+        return w, await w.call("list_files")
+
+    w, result = asyncio.run(go())
+    assert (result.ok, result.error) == (False, "tool_failed")
+    assert result.message == f"list_files failed: {type(error).__name__}."
+    event = w.log.of("error")[0]
+    assert event.announce.text == "Something went wrong with list_files. Nothing else was changed."
+    assert event.announce.priority == "high"
+    everything = result.message + json.dumps([e.model_dump(mode="json") for e in w.log.events])
+    assert "someone" not in everything and "hunter2" not in everything
+
+
+def test_cancel_is_not_swallowed_by_the_catch_all(tmp_path, monkeypatch):
+    async def go():
+        w = World(tmp_path)
+        await w.hello()
+
+        def cancel(*args, **kwargs):
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr("artemis.policy.gateway.project_files", cancel)
+        with pytest.raises(asyncio.CancelledError):
+            await w.call("list_files")
+
+    asyncio.run(go())

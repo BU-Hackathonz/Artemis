@@ -16,6 +16,9 @@ WRITE_EXTENSIONS = frozenset(
     {".py", ".txt", ".md", ".json", ".toml", ".csv", ".html", ".css", ".js"}
 )
 
+# Folders that are never listed, sent to the model or scanned.
+SKIP_DIRS = frozenset({".git", "__pycache__", ".venv", "node_modules"})
+
 _RESERVED = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
     | {f"COM{i}" for i in range(1, 10)}
@@ -92,3 +95,30 @@ def check_read_size(path: Path, rel: str) -> None:
 def check_write_size(content: str, rel: str) -> None:
     if len(content.encode("utf-8")) > MAX_WRITE_BYTES:
         raise PathRejected(f"{rel} is larger than 256 kilobytes, which is too big to write.")
+
+
+def _is_link(path: str) -> bool:
+    return os.path.islink(path) or os.path.isjunction(path)
+
+
+def project_files(root: Path, top: Path | None = None) -> list[str]:
+    """Every file under `top` (default: the whole project) as a sorted path relative to `root`.
+
+    Links and junctions are never followed, and anything that resolves outside the project
+    is left out, so a link inside the project can't expose files elsewhere. Skips SKIP_DIRS
+    and .env files.
+    """
+    base = root.resolve()
+    prefix = os.path.normcase(str(base)).rstrip("\\/") + os.sep
+    names: list[str] = []
+    for folder, dirs, files in os.walk(top or root, followlinks=False):
+        dirs[:] = sorted(
+            d for d in dirs if d not in SKIP_DIRS and not _is_link(os.path.join(folder, d))
+        )
+        for file in sorted(files):
+            if file.lower().startswith(".env"):
+                continue
+            resolved = Path(folder, file).resolve()
+            if os.path.normcase(str(resolved)).startswith(prefix):
+                names.append(resolved.relative_to(base).as_posix())
+    return names
