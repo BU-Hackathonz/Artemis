@@ -10,7 +10,9 @@ Setup (fetches the x64 DLL and the Whisper model): python -m artemis.voice.setup
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
+import inspect
 import logging
 import os
 import sys
@@ -151,13 +153,36 @@ class Announcer:
             return NullSpeaker()
         return self.sapi if self.sapi.available() else NullSpeaker()
 
+    def status(self) -> tuple[bool, str | None]:
+        """(voice_ready, screen_reader) as contracts.md voice.status and /health report them."""
+        name = self.current().name
+        return name != "none", "nvda" if name == "nvda" else None
+
     @property
     def voice_ready(self) -> bool:
-        return self.current().name != "none"
+        return self.status()[0]
 
     @property
     def screen_reader(self) -> str | None:
-        return "nvda" if self.current().name == "nvda" else None
+        return self.status()[1]
+
+    async def watch(self, callback: Callable[[bool, str | None], object], interval_s: float = 2.0) -> None:
+        """Call callback(voice_ready, screen_reader) now and on every change, e.g. NVDA started while idle.
+
+        Run as asyncio.create_task(announcer.watch(cb)); cancel the task to stop. callback may be async.
+        """
+        last = None
+        while True:
+            now = self.status()
+            if now != last:
+                last = now
+                try:
+                    result = callback(*now)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:  # one failed emit must not end status updates for the session
+                    log.exception("voice status callback failed")
+            await asyncio.sleep(interval_s)
 
     async def announce(self, text: str, priority: Priority) -> None:
         text = text.strip()

@@ -41,16 +41,71 @@ class FakeModel:
         return iter([Seg(" " + w) for w in self.text.split("|")]), None
 
 
-def make(seconds, text="Artemis,| create a Python program"):
+class FakeAnnouncer:
+    def __init__(self, log):
+        self.log = log
+
+    async def stop_speech(self):
+        self.log.append("stop_speech")
+
+
+def make(seconds, text="Artemis,| create a Python program", earcon_s=0.0, log=None):
     audio = np.zeros(int(RATE * seconds), np.float32)
     streams = []
+    log = [] if log is None else log
 
     def factory(cb):
+        log.append("mic_open")
         streams.append(FakeStream(cb, audio))
         return streams[-1]
 
+    def earcon(name):
+        log.append(name)
+        return earcon_s
+
     model = FakeModel(text)
-    return WhisperVoice(model=model, stream_factory=factory), model, streams
+    v = WhisperVoice(announcer=FakeAnnouncer(log), model=model, stream_factory=factory, earcon=earcon)
+    return v, model, streams
+
+
+def test_speech_stops_and_earcon_ends_before_mic_opens():
+    log = []
+    v, _, _ = make(1, log=log)
+    asyncio.run(v.start_listening())
+    asyncio.run(v.stop_listening("cr_1"))
+    assert log == ["stop_speech", "listening", "mic_open", "stopped"]
+
+
+def test_key_released_during_earcon_never_opens_mic():
+    log = []
+    v, model, streams = make(1, earcon_s=0.05, log=log)
+
+    async def tap():
+        start = asyncio.create_task(v.start_listening())
+        await asyncio.sleep(0.01)  # released mid-beep
+        text = await v.stop_listening("cr_1")
+        await start
+        return text
+
+    assert asyncio.run(tap()) == ""
+    assert streams == [] and not v.listening and "mic_open" not in log
+
+
+def test_release_and_repress_during_earcon_opens_one_mic():
+    log = []
+    v, _, streams = make(1, earcon_s=0.14, log=log)
+
+    async def bounce():
+        first = asyncio.create_task(v.start_listening())
+        await asyncio.sleep(0.05)
+        await v.stop_listening("cr_1")  # key up mid-beep
+        await asyncio.sleep(0.02)
+        second = asyncio.create_task(v.start_listening())  # key down again
+        await asyncio.gather(first, second)
+        await v.stop_listening("cr_2")
+
+    asyncio.run(bounce())
+    assert len(streams) == 1 and streams[0].closed and not v.listening  # no leaked, still-open mic
 
 
 def test_transcribes_and_strips_wake_word():
@@ -105,7 +160,8 @@ def test_missing_microphone_raises_voice_error():
     def broken(cb):
         raise OSError("Error querying device -1")
 
-    v = WhisperVoice(model=FakeModel("x"), stream_factory=broken)
-    with pytest.raises(VoiceError, match="Microphone not available"):
-        asyncio.run(v.start_listening())
+    v = WhisperVoice(announcer=FakeAnnouncer([]), model=FakeModel("x"), stream_factory=broken, earcon=lambda n: 0.0)
+    for _ in range(2):  # a failed start doesn't leave the key "held"; retrying raises again
+        with pytest.raises(VoiceError, match="Microphone not available"):
+            asyncio.run(v.start_listening())
     assert not v.listening

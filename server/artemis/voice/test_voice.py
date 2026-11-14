@@ -82,13 +82,53 @@ def test_stub_voice_returns_mvp_request():
     a, _, s, _ = router()
     v = StubVoice(announcer=a)
     asyncio.run(v.start_listening())
-    assert v.listening
+    assert v.listening and s.canceled == 1  # push-to-talk cut off speech first
     text = asyncio.run(v.stop_listening("cr_1"))
     assert text == "create a Python program that prints Hello World" and not v.listening
     asyncio.run(v.announce(f"Heard: {text}", "normal"))
     assert s.said == [("Heard: create a Python program that prints Hello World", False)]
     v.set_vocabulary(["main.py"])
     assert v.prompt == "main.py"
+
+
+def test_watch_reports_at_start_and_on_change_only():
+    a, nvda, sapi, state = router()
+    seen = []
+
+    async def run():
+        async def cb(ready, reader):  # async callbacks are awaited
+            seen.append((ready, reader))
+
+        task = asyncio.create_task(a.watch(cb, interval_s=0.01))
+        await asyncio.sleep(0.05)
+        state["running"] = True  # NVDA started while idle
+        await asyncio.sleep(0.05)
+        nvda.up = False  # NVDA still running, DLL gone
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+    asyncio.run(run())
+    assert seen == [(True, None), (True, "nvda"), (False, None)]
+
+
+def test_watch_survives_a_failing_callback():
+    a, _, _, state = router()
+    seen = []
+
+    def cb(ready, reader):
+        seen.append(reader)
+        if len(seen) == 1:
+            raise RuntimeError("emit failed")
+
+    async def run():
+        task = asyncio.create_task(a.watch(cb, interval_s=0.01))
+        await asyncio.sleep(0.05)
+        state["running"] = True
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+    asyncio.run(run())
+    assert seen == [None, "nvda"]
 
 
 if __name__ == "__main__":
