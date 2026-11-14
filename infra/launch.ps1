@@ -21,6 +21,7 @@ param(
     [string]$AppPath = "",
     [ValidateSet("ask", "stub", "claude")][string]$Agent = "ask",
     [switch]$Conversation,
+    [ValidateSet("whisper", "stub")][string]$Voice = "whisper",  # "stub" skips the mic and Whisper
     [switch]$NoPause  # for scripts and tests: never wait for Enter
 )
 
@@ -53,6 +54,9 @@ foreach ($candidate in $candidates) {
     if (Test-Path -LiteralPath $candidate) { $exe = (Resolve-Path -LiteralPath $candidate).Path; break }
 }
 if (-not $exe) {
+    if ($AppPath) {
+        Finish 1 "Artemis could not start: there is no app at the -AppPath you gave: $AppPath"
+    }
     Finish 1 ("Artemis could not start: the desktop app (artemis-client.exe) was not found.`n" +
         "Looked in:`n  " + ($candidates -join "`n  ") + "`n" +
         "Get it from GitHub: Actions > 'Windows exe (manual)' > Run workflow, download the " +
@@ -70,7 +74,7 @@ try {
     if ($chosen -eq "ask") {
         if ($env:ANTHROPIC_API_KEY) {
             $chosen = "claude"
-            Write-Host "Using the Anthropic API key already set in this window."
+            Write-Host "Using the Anthropic API key found in the environment (set in this window, or saved in Windows settings)."
         } else {
             Write-Host "Artemis demo launcher"
             Write-Host "Type your Anthropic API key (it is hidden and kept only in this window), or press Enter for the scripted stub agent."
@@ -101,11 +105,18 @@ try {
 
     Write-Host "Starting Artemis (agent: $chosen). Close the Artemis window to stop everything."
     $startArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Here "start.ps1"),
-        "-Agent", $chosen, "-AppPath", $exe)
+        "-Agent", $chosen, "-Voice", $Voice, "-AppPath", $exe)
     if ($Conversation) { $startArgs += "-Conversation" }
-    & powershell.exe @startArgs
+    # start.ps1 exits 0 even when the core dies while the app runs, so watch its output for that
+    # and keep the window open: a double-click user must be able to read why it stopped.
+    $coreDied = $false
+    & powershell.exe @startArgs | ForEach-Object {
+        Write-Host $_
+        if ($_ -match "The core stopped while the app was running") { $coreDied = $true }
+    }
     $code = $LASTEXITCODE
     if ($code -ne 0) { Finish $code "Artemis stopped with an error (exit code $code). The lines above say why." }
+    if ($coreDied) { Finish 1 "Artemis stopped because its core stopped while the app was running. The lines above say why." }
 } finally {
     if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
     if ($secure) { $secure.Dispose() }

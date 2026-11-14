@@ -71,7 +71,7 @@ powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets 
 3. Runs `start.ps1 -Agent <stub|claude> -AppPath <exe>`. Closing the Artemis window stops the core.
 
 The key lives only in the launcher's process environment: never in a file, on a command line, in a
-log or in the exe, and it is removed when the launcher exits. Options: `-Agent stub|claude`,
+log or in the exe, and it ends with the launcher process (no managed string copy can be zeroed). Options: `-Agent stub|claude`, `-Voice whisper|stub`,
 `-AppPath <exe>`, `-Conversation`, `-NoPause` (scripts: never wait for Enter).
 
 This is **not** one-click packaging: it still needs this repository, `uv` and the synced
