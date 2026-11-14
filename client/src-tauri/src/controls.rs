@@ -137,13 +137,13 @@ fn place(window: &WebviewWindow, view: View) -> Result<(), String> {
     let chrome_width = outer.width.saturating_sub(inner.width) as f64 / scale;
     let chrome_height = outer.height.saturating_sub(inner.height) as f64 / scale;
     let width = (if view == View::Settings {
-        480.0_f64
+        420.0_f64
     } else {
         680.0_f64
     })
     .min((available_width - 24.0 - chrome_width).max(1.0));
     let height = (if view == View::Settings {
-        680.0_f64
+        520.0_f64
     } else {
         680.0_f64
     })

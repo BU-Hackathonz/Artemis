@@ -147,7 +147,7 @@ pub fn place(app: &AppHandle) -> Result<(), String> {
         .ok_or("No monitor is available.")?;
     let area = monitor.work_area();
     let scale = monitor.scale_factor();
-    let width = 184.0_f64.min((area.size.width as f64 / scale - 24.0).max(1.0));
+    let width = 232.0_f64.min((area.size.width as f64 / scale - 24.0).max(1.0));
     // The slim pill fits one row at every width place() allows, so the window height is fixed.
     window
         .set_size(tauri::LogicalSize::new(width, 48.0))

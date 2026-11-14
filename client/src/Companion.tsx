@@ -44,6 +44,7 @@ export function Companion() {
     <LiquidRing kick={0} inputs={{connected: !error && status.connection === 'ready', taskState: status.task, microphone: status.microphone, approval: status.approval}}/>
     {/* The island's voice bars (decorative; the status text carries the meaning). They move while
         Artemis works or listens, and are still under reduced motion. */}
+    <span className="companion-word" aria-hidden="true">artemis<b>.</b></span>
     <span className="companion-bars" data-active={listening || working ? 'true' : undefined} aria-hidden="true">
       {BARS.map((h, i) => <span key={i} style={{height: `${h}px`, animationDelay: `${(i * 0.13) % 0.9}s`}}/>)}
     </span>

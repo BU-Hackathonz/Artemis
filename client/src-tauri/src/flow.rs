@@ -15,9 +15,9 @@ use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWi
 use crate::companion::{require_label, CompanionState};
 
 /// Where the notch's ring sits inside the compact window (logical px), from the notch's own CSS:
-/// the pill is 146 px wide, centred; the ring's centre is 21 px from the pill's left edge and 24 px
+/// the pill is 216 px wide, centred; the ring's centre is 21 px from the pill's left edge and 24 px
 /// below the top of the 48 px window.
-const PILL_WIDTH: f64 = 146.0;
+const PILL_WIDTH: f64 = 216.0;
 const RING_FROM_PILL_LEFT: f64 = 21.0;
 const RING_FROM_TOP: f64 = 24.0;
 
@@ -133,17 +133,17 @@ mod tests {
 
     #[test]
     fn the_ring_is_found_from_the_notchs_position_and_the_overlay_origin() {
-        // A 184 px wide notch window at screen (800, 12), overlay at the screen origin, scale 1.
-        let (x, y) = ring_centre((800, 12), 184.0, (0, 0), 1.0);
-        assert_eq!(x, 800.0 + 19.0 + 21.0);
+        // A 232 px wide notch window at screen (800, 12), overlay at the screen origin, scale 1.
+        let (x, y) = ring_centre((800, 12), 232.0, (0, 0), 1.0);
+        assert_eq!(x, 800.0 + 8.0 + 21.0);
         assert_eq!(y, 12.0 + 24.0);
     }
 
     #[test]
     fn it_converts_physical_pixels_with_the_scale_and_the_overlay_origin() {
         // 125 percent scale: 1000 physical px right of the overlay origin is 800 css px.
-        let (x, y) = ring_centre((1056, 15), 184.0, (56, 0), 1.25);
-        assert_eq!(x, 800.0 + 19.0 + 21.0);
+        let (x, y) = ring_centre((1056, 15), 232.0, (56, 0), 1.25);
+        assert_eq!(x, 800.0 + 8.0 + 21.0);
         assert_eq!(y, 12.0 + 24.0);
     }
 

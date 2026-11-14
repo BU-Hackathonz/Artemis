@@ -67,6 +67,8 @@ footer { color: var(--muted); text-align: center; font-size: .85rem; }
 .companion[data-tone=attention] {border-color:rgba(240,171,252,.85);}
 .companion .agent-ring {width:26px; height:26px; flex:0 0 26px; margin:0;}
 .companion .agent-ring-fallback {border-width:2px;}
+.companion-word {width:58px; flex-shrink:0; font-size:15px; font-weight:600; color:#fff; white-space:nowrap;}
+.companion-word b {color:#c4b5fd;}
 .companion-bars {width:52px; height:22px; flex-shrink:0; display:flex; align-items:center; justify-content:space-between;}
 .companion-bars span {width:3px; border-radius:2px; background:#d8c4fb; opacity:.55;}
 .companion-bars[data-active=true] span {opacity:.95; animation:companion-bar .9s ease-in-out infinite alternate;}
