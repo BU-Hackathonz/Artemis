@@ -3,6 +3,10 @@ import {LiquidRing} from './LiquidRing';
 import {platform} from './platform';
 import {companionText, startingStatus} from './desktopStatus';
 
+// Resting heights of the eight voice bars, as in the GNOME island and the first Windows island. Eight
+// 3 px bars with 4 px gaps are 52 px wide, the width the notch has always reserved for its indicator.
+const BARS = [4, 6, 4, 6, 4, 6, 4, 4];
+
 export function Companion() {
   const [status, setStatus] = useState(startingStatus);
   const [pollError, setPollError] = useState('');
@@ -30,6 +34,7 @@ export function Companion() {
   }
   const text = error || companionText(status);
   const listening = status.microphone === 'listening';
+  const working = status.task === 'queued' || status.task === 'working' || status.task === 'running';
   // The ring is decorative: the status text (read by screen readers) carries the same meaning.
   const tone = error ? 'error' : status.approval ? 'attention' : listening ? 'listening' : status.connection === 'ready' ? 'ready' : 'pending';
   return <main className="companion" data-tone={tone} aria-label="Artemis desktop status" onKeyDown={event => {
@@ -37,9 +42,11 @@ export function Companion() {
   }}>
     <h1 className="companion-heading">Artemis desktop status</h1>
     <LiquidRing kick={0} inputs={{connected: !error && status.connection === 'ready', taskState: status.task, microphone: status.microphone, approval: status.approval}}/>
-    <svg className="companion-wave" data-listening={listening ? 'true' : undefined} viewBox="0 0 40 16" aria-hidden="true" focusable="false">
-      <path d="M1 8 C 5 2, 9 14, 13 8 S 21 2, 25 8 S 33 14, 37 8 S 39 6, 39 8" />
-    </svg>
+    {/* The island's voice bars (decorative; the status text carries the meaning). They move while
+        Artemis works or listens, and are still under reduced motion. */}
+    <span className="companion-bars" data-active={listening || working ? 'true' : undefined} aria-hidden="true">
+      {BARS.map((h, i) => <span key={i} style={{height: `${h}px`, animationDelay: `${(i * 0.13) % 0.9}s`}}/>)}
+    </span>
     <p id="companion-status" className="companion-status" title={text} role={error ? 'alert' : undefined} aria-live={error ? 'assertive' : 'off'}>{text}</p>
     <button ref={open} className="companion-open" title={text} aria-label="Open settings and controls" aria-describedby="companion-status" onClick={() => void showControls()}>
       <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 6.5 8 10.5 12 6.5" /></svg>
