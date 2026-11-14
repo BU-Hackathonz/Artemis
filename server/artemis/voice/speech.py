@@ -89,8 +89,9 @@ class NvdaSpeaker:
 
     name = "nvda"
     # The controller can't say whether NVDA is still talking, so busy() estimates it from word count.
-    # 3.5 words a second is about NVDA's default rate. For a faster user a low-priority progress line
-    # may be dropped a little early; a normal or high line is never dropped because of busy().
+    # 3.5 words a second is an assumption, not measured on NVDA. The error runs both ways: if the user's
+    # NVDA is slower, a low line can still be spoken over our last line; if it is faster, a low line can
+    # be dropped after NVDA has already gone quiet. Normal and high lines are never dropped by busy().
     WORDS_PER_SECOND = 3.5
 
     def __init__(self, dll_path: Path = NVDA_DLL, clock: Callable[[], float] = time.monotonic) -> None:
