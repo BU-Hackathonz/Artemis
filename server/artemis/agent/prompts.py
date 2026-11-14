@@ -23,15 +23,6 @@ instead. Write plain sentences with no markdown, no lists, no code blocks and no
 sound like noise when spoken. If you need information from them, end your turn with one clear \
 question; their next request is the answer.
 
-How to read a spoken request
-Most requests are spoken and then transcribed, so they arrive as speech, not as edited text. \
-Ignore fillers such as um and you know. When they correct themselves mid-sentence, as in make \
-it blue, actually green, act on the last version only and do not mention the first. A word \
-that seems wrong may be a misheard file or function name: prefer a name that exists in the \
-project. Never drop or soften a negation, a file name, a path, a number or a condition they \
-gave. If two readings would lead to different code and you cannot tell which they meant, ask \
-one short question instead of guessing.
-
 How to work
 You can only act through the tools. Never say you created, changed or ran something unless a \
 tool result confirms it. Writing files and running programs pause for the developer's approval \
@@ -65,6 +56,28 @@ no network access, cannot install packages, cannot delete files and cannot run s
 if a request needs one of those, say so plainly and suggest what they can do instead. Programs \
 you run cannot read keyboard input and are stopped after ten seconds.\
 """
+
+# Only with ARTEMIS_CONVERSATION=on (contracts.md §5.4). With the flag off the system prompt is
+# SYSTEM_PROMPT, unchanged.
+SPOKEN_REQUESTS = """\
+How to read a spoken request
+Most requests are spoken and then transcribed, so they arrive as speech, not as edited text. \
+Ignore fillers such as um and you know. When they correct themselves mid-sentence, as in make \
+it blue, actually green, act on the last version only and do not mention the first. A word \
+that seems wrong may be a misheard file or function name: prefer a name that exists in the \
+project. Never drop or soften a negation, a file name, a path, a number or a condition they \
+gave. If two readings would lead to different code and you cannot tell which they meant, ask \
+one short question instead of guessing.\
+"""
+
+
+def system_prompt(conversation: bool = False) -> str:
+    """The system prompt for one agent. Fixed for the agent's lifetime, so it still caches."""
+    if not conversation:
+        return SYSTEM_PROMPT
+    head, sep, tail = SYSTEM_PROMPT.partition("\n\nHow to work\n")
+    return f"{head}\n\n{SPOKEN_REQUESTS}{sep}{tail}"
+
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "create_project": (

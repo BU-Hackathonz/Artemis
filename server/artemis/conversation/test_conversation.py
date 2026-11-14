@@ -4,7 +4,12 @@ import pytest
 
 from artemis.contracts import EventDraft, Style
 from artemis.conversation import INTENTS, Controller, FollowUp, match, simplify
-from artemis.conversation.controller import KEYBOARD_ONLY, WAITING
+from artemis.conversation.controller import (
+    HEARTBEAT,
+    KEYBOARD_ONLY,
+    NOTHING_TO_APPROVE,
+    WAITING,
+)
 
 # ----- phrases -----
 
@@ -125,6 +130,39 @@ def test_a_request_with_nothing_running_starts_a_task_with_the_exact_words():
 
 def test_an_empty_transcript_does_nothing():
     assert Controller().decide("   ").action == "none"
+    assert working().decide("").action == "none"
+
+
+def test_an_empty_transcript_with_an_approval_open_says_the_approval_again():
+    # The tap that recorded nothing may have cut the approval announcement off (§5.1).
+    d = awaiting_approval().decide("")
+    assert (d.intent, d.action, d.say, d.priority, d.reminder) == ("empty", "say", APPROVAL, "high", None)
+
+
+@pytest.mark.parametrize("said", ["Artemis", "Hey Artemis.", "hey artemus", "OK Artemis!"])
+def test_only_the_wake_word_is_never_a_task(said):
+    c = working()
+    d = c.decide(said)
+    assert (d.intent, d.action, d.say, d.text) == ("wake_word", "none", None, None)
+    assert c.queued is None
+    assert Controller().decide(said).action == "none"
+    assert awaiting_approval().decide(said).say == APPROVAL
+
+
+def test_the_heartbeat_is_not_a_step_in_the_status_answer():
+    c = working()
+    c.observe(event("agent.message", text="Reading main.py.", kind="progress"))
+    c.observe(event("agent.message", text=HEARTBEAT, kind="progress"))
+    assert c.decide("status").say == "I'm working on: build a to-do app. Last step: Reading main.py."
+    fresh = working()
+    fresh.observe(event("agent.message", text=HEARTBEAT, kind="progress"))
+    assert fresh.decide("status").say == "I'm working on: build a to-do app."
+
+
+def test_the_heartbeat_text_matches_the_core():
+    from artemis.core.session import STILL_WORKING
+
+    assert HEARTBEAT == STILL_WORKING
 
 
 def test_stop_talking_never_cancels_the_task():
@@ -195,7 +233,23 @@ def test_yes_with_no_approval_open_is_an_ordinary_answer():
     assert c.expecting_reply is True
     d = c.decide("Yes, minimal. And dark mode.")
     assert (d.action, d.text) == ("submit", "Yes, minimal. And dark mode.")
-    assert c.decide("yes").action == "submit"
+
+
+@pytest.mark.parametrize("said", ["yes", "Approve.", "approve it", "no", "reject"])
+def test_approval_words_with_nothing_to_answer_are_never_a_task(said):
+    for c in (Controller(), working(), finished(answer="Done. It printed Hello, World.")):
+        d = c.decide(said)
+        assert (d.intent, d.action, d.say, d.text) == ("approval_word", "say", NOTHING_TO_APPROVE, None)
+        assert c.queued is None
+
+
+@pytest.mark.parametrize("said", ["yes", "No.", "yes please"])
+def test_a_bare_yes_or_no_answers_the_agents_question(said):
+    # Design A4: the agent asks by ending its turn; the next utterance is the answer. Anything
+    # that answer leads to still has to be approved on the keyboard.
+    c = finished(answer="Shall I add tests?")
+    d = c.decide(said)
+    assert (d.action, d.text) == ("submit", said)
 
 
 def test_an_interruption_never_hides_a_pending_approval():

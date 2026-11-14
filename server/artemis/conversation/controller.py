@@ -11,10 +11,10 @@ from typing import Literal
 
 from artemis.contracts import Style
 
-from .intents import match
+from .intents import match, simplify
 
 Action = Literal[
-    "none",  # nothing to do (an empty transcript)
+    "none",  # nothing to do (an empty transcript or only the wake word, no approval open)
     "submit",  # start a task with `text`
     "queue",  # a task is running: `text` was kept and becomes the next task
     "say",  # just speak `say`
@@ -27,12 +27,16 @@ Action = Literal[
 FINAL_STATES = ("succeeded", "failed", "canceled")
 KEYBOARD_ONLY = "Use the keyboard to decide: Enter on the dialog to approve, Escape to reject."
 WAITING = "A decision is still waiting. Say repeat to hear it again."
+NOTHING_TO_APPROVE = "There's nothing to approve right now."
+# The core's heartbeat line (core/session.py STILL_WORKING). It is not a step of the task, so
+# status never reports it.
+HEARTBEAT = "Still working."
 _MAX_SPOKEN_REQUEST = 80
 
 
 @dataclass(frozen=True)
 class Decision:
-    intent: str  # an intent name from intents.py, or "request"
+    intent: str  # an intent name from intents.py, "request", "empty" or "wake_word"
     action: Action = "none"
     say: str | None = None
     priority: Literal["low", "normal", "high"] = "normal"
@@ -106,7 +110,8 @@ class Controller:
                 self.expecting_reply = task.state == "succeeded" and task.answer.rstrip().endswith("?")
         elif event.type == "agent.message":
             if data.get("kind") == "progress":
-                task.progress = data.get("text", "")
+                if data.get("text", "") != HEARTBEAT:
+                    task.progress = data.get("text", "")
             else:
                 task.answer = data.get("text", "")
         elif event.type == "approval.requested":
@@ -136,8 +141,13 @@ class Controller:
     # ----- what the developer said -----
 
     def decide(self, transcript: str) -> Decision:
-        if not transcript.strip():
-            return Decision("empty")
+        if not transcript.strip() or not simplify(transcript):
+            # An accidental push-to-talk tap, or only the wake word: never a task. The tap (or
+            # the wake word) may have cut the approval announcement off, so say it again, once.
+            intent = "empty" if not transcript.strip() else "wake_word"
+            if self.approval:
+                return Decision(intent, "say", self.approval, "high")
+            return Decision(intent)
         intent = match(transcript)
         task = self.task
         active = task is not None and task.active
@@ -191,9 +201,17 @@ class Controller:
                 intent, "rate", "I can't change how fast I speak yet.",
                 delta=-1 if intent == "slower" else 1, reminder=reminder,
             )
-        if intent == "approval_word" and active and task.state == "awaiting_approval":
-            # A misheard "yes" must never write or run anything.
-            return Decision(intent, "say", KEYBOARD_ONLY, "high")
+        if intent == "approval_word":
+            if self.approval or (active and task.state == "awaiting_approval"):
+                # A misheard "yes" must never write or run anything.
+                return Decision(intent, "say", KEYBOARD_ONLY, "high")
+            if not active and self.expecting_reply:
+                # The agent's last answer was a question, so "yes" or "no" is the answer to it
+                # (design A4: the next request is the reply). Safe: anything it leads to that
+                # writes or runs still needs a keyboard approval.
+                return Decision("request", "submit", text=transcript)
+            # Otherwise never a task or a follow-up: there is nothing for "yes" to answer.
+            return Decision(intent, "say", NOTHING_TO_APPROVE)
 
         # Anything else is for the agent, in the developer's own words.
         if active:

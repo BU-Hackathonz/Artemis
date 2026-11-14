@@ -7,8 +7,8 @@ import pytest
 from artemis.agent.stub import StubAgent
 from artemis.contracts import Answered, Style, TaskRequest
 from artemis.conversation import Controller
-from artemis.conversation.controller import KEYBOARD_ONLY, WAITING
-from artemis.core.session import Session
+from artemis.conversation.controller import KEYBOARD_ONLY, NOTHING_TO_APPROVE, WAITING
+from artemis.core.session import APPROVAL_WORDS, Session, normalize
 from artemis.policy.testing import FakeRunner
 
 
@@ -88,8 +88,8 @@ class World:
         return list(self.session.tasks.values())
 
 
-async def at_first_approval(tmp_path):
-    w = World(tmp_path)
+async def at_first_approval(tmp_path, conversation=True):
+    w = World(tmp_path, conversation=conversation)
     await w.say("Create a Python program that prints Hello World")
     await w.until(lambda: w.pending() is not None)
     return w
@@ -139,13 +139,43 @@ async def test_a_status_question_is_answered_without_a_new_task_or_touching_the_
     assert w.transcripts()[-1] == ("What are you doing?", "status")
 
 
-@pytest.mark.parametrize("said", ["Yes.", "Approve it", "no"])
-async def test_spoken_words_never_decide_an_approval(tmp_path, said):
-    w = await at_first_approval(tmp_path)
+@pytest.mark.parametrize("conversation", [False, True], ids=["flag_off", "flag_on"])
+@pytest.mark.parametrize("said", ["Yes.", "yes", "approve", "Approve.", "Approve it", "no", "Artemis, approve."])
+async def test_spoken_words_never_decide_an_approval(tmp_path, said, conversation):
+    w = await at_first_approval(tmp_path, conversation=conversation)
+    approval = w.pending()
     await w.say(said)
-    assert w.voice.spoken[-1] == KEYBOARD_ONLY
-    assert w.pending() is not None and w.tasks()[0].active
+    if conversation or normalize(said) in APPROVAL_WORDS:
+        assert w.voice.spoken[-1] == KEYBOARD_ONLY
+    assert w.pending() is not None and w.pending().approval_id == approval.approval_id
+    assert w.tasks()[0].state == "awaiting_approval" and len(w.tasks()) == 1
+    assert not [e for e in w.session.bus.history if e.type == "approval.resolved"]
     assert not list((tmp_path / "projects").glob("**/*.py"))  # nothing was written
+
+
+async def test_an_empty_tap_during_an_approval_says_it_again_once(tmp_path):
+    w = await at_first_approval(tmp_path)
+    approval = w.pending()
+    before = len(w.voice.spoken)
+    await w.say("")
+    assert w.voice.spoken[before:] == [approval.summary]  # once, and nothing else
+    said = [e for e in w.session.bus.history if e.announce and e.announce.text == approval.summary]
+    assert said[-1].announce.priority == "high"
+    assert w.pending().approval_id == approval.approval_id and len(w.tasks()) == 1
+
+
+async def test_with_the_flag_off_an_empty_tap_stays_silent(tmp_path):
+    w = await at_first_approval(tmp_path, conversation=False)
+    before = len(w.voice.spoken)
+    await w.say("")
+    assert w.voice.spoken[before:] == [] and w.pending() is not None
+
+
+async def test_only_the_wake_word_starts_nothing(tmp_path):
+    w = World(tmp_path)
+    await w.say("Hey Artemis.")
+    assert w.tasks() == [] and w.voice.spoken == ["Heard: Hey Artemis."]
+    assert w.transcripts() == [("Hey Artemis.", "wake_word")]
 
 
 async def test_stop_talking_stops_the_voice_and_leaves_the_task_and_the_approval(tmp_path):
@@ -262,3 +292,73 @@ async def test_slower_explains_itself_until_the_voice_can_change_rate(tmp_path):
     w.voice.set_rate = rates.append
     await w.say("faster")
     assert rates == [1]
+
+
+async def test_a_failing_set_rate_is_spoken_and_the_session_keeps_working(tmp_path):
+    w = World(tmp_path)
+
+    def broken(delta):
+        raise RuntimeError("SAPI went away")
+
+    w.voice.set_rate = broken
+    await w.say("slower")  # must not raise
+    errors = [e for e in w.session.bus.history if e.type == "error"]
+    assert [e.data["code"] for e in errors] == ["conversation_failed"]
+    assert errors[0].announce.priority == "high"
+    assert w.voice.spoken[-1] == "Sorry, that didn't work. Please say it again."
+    await w.say("Create a Python program that prints Hello World")
+    await w.until(lambda: w.pending() is not None)
+
+
+async def test_a_controller_bug_never_breaks_the_event_stream(tmp_path, monkeypatch):
+    w = World(tmp_path)
+
+    def broken(event):
+        raise RuntimeError("controller bug")
+
+    monkeypatch.setattr(w.session.conversation, "observe", broken)
+    await w.say("Create a Python program that prints Hello World")
+    await w.approve()
+    await w.approve()
+    await w.until(lambda: not w.session.active_task)
+    assert w.tasks()[0].state == "succeeded"
+    assert [e.data["state"] for e in w.session.bus.history if e.type == "task.state"][-1] == "succeeded"
+
+
+async def test_a_bug_in_decide_is_spoken_not_raised(tmp_path, monkeypatch):
+    w = World(tmp_path)
+
+    def broken(text):
+        raise RuntimeError("controller bug")
+
+    monkeypatch.setattr(w.session.conversation, "decide", broken)
+    await w.say("status")
+    assert [e.data["code"] for e in w.session.bus.history if e.type == "error"] == ["conversation_failed"]
+
+
+async def test_the_heartbeat_is_not_reported_as_the_last_step(tmp_path):
+    agent = Slow()
+    w = World(tmp_path, agent=agent)
+    await w.say("build a to-do app")
+    await w.until(lambda: w.tasks()[0].state == "working")
+    await w.session._still_working(w.tasks()[0].task_id)
+    assert w.voice.spoken[-1] == "Still working."
+    await w.say("What are you doing?")
+    assert w.voice.spoken[-1] == "I'm working on: build a to-do app."
+    agent.release.set()
+
+
+async def test_yes_with_nothing_to_approve_is_neither_queued_nor_run(tmp_path):
+    agent = Slow()
+    w = World(tmp_path, agent=agent)
+    await w.say("yes")
+    assert w.voice.spoken[-1] == NOTHING_TO_APPROVE and w.tasks() == []
+    await w.say("build a to-do app")
+    await w.until(lambda: w.tasks()[0].state == "working")
+    await w.say("Yes.")
+    assert w.voice.spoken[-1] == NOTHING_TO_APPROVE
+    assert w.session.conversation.queued is None
+    agent.release.set()
+    await w.until(lambda: not w.session.active_task)
+    await asyncio.sleep(0.05)
+    assert len(w.tasks()) == 1 and [t.request for t in agent.seen] == ["build a to-do app"]

@@ -251,7 +251,9 @@ async def test_push_to_talk_creates_a_task(client, core, voice):
     assert next(iter(session.tasks.values())).request.source == "voice"
 
 
-async def test_spoken_while_active_and_control_words(client, core, voice):
+async def test_spoken_while_active_and_control_words(client, core, voice, monkeypatch):
+    # §5.2 as written: the conversation controller (§5.4) must be off for this session.
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
     sid, session = await start(client, core)
     await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
                       json={"client_request_id": "cr_1", "source": "keyboard", "text": "hello"})

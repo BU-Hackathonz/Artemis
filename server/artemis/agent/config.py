@@ -21,6 +21,9 @@ class Config:
     # Only for an API key that isn't scoped to a workspace: sent as the anthropic-workspace-id
     # header. Never logged or spoken.
     workspace_id: str | None = None
+    # ARTEMIS_CONVERSATION=on (contracts.md §5.4): adds the spoken-request paragraph to the
+    # system prompt. Off by default, so the prompt is unchanged.
+    conversation: bool = False
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -35,4 +38,5 @@ class Config:
             projects_dir=Path(env.get("ARTEMIS_PROJECTS_DIR") or cls.projects_dir),
             max_iterations=int(env.get("ARTEMIS_MAX_ITERATIONS", cls.max_iterations)),
             workspace_id=env.get("ANTHROPIC_WORKSPACE_ID", "").strip() or None,
+            conversation=env.get("ARTEMIS_CONVERSATION", "off").lower() == "on",
         )

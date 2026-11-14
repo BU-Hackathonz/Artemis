@@ -124,7 +124,10 @@ class Session:
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
         if self.conversation:
-            self.conversation.observe(draft)
+            try:
+                self.conversation.observe(draft)
+            except Exception:  # a controller bug must never break the event stream
+                log.exception("conversation controller failed to observe %s", draft.type)
 
     @property
     def active_task(self) -> Task | None:
@@ -273,7 +276,17 @@ class Session:
     async def spoken(self, text: str, client_request_id: str) -> None:
         """Handle a final transcript: control words, the one-task rule, or a new task."""
         if self.conversation:
-            await self._converse(text, client_request_id)
+            try:
+                await self._converse(text, client_request_id)
+            except Exception:  # spoken, never silent, and the session keeps working
+                log.exception("conversation failed")
+                active = self.active_task
+                await self.error(
+                    "conversation_failed",
+                    "Sorry, that didn't work.",
+                    "Please say it again.",
+                    task_id=active.task_id if active else None,
+                )
             return
         await self.emit(
             EventDraft(

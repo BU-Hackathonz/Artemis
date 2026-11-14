@@ -247,11 +247,13 @@ transcript, plus `intent`: `"request"` or the name of the built-in phrase.
   | `stop`, `stop talking`, `be quiet` | Stops speech only; the task keeps going. With a task active and no approval open, the core adds "Say cancel to stop the task." unless speech was cut off |
   | `cancel`, `cancel the task`, `never mind` | Drops the waiting follow-up if there is one ("Dropped: …"); otherwise cancels the active task; otherwise "Nothing to cancel." |
   | `repeat`, `say that again` | With an approval open, its summary again at `high`; otherwise the last announcement |
-  | `what are you doing`, `status`, `are you done` | A fixed sentence from task state. No task is created |
+  | `what are you doing`, `status`, `are you done` | A fixed sentence from task state. No task is created. The "Still working." heartbeat is never reported as the last step |
   | `which file did you change`, `what changed` | The files changed by the current or last task |
   | `keep it brief`, `deep dive`, `normal mode`, `visual mode`, `code mode` | Sets `TaskContext.style` for the following tasks and confirms it |
   | `slower`, `faster` | See §5.3 |
   | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | Never applied: "Use the keyboard to decide…" as in §5.2 |
+  | `approve`, `yes`, `reject`, `no` with no approval open | If no task is active and the agent's last answer was a question: the answer to it, sent as the next request (design A4; anything it leads to is still approved on the keyboard). Otherwise "There's nothing to approve right now.", never a task or a follow-up |
+  | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high` (`intent` is `wake_word` for the wake word) |
 
   No phrase can approve a write or a run, hide a warning, or run code.
 - **A spoken request while a task is active** is kept as the one waiting follow-up ("I'll do that
@@ -260,9 +262,16 @@ transcript, plus `intent`: `"request"` or the name of the built-in phrase.
   a normal task, announced with "Starting the follow-up." and then read back by the usual
   "Working on: …". When it fails or is canceled, the follow-up is
   dropped and the core says so. A typed request still gets `409 task_active`.
-- **An interruption never hides an open approval** (adds to §5.1). After any utterance handled
-  while an approval is open, the core says "A decision is still waiting. Say repeat to hear it
-  again."
+- **An interruption never hides an open approval** (adds to §5.1). While an approval is open,
+  `stop`, the changed-files and answer-style phrases, `slower`/`faster` and `cancel` of a waiting
+  follow-up add "A decision is still waiting. Say repeat to hear it again."; `repeat`, `status`,
+  an empty tap and the wake word alone say the approval summary itself; approval words get
+  "Use the keyboard to decide…"; a queued request adds "A decision is still waiting".
+- **Errors.** If handling an utterance fails (for example the voice can't change its rate), the
+  core speaks an `error` with code `conversation_failed` and the session keeps working.
+- **Agent prompt.** With the flag on, the agent's system prompt also gets a "How to read a spoken
+  request" paragraph (`artemis.agent.prompts.system_prompt(True)`). With it off, the system prompt
+  is unchanged.
 - **A clarifying question ends the task** (design A4 stands): the developer's next utterance is a
   new task in the same agent conversation. `/tasks/{tid}/reply` and `awaiting_reply` stay reserved.
 
