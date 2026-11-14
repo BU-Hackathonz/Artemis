@@ -201,8 +201,9 @@ class Runner(Protocol):
 ### 5.1 Push-to-talk cuts off speech
 On `POST /voice/listen {action: "start"}`, the core only calls `voice.start_listening()`. That
 call does the whole sequence: stop current speech (SAPI purge, or NVDA's `cancelSpeech`), play the
-"listening" earcon to the end, then open the mic. `stop_listening()` keeps the mic open for a
-0.35 s post-roll (the end of the last word), closes it, then plays the "stopped" earcon.
+"listening" earcon to the end, then open the mic. `stop_listening()` plays the "stopped" earcon and
+closes the mic. Only when the opt-in post-roll is enabled (`ARTEMIS_PTT_POST_ROLL`, seconds, e.g. 0.35;
+default 0, off) does it keep the mic open that long (the end of the last word), close it, then play the earcon.
 The core doesn't call `stop_speech()` itself here. Artemis's own voice (SAPI through the speakers)
 must never be recorded and transcribed as a request. The client's own "Stop speech" control is
 unchanged. Cutting off speech never hides an open approval: see §5.4.

@@ -6,8 +6,18 @@ import pytest
 
 np = pytest.importorskip("numpy")  # skip, don't fail collection, without the voice group
 
-from artemis.voice.listen import MAX_SECONDS, POST_ROLL, RATE, VoiceError, WhisperVoice  # noqa: E402
-from artemis.voice.text import PROMPT_LEAD
+from artemis.voice.listen import MAX_SECONDS, RATE, VoiceError, WhisperVoice  # noqa: E402
+from artemis.voice.text import NATURAL_LEAD
+
+LIST_PROMPT = "Hey Artemis, Artemis, Python, main.py"  # main's #98 prompt, still the default
+SETTINGS = ("ARTEMIS_WHISPER_MODEL", "ARTEMIS_WHISPER_BEAM", "ARTEMIS_PTT_POST_ROLL", "ARTEMIS_WHISPER_PROMPT")
+
+
+@pytest.fixture(autouse=True)
+def default_settings(monkeypatch):
+    """The demo window may have opt-in settings set (demo.md setup); every test starts from the defaults."""
+    for name in SETTINGS:
+        monkeypatch.delenv(name, raising=False)
 
 
 class FakeStream:
@@ -56,7 +66,7 @@ class FakeAnnouncer:
         self.log.append("stop_speech")
 
 
-def make(seconds, text="Artemis,| create a Python program", earcon_s=0.0, log=None, audio=None, segs=None, post_roll=0.0):
+def make(seconds, text="Artemis,| create a Python program", earcon_s=0.0, log=None, audio=None, segs=None, post_roll=None):
     audio = speech_like(seconds) if audio is None else audio
     streams = []
     log = [] if log is None else log
@@ -75,10 +85,39 @@ def make(seconds, text="Artemis,| create a Python program", earcon_s=0.0, log=No
     return v, model, streams
 
 
-def test_mic_stays_open_briefly_after_release_and_the_stopped_earcon_is_never_recorded():
-    # David's hardware run lost the last words ("and run it"): people let go while still speaking.
+def test_defaults_are_mains_speech_settings():
+    # Avery's call for #101: today's defaults stay; beam 5, post-roll and the natural prompt are opt-in.
     log = []
-    v, model, streams = make(1, log=log, post_roll=0.05)
+    v, model, streams = make(1, log=log)
+    closed_at_earcon = []
+    v._earcon = lambda name: (log.append(name), closed_at_earcon.append(streams[0].closed if streams else None), 0.0)[2]
+    assert (v.model_name, v.beam_size, v.post_roll, v.natural_prompt) == ("small.en", 1, 0.0, False)
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_1")) == "create a Python program"
+    n, kw = model.calls[0]
+    assert n == RATE and kw["beam_size"] == 1 and kw["initial_prompt"] == LIST_PROMPT
+    assert log == ["stop_speech", "listening", "mic_open", "stopped"]
+    assert closed_at_earcon == [None, False]  # as on main: "stopped" plays, then the mic closes at once
+    v.set_vocabulary(["LoginForm"])
+    assert v.prompt == LIST_PROMPT + ", LoginForm"
+
+
+def test_default_release_never_waits():
+    # No post-roll: a release with nothing to transcribe finishes without a single await.
+    v, _, streams = make(1, audio=np.zeros(RATE, np.float32))
+    asyncio.run(v.start_listening())
+    stop = v.stop_listening("cr_1")
+    with pytest.raises(StopIteration):
+        stop.send(None)
+    assert streams[0].closed and v._tail is None
+
+
+def test_mic_stays_open_briefly_after_release_and_the_stopped_earcon_is_never_recorded(monkeypatch):
+    # Opt-in. David's hardware run lost the last words ("and run it"): people let go while still speaking.
+    monkeypatch.setenv("ARTEMIS_PTT_POST_ROLL", "0.35")
+    log = []
+    v, model, streams = make(1, log=log)
+    assert v.post_roll == 0.35
     heard_after_close = []
     v._earcon = lambda name: (log.append(name), heard_after_close.append(streams[0].closed if streams else None), 0.0)[2]
     tail = speech_like(0.3)
@@ -95,7 +134,17 @@ def test_mic_stays_open_briefly_after_release_and_the_stopped_earcon_is_never_re
     assert model.calls[0][0] == int(1.3 * RATE)  # the words after release reached Whisper
     assert log == ["stop_speech", "listening", "mic_open", "stopped"]
     assert heard_after_close == [None, True]  # "stopped" played only once the mic was closed
-    assert 0.3 <= POST_ROLL <= 0.4 and WhisperVoice(announcer=FakeAnnouncer([]), model=model).post_roll == POST_ROLL
+
+
+def test_post_roll_comes_from_the_environment(monkeypatch, caplog):
+    for raw, seconds in (("0.35", 0.35), (" 0.2 ", 0.2), ("1.0", 1.0), ("0", 0.0)):
+        monkeypatch.setenv("ARTEMIS_PTT_POST_ROLL", raw)
+        assert make(1)[0].post_roll == seconds, raw
+    assert "ARTEMIS_PTT_POST_ROLL" not in caplog.text
+    for bad in ("abc", "-0.1", "1.5", "nan", "inf", "350ms"):
+        monkeypatch.setenv("ARTEMIS_PTT_POST_ROLL", bad)
+        assert make(1)[0].post_roll == 0.0, bad
+        assert f"ARTEMIS_PTT_POST_ROLL={bad!r}" in caplog.text
 
 
 def test_press_during_post_roll_closes_that_mic_first_and_skips_its_stopped_earcon():
@@ -119,21 +168,32 @@ def test_press_during_post_roll_closes_that_mic_first_and_skips_its_stopped_earc
 
 
 def test_whisper_model_and_beam_come_from_the_environment(monkeypatch, caplog):
-    for name in ("ARTEMIS_WHISPER_MODEL", "ARTEMIS_WHISPER_BEAM"):
-        monkeypatch.delenv(name, raising=False)
     v, model, _ = make(1)
-    assert v.model_name == "small.en" and v.beam_size == 5
+    assert v.model_name == "small.en" and v.beam_size == 1
+    monkeypatch.setenv("ARTEMIS_WHISPER_MODEL", "medium.en")
+    monkeypatch.setenv("ARTEMIS_WHISPER_BEAM", "5")  # opt-in
+    v, model, _ = make(1)
+    assert v.model_name == "medium.en" and v.beam_size == 5
     asyncio.run(v.start_listening())
     asyncio.run(v.stop_listening("cr_1"))
     assert model.calls[0][1]["beam_size"] == 5 and model.calls[0][1]["vad_filter"] is True
-    monkeypatch.setenv("ARTEMIS_WHISPER_MODEL", "medium.en")
-    monkeypatch.setenv("ARTEMIS_WHISPER_BEAM", "1")
-    v, model, _ = make(1)
-    assert v.model_name == "medium.en" and v.beam_size == 1
     for bad in ("0", "five", "-2", "11"):
         monkeypatch.setenv("ARTEMIS_WHISPER_BEAM", bad)
-        assert make(1)[0].beam_size == 5
+        assert make(1)[0].beam_size == 1
     assert "ARTEMIS_WHISPER_BEAM" in caplog.text
+
+
+def test_natural_prompt_is_opt_in(monkeypatch):
+    for raw in ("list", "spoken", "1", ""):
+        monkeypatch.setenv("ARTEMIS_WHISPER_PROMPT", raw)
+        assert make(1)[0].prompt == LIST_PROMPT, raw
+    monkeypatch.setenv("ARTEMIS_WHISPER_PROMPT", "natural")
+    v, model, _ = make(1)
+    assert v.natural_prompt and v.prompt == NATURAL_LEAD
+    v.set_vocabulary(["LoginForm"])
+    asyncio.run(v.start_listening())
+    asyncio.run(v.stop_listening("cr_1"))
+    assert model.calls[0][1]["initial_prompt"] == NATURAL_LEAD + " LoginForm."
 
 
 def test_dropped_segments_are_logged_without_their_words(caplog):
@@ -261,10 +321,10 @@ def test_release_and_repress_during_earcon_opens_one_mic():
 
 def test_first_request_is_primed_with_wake_word_before_any_project():
     v, model, streams = make(2)
-    assert v.prompt == PROMPT_LEAD
+    assert v.prompt == LIST_PROMPT
     asyncio.run(v.start_listening())
     asyncio.run(v.stop_listening("cr_0"))
-    assert model.calls[0][1]["initial_prompt"] == PROMPT_LEAD
+    assert model.calls[0][1]["initial_prompt"] == LIST_PROMPT
 
 
 def test_transcribes_and_strips_wake_word():
@@ -276,7 +336,7 @@ def test_transcribes_and_strips_wake_word():
     assert text == "create a Python program"
     assert not v.listening and streams[0].closed
     n, kw = model.calls[0]
-    assert n == 2 * RATE and kw["initial_prompt"] == PROMPT_LEAD + " LoginForm." and kw["language"] == "en"
+    assert n == 2 * RATE and kw["initial_prompt"] == LIST_PROMPT + ", LoginForm" and kw["language"] == "en"
     assert v._chunks == []  # audio dropped after transcription
 
 
@@ -304,9 +364,10 @@ def test_recording_is_capped():
     assert log[-1] == "stopped"  # the cap drops audio silently; the release still sounds
 
 
-def test_mic_unplugged_mid_recording_raises_voice_error():
+@pytest.mark.parametrize("post_roll", [None, 0.01])  # the default, and the opt-in post-roll
+def test_mic_unplugged_mid_recording_raises_voice_error(post_roll):
     log = []
-    v, model, streams = make(1, log=log)
+    v, model, streams = make(1, log=log, post_roll=post_roll)
     asyncio.run(v.start_listening())
 
     def gone():
@@ -315,8 +376,8 @@ def test_mic_unplugged_mid_recording_raises_voice_error():
     streams[0].stop = gone
     with pytest.raises(VoiceError, match="stopped unexpectedly"):
         asyncio.run(v.stop_listening("cr_1"))
-    assert not v.listening and v._chunks == [] and model.calls == []
-    assert log[-1] == "stopped"  # the earcon plays before the failing close
+    assert not v.listening and v._chunks == [] and model.calls == [] and v._tail is None
+    assert log[-1] == "stopped"  # by default before the failing close; with a post-roll, after it
 
 
 def test_missing_microphone_raises_voice_error():
