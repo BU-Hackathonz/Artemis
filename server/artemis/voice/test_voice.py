@@ -172,24 +172,39 @@ def test_rate_never_changes_under_nvda():
     assert "NVDA's speech settings" in nvda.said[0][0]
 
 
-def test_env_rate_is_optional_and_safe(monkeypatch=None):
+def test_env_rate_is_optional_and_safe():
     import os
 
-    from artemis.voice.speech import RATE_DEFAULT, RATE_MAX, _env_rate
+    from artemis.voice.speech import RATE_MAX, _env_rate
 
     old = os.environ.get("ARTEMIS_SAPI_RATE")
     try:
         os.environ.pop("ARTEMIS_SAPI_RATE", None)
-        assert _env_rate() == RATE_DEFAULT
+        assert _env_rate() is None  # unset: keep the user's own Windows rate
         os.environ["ARTEMIS_SAPI_RATE"] = "99"
         assert _env_rate() == RATE_MAX
         os.environ["ARTEMIS_SAPI_RATE"] = "fast"
-        assert _env_rate() == RATE_DEFAULT
+        assert _env_rate() is None
     finally:
         if old is None:
             os.environ.pop("ARTEMIS_SAPI_RATE", None)
         else:
             os.environ["ARTEMIS_SAPI_RATE"] = old
+
+
+def test_sapi_init_survives_a_failing_rate_set():
+    # Avery's review: a COM error while setting the rate at start-up must not stop the core.
+    import pytest
+
+    pytest.importorskip("win32com.client")
+    from artemis.voice.speech import SapiSpeaker
+
+    class BrokenRate(SapiSpeaker):
+        def set_rate(self, rate):
+            raise RuntimeError("COM error")
+
+    s = BrokenRate(rate=3)  # must not raise
+    assert s.available()
 
 
 def test_stub_voice_passes_set_rate_through():

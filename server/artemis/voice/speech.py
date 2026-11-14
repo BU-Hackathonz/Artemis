@@ -28,18 +28,23 @@ NVDA_DLL = Path(os.environ.get("ARTEMIS_NVDA_DLL") or Path(__file__).parent / "b
 
 
 # SAPI rates run -10..10 (0 = normal). Past about 6 words blur together; below -3 drags.
-RATE_MIN, RATE_MAX, RATE_DEFAULT = -3, 6, 1
+RATE_MIN, RATE_MAX = -3, 6
 
 
 def clamp_rate(rate: int) -> int:
     return max(RATE_MIN, min(RATE_MAX, int(rate)))
 
 
-def _env_rate() -> int:
+def _env_rate() -> int | None:
+    """ARTEMIS_SAPI_RATE, clamped. None when unset or invalid: then the user's own Windows rate stays."""
+    value = os.environ.get("ARTEMIS_SAPI_RATE")
+    if value is None or not value.strip():
+        return None
     try:
-        return clamp_rate(int(os.environ.get("ARTEMIS_SAPI_RATE", RATE_DEFAULT)))
+        return clamp_rate(int(value))
     except ValueError:
-        return RATE_DEFAULT
+        log.warning("ARTEMIS_SAPI_RATE=%r is not a number; keeping the Windows speech rate", value)
+        return None
 
 
 def nvda_running() -> bool:
@@ -116,9 +121,14 @@ class SapiSpeaker:
         except Exception:  # pywin32 missing or COM unavailable: report unavailable, don't crash the core
             self._voice = None
             return
-        # Both optional. Without them Windows' own default voice is used, at a slightly brisker rate.
+        # Both optional. Without them the user's own Windows voice and rate stay as they are.
         self.choose_voice(voice_name if voice_name is not None else os.environ.get("ARTEMIS_SAPI_VOICE"))
-        self.set_rate(rate if rate is not None else _env_rate())
+        rate = rate if rate is not None else _env_rate()
+        if rate is not None:
+            try:
+                self.set_rate(rate)
+            except Exception as e:  # a COM hiccup here must never stop the core from starting
+                log.warning("Could not set the SAPI rate: %s", e)
 
     def available(self) -> bool:
         return self._voice is not None
