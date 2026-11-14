@@ -41,8 +41,12 @@ public static class ArtemisCred {
         if (!CredRead(target, 1, 0, out p)) return null;
         try {
             CREDENTIAL c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));
-            if (c.CredentialBlobSize == 0) return "";
-            return Marshal.PtrToStringUni(c.CredentialBlob, (int)c.CredentialBlobSize / 2);
+            int size = (int)c.CredentialBlobSize;
+            if (size == 0) return "";
+            string secret = Marshal.PtrToStringUni(c.CredentialBlob, size / 2);
+            // Wipe Windows' copy of the secret before handing the buffer back.
+            Marshal.Copy(new byte[size], 0, c.CredentialBlob, size);
+            return secret;
         } finally { CredFree(p); }
     }
     public static int Write(string target, string secret) {
@@ -80,10 +84,20 @@ function Get-StoredSecret([string]$Target) {
     try { return [ArtemisCred]::Read($Target) } catch { return $null }
 }
 
+# Saves the value of the environment variable named $EnvName under $Target.
 # Returns $true only when Windows confirmed the write; otherwise $false and $script:CredStoreError.
-function Set-StoredSecret([string]$Target, [string]$Value) {
+#
+# It takes the variable's NAME, not the secret, on purpose. If PowerShell module logging is on
+# (event 4103), Windows records the argument values of every function call, so a secret passed
+# as an argument would land in the event log. The value is read here and goes straight into the
+# .NET call, which is not logged.
+function Save-StoredSecretFromEnv([string]$Target, [string]$EnvName) {
     if (-not $script:CredStoreAvailable) { return $false }
-    try { $rc = [ArtemisCred]::Write($Target, $Value) } catch { $script:CredStoreError = $_.Exception.Message; return $false }
+    if (-not [Environment]::GetEnvironmentVariable($EnvName)) {
+        $script:CredStoreError = "$EnvName is not set"
+        return $false
+    }
+    try { $rc = [ArtemisCred]::Write($Target, [Environment]::GetEnvironmentVariable($EnvName)) } catch { $script:CredStoreError = $_.Exception.Message; return $false }
     if ($rc -eq 0) { return $true }
     $script:CredStoreError = "Windows error $rc"
     return $false
@@ -97,4 +111,25 @@ function Remove-StoredSecret([string]$Target) {
     if ($rc -eq 1168) { return "none" }
     $script:CredStoreError = "Windows error $rc"
     return "failed"
+}
+
+# Saves what was just typed: the key if $KeyTyped, and the workspace ID if one is set.
+# Returns @{ Ok; Message }, and the message says exactly what happened, because the key can be
+# saved while the workspace ID is not. The values are handed over by environment variable name
+# (see Save-StoredSecretFromEnv), never as arguments.
+function Save-TypedSecrets([bool]$KeyTyped) {
+    $keySaved = $false
+    if ($KeyTyped) {
+        $keySaved = Save-StoredSecretFromEnv $script:ApiKeyTarget "ANTHROPIC_API_KEY"
+        if (-not $keySaved) {
+            return @{ Ok = $false; Message = "Nothing was saved ($script:CredStoreError). You will be asked again next time." }
+        }
+    }
+    if ($env:ANTHROPIC_WORKSPACE_ID -and -not (Save-StoredSecretFromEnv $script:WorkspaceTarget "ANTHROPIC_WORKSPACE_ID")) {
+        if ($keySaved) {
+            return @{ Ok = $false; Message = "The key was saved, but the workspace ID was not ($script:CredStoreError). You will be asked for the workspace ID again next time. Run Artemis.cmd -ForgetKey to remove the saved key." }
+        }
+        return @{ Ok = $false; Message = "The workspace ID was not saved ($script:CredStoreError). You will be asked for it again next time." }
+    }
+    return @{ Ok = $true; Message = "Saved. Run Artemis.cmd -ForgetKey to remove it." }
 }
