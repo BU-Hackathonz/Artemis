@@ -9,7 +9,7 @@ export function VoiceInput({voice, ready, voiceReady}: {voice: VoiceInputState; 
       <Button isDisabled={!ready || voice.status.stopUnconfirmed} aria-busy={voice.status.state==='stopping'} aria-describedby="voice-instructions"
         onPress={event=>{if (!event.ctrlKey && !event.altKey && !event.metaKey) voice.toggleButton();}}>{voice.status.state==='starting' || voice.status.state==='listening' ? 'Stop listening' : voice.status.state==='stopping' ? 'Stopping…' : 'Start listening'}</Button>
       <p aria-label="Microphone status" role={voice.status.state==='error'?'alert':undefined} aria-live={voice.status.state==='error'?'assertive':voiceReady?'off':'polite'}>{voice.status.message}</p>
-      {voice.startupError && <p role="alert">{voice.startupError}</p>}
+      {voice.startupError && <p role="status">{voice.startupError}</p>}
       {voice.shortcutError && <p id="shortcut-error" role={voice.shortcutErrorKind==='validation' || voice.noticeFailed || !voiceReady ? 'alert' : undefined}>{voice.shortcutError}</p>}
       <form onSubmit={event=>{event.preventDefault();voice.apply();}}>
         <label htmlFor="voice-shortcut">Global voice shortcut</label>
