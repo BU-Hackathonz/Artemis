@@ -28,17 +28,23 @@ class FakeStream:
 
 
 class Seg:
-    def __init__(self, text):
-        self.text = text
+    def __init__(self, text, no_speech_prob=0.02):
+        self.text, self.no_speech_prob = text, no_speech_prob
 
 
 class FakeModel:
-    def __init__(self, text):
-        self.text, self.calls = text, []
+    def __init__(self, text, segs=None):
+        self.text, self.segs, self.calls = text, segs, []
 
     def transcribe(self, audio, **kw):
         self.calls.append((len(audio), kw))
-        return iter([Seg(" " + w) for w in self.text.split("|")]), None
+        return iter(self.segs or [Seg(" " + w) for w in self.text.split("|")]), None
+
+
+def speech_like(seconds, level=0.05):
+    """A 220 Hz tone at about speech level, so the silence gate lets it through."""
+    t = np.arange(int(RATE * seconds)) / RATE
+    return (np.sin(2 * np.pi * 220 * t) * level * np.sqrt(2)).astype(np.float32)
 
 
 class FakeAnnouncer:
@@ -49,8 +55,8 @@ class FakeAnnouncer:
         self.log.append("stop_speech")
 
 
-def make(seconds, text="Artemis,| create a Python program", earcon_s=0.0, log=None):
-    audio = np.zeros(int(RATE * seconds), np.float32)
+def make(seconds, text="Artemis,| create a Python program", earcon_s=0.0, log=None, audio=None, segs=None):
+    audio = speech_like(seconds) if audio is None else audio
     streams = []
     log = [] if log is None else log
 
@@ -63,9 +69,26 @@ def make(seconds, text="Artemis,| create a Python program", earcon_s=0.0, log=No
         log.append(name)
         return earcon_s
 
-    model = FakeModel(text)
+    model = FakeModel(text, segs)
     v = WhisperVoice(announcer=FakeAnnouncer(log), model=model, stream_factory=factory, earcon=earcon)
     return v, model, streams
+
+
+def test_room_silence_never_reaches_whisper():
+    # The loudest room silence measured on the demo laptop's headset mic: RMS 0.00022.
+    rng = np.random.default_rng(1)
+    hiss = (rng.standard_normal(RATE * 2) * 0.00022).astype(np.float32)
+    v, model, _ = make(2, audio=hiss)
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_1")) == ""
+    assert model.calls == []
+
+
+def test_segments_whisper_doubts_are_dropped():
+    # Real case: silence came back as "Thank you." with no_speech_prob 0.70.
+    v, _, _ = make(2, segs=[Seg(" Thank you.", 0.70), Seg(" run main.py", 0.05)])
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_1")) == "run main.py"
 
 
 def test_speech_stops_and_earcon_ends_before_mic_opens():

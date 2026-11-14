@@ -23,6 +23,10 @@ from .text import strip_wake_word, vocabulary_prompt
 RATE = 16_000
 MAX_SECONDS = 60  # a stuck key can't fill memory
 MIN_SECONDS = 0.3  # shorter is a key tap, not speech
+# Silence must stay silent: Whisper invents text ("Thank you.", "and still") from quiet room noise.
+# Measured on a laptop headset mic: room silence RMS 0.00002-0.00022; speech is far louder.
+MIN_RMS = 0.001  # below this average level, skip Whisper entirely
+MAX_NO_SPEECH = 0.6  # drop segments Whisper itself thinks are probably not speech (the fake one scored 0.70)
 
 
 class VoiceError(Exception):
@@ -106,6 +110,8 @@ class WhisperVoice:
             self._chunks, self._frames = [], 0
         if len(audio) < RATE * MIN_SECONDS:
             return ""
+        if float(np.sqrt(np.mean(np.square(audio)))) < MIN_RMS:
+            return ""  # nobody spoke
         text = await asyncio.to_thread(self._transcribe, audio)
         return strip_wake_word(text)
 
@@ -115,7 +121,8 @@ class WhisperVoice:
         segments, _ = self._model.transcribe(
             audio, language="en", beam_size=1, vad_filter=True, initial_prompt=self.prompt or None
         )
-        return " ".join(s.text.strip() for s in segments).strip()
+        kept = [s for s in segments if getattr(s, "no_speech_prob", 0.0) <= MAX_NO_SPEECH]
+        return " ".join(s.text.strip() for s in kept).strip()
 
     def set_vocabulary(self, words: list[str]) -> None:
         self.prompt = vocabulary_prompt(words)
