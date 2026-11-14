@@ -8,11 +8,15 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from artemis.contracts import Finding, Severity
 
 TIMEOUT_S = 20
+# No API keys. The profile folders are needed: without them Python on Windows writes its
+# caches into a literal "~" folder under the current directory.
+_ENV_NAMES = ("SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA")
 
 # Bandit severity → confidence → our level. A high level blocks the approval.
 _LEVELS: dict[str, dict[str, Severity]] = {
@@ -59,7 +63,7 @@ def parse_bandit(output: str, folder: Path) -> list[Finding]:
 def _run_bandit(folder: Path) -> str:
     # Bandit is our own tool, so it runs on the core's interpreter, with a minimal
     # environment: no API keys reach it.
-    env = {name: os.environ[name] for name in ("SYSTEMROOT", "TEMP", "TMP") if name in os.environ}
+    env = {name: os.environ[name] for name in _ENV_NAMES if name in os.environ}
     try:
         done = subprocess.run(
             [sys.executable, "-m", "bandit", "-r", str(folder), "-f", "json", "-q"],
@@ -70,6 +74,7 @@ def _run_bandit(folder: Path) -> str:
             timeout=TIMEOUT_S,
             env=env,
             stdin=subprocess.DEVNULL,
+            cwd=tempfile.gettempdir(),  # never the project folder
         )
     except subprocess.TimeoutExpired as exc:
         raise ScanError("Bandit timed out.") from exc

@@ -73,7 +73,10 @@ def test_bandit_gets_no_secrets_in_its_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-FAKEfakeFAKE")
     monkeypatch.setattr(scan_module.subprocess, "run", fake_run)
     assert asyncio.run(scan(tmp_path)) == []
-    assert "ANTHROPIC_API_KEY" not in seen["env"] and set(seen["env"]) <= {"SYSTEMROOT", "TEMP", "TMP"}
+    assert [p.name for p in tmp_path.iterdir()] == ["main.py"]  # the scan leaves nothing behind
+    assert "ANTHROPIC_API_KEY" not in seen["env"]
+    assert set(seen["env"]) <= {"SYSTEMROOT", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA"}
+    assert seen["cwd"] != str(tmp_path)  # Bandit never runs inside the project folder
     assert seen["argv"][1:] == ["-m", "bandit", "-r", str(tmp_path), "-f", "json", "-q"]
     assert seen["timeout"] == 20 and "shell" not in seen
 
@@ -117,3 +120,4 @@ def test_real_bandit_flags_shell_true_and_blocks_the_write(tmp_path):
 def test_real_bandit_on_clean_code_finds_nothing(tmp_path):
     (tmp_path / "main.py").write_text(CLEAN)
     assert asyncio.run(scan(tmp_path)) == []
+    assert [p.name for p in tmp_path.iterdir()] == ["main.py"]  # the scan leaves nothing behind
