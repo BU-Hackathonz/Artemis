@@ -8,6 +8,7 @@ succeeded / failed / canceled; the gateway emits the states in between.
 import asyncio
 import logging
 import re
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -41,6 +42,11 @@ CANCEL_WORDS = {"cancel", "stop", "cancel that", "never mind", "nevermind"}
 REPEAT_WORDS = {"repeat", "say that again"}
 APPROVAL_WORDS = {"approve", "yes", "reject", "no"}
 
+# "Still working" heartbeat (architecture.md risk 9: silence longer than about 3 s gets a cue).
+HEARTBEAT_S = 3.0
+HEARTBEAT_STATES = {"working", "running"}  # never queued, awaiting_approval or a final state
+STILL_WORKING = "Still working."
+
 
 def normalize(text: str) -> str:
     return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
@@ -61,6 +67,7 @@ class Task:
         self.request = request
         self.state = "queued"
         self.job: asyncio.Task | None = None
+        self.heartbeat: asyncio.Task | None = None
 
     @property
     def active(self) -> bool:
@@ -79,9 +86,13 @@ class Session:
         scan=None,
         log_dir: Path | None = None,
         on_project: Callable[[object], None] | None = None,
+        heartbeat_s: float = HEARTBEAT_S,
     ):
         self.session_id = session_id
         self.voice = voice
+        self.runner = runner
+        self.heartbeat_s = heartbeat_s
+        self._quiet_since = time.monotonic()  # last announcement or task state change
         self.bus = EventBus(
             session_id,
             speak=voice.announce if voice else None,
@@ -96,6 +107,10 @@ class Session:
         self._on_project = on_project
 
     async def emit(self, draft: EventDraft) -> None:
+        if draft.announce or draft.type == "task.state":
+            # Something was said, or the state changed (e.g. back to working after an approval):
+            # the heartbeat waits a full interval from here.
+            self._quiet_since = time.monotonic()
         await self.bus.emit(draft)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
@@ -119,7 +134,46 @@ class Session:
         self._by_request[request.client_request_id] = task.task_id
         await self._state(task.task_id, "queued", f"Working on: {request.text}", "normal")
         task.job = asyncio.create_task(self._run(task))
+        task.heartbeat = asyncio.create_task(self._heartbeat(task))
+        # However the job ends (even canceled before it starts), the heartbeat stops with it.
+        task.job.add_done_callback(lambda _job: task.heartbeat.cancel())
         return task
+
+    async def _heartbeat(self, task: Task) -> None:
+        """While the task is working or running and nothing has been announced for heartbeat_s,
+        give a quiet "still working" cue, and repeat it every heartbeat_s until something else is
+        announced or the state leaves working/running. Never raises into the task."""
+        while task.active:
+            wait = self._quiet_since + self.heartbeat_s - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+                continue
+            if task.state in HEARTBEAT_STATES:
+                try:
+                    await self._still_working(task.task_id)
+                except Exception:  # a cue failing must never stop the task
+                    log.exception("still-working cue failed")
+            self._quiet_since = time.monotonic()  # next check a full interval later
+
+    async def _still_working(self, task_id: str) -> None:
+        """voice/earcons.py only has "listening" and "stopped", and both mean the mic, so reusing
+        either would mislead. Use voice.working_cue() if a voice ever offers one; until then a
+        low-priority progress line, which the Announcer drops while speech is busy, so it never
+        talks over anything."""
+        cue = getattr(self.voice, "working_cue", None)
+        if callable(cue):
+            result = cue()
+            if asyncio.iscoroutine(result):
+                await result
+            return
+        await self.emit(
+            EventDraft(
+                task_id=task_id,
+                type="agent.message",
+                announce=Announce(text=STILL_WORKING, priority="low"),
+                data=AgentMessageData(text=STILL_WORKING, kind="progress").model_dump(),
+            )
+        )
 
     async def _run(self, task: Task) -> None:
         tid = task.task_id
@@ -132,6 +186,9 @@ class Session:
         project_before = self.gateway.project
         outcome_text = ""
         try:
+            # Silent queued -> working: the agent is thinking now, so the heartbeat covers the
+            # first model call too (the gateway only reports states around tool calls).
+            await self._state(tid, "working")
             outcome = await self.agent.run(context, self.gateway, self.emit)
         except asyncio.CancelledError:
             outcome = Canceled()
