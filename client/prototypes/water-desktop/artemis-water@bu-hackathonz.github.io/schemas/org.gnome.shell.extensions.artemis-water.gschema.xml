@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.artemis-water" path="/org/gnome/shell/extensions/artemis-water/">
+    <!-- Defaults match the water-wallpaper preview's look. -->
+    <key name="driver" type="s">
+      <choices><choice value="agent"/><choice value="pointer"/></choices>
+      <default>'agent'</default>
+      <summary>Driver</summary>
+      <description>agent: a liquid-glass sphere rests in the bottom-left corner and zips through commands; the mouse stirs nothing. pointer: the effect follows the mouse pointer (see Style).</description>
+    </key>
+    <key name="agent-look" type="s">
+      <choices><choice value="island"/><choice value="ring"/><choice value="orb"/></choices>
+      <default>'island'</default>
+      <summary>Agent look</summary>
+      <description>island: a glowing pill under the top bar, joined to a light along the edge; commands fly out of it as a droplet. ring: a ring of liquid glass swirling inside an invisible circle (spins up while a command runs). orb: a morphing glass orb.</description>
+    </key>
+    <key name="orb-size" type="d">
+      <range min="32" max="200"/>
+      <default>64</default>
+      <summary>Agent orb size</summary>
+      <description>Diameter of the agent's glass orb in pixels.</description>
+    </key>
+    <key name="orb-home" type="(dd)">
+      <default>(-1.0, -1.0)</default>
+      <summary>Where the orb rests</summary>
+      <description>Fractions (x, y) of the work area where the orb was last dropped; negative = the bottom-left corner.</description>
+    </key>
+    <key name="orb-motion" type="b">
+      <default>true</default>
+      <summary>Animate the orb while it rests</summary>
+      <description>When on, the resting orb slowly morphs and tumbles (redraws the screen ~30 times a second). When off, it holds still until a command runs.</description>
+    </key>
+    <key name="style" type="s">
+      <choices><choice value="lens"/><choice value="water"/></choices>
+      <default>'water'</default>
+      <summary>Style</summary>
+      <description>lens: a small liquid-glass lens follows the pointer. water: the pointer drags ripples through the screen.</description>
+    </key>
+    <key name="lens-size" type="d">
+      <range min="24" max="160"/>
+      <default>56</default>
+      <summary>Lens size</summary>
+      <description>Diameter of the lens in pixels (about one desktop icon by default).</description>
+    </key>
+    <key name="lens-zoom" type="d">
+      <range min="1" max="2.5"/>
+      <default>1.3</default>
+      <summary>Lens zoom</summary>
+      <description>Magnification at the centre of the lens.</description>
+    </key>
+    <key name="cover-everything" type="b">
+      <default>true</default>
+      <summary>Bend everything on screen</summary>
+      <description>When on, windows, their contents, the top bar and the dock bend too. When off, only the wallpaper does, and only while the pointer is over the desktop.</description>
+    </key>
+    <key name="wake-width" type="d">
+      <range min="6" max="80"/>
+      <default>14</default>
+      <summary>Wake width</summary>
+      <description>Width of the wake and ripple fronts, in pixels.</description>
+    </key>
+    <key name="distortion" type="d">
+      <range min="0" max="3"/>
+      <default>1</default>
+      <summary>Distortion strength</summary>
+      <description>How strongly things bend under the water (up to 20 px at 1).</description>
+    </key>
+    <key name="ripple-life" type="d">
+      <range min="0.4" max="3"/>
+      <default>1.2</default>
+      <summary>Ripple lifetime</summary>
+      <description>Seconds a ripple keeps travelling before it has faded out (lower = more damping).</description>
+    </key>
+    <key name="active-radius" type="d">
+      <range min="30" max="600"/>
+      <default>90</default>
+      <summary>Reach</summary>
+      <description>How far the water reaches around each point of the pointer's trail (fast moves reach further, slow ones less).</description>
+    </key>
+    <key name="highlights" type="d">
+      <range min="0" max="1.5"/>
+      <default>0.8</default>
+      <summary>Highlights</summary>
+      <description>Brightness of the thin glossy lines on the ripples.</description>
+    </key>
+  </schema>
+</schemalist>

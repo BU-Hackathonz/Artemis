@@ -1,0 +1,71 @@
+/* Artemis top-edge island (island.js). Loaded by GNOME Shell with the extension. */
+
+.artemis-island {
+  height: 40px;
+  padding: 0 6px 0 14px;
+  spacing: 10px;
+  border-radius: 22px;
+  background-color: rgba(16, 10, 28, 0.92);
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  box-shadow: 0 2px 10px 0 rgba(0, 0, 0, 0.45);
+}
+
+/* The glassy ring: the one bright thing in the widget. */
+.artemis-island-ring {
+  width: 16px;
+  height: 16px;
+  border-radius: 12px;
+  border: 3px solid #e9d5ff;
+  background-color: rgba(196, 181, 253, 0.18);
+  box-shadow: 0 0 8px 1px rgba(192, 132, 252, 0.85);
+}
+.artemis-island-ring:working {
+  border-color: #f5d0fe;
+  background-color: #c084fc;
+  box-shadow: 0 0 12px 2px rgba(217, 70, 239, 0.8);
+}
+.artemis-island-ring:done {
+  border-color: #bbf7d0;
+  background-color: rgba(134, 239, 172, 0.2);
+  box-shadow: 0 0 8px 1px rgba(134, 239, 172, 0.7);
+}
+
+.artemis-island-sep { width: 1px; height: 18px; background-color: rgba(167, 139, 250, 0.25); }
+
+.artemis-island-name { font-weight: 600; font-size: 16px; color: #ece6f7; }
+
+.artemis-island-wave { width: 52px; height: 22px; }
+.artemis-island-wave-button { border-radius: 10px; padding: 3px 5px; }
+.artemis-island-wave-button:hover { background-color: rgba(167, 139, 250, 0.14); }
+.artemis-island-wave-button:focus, .artemis-island-chevron:focus { box-shadow: inset 0 0 0 2px #ffdb70; }
+
+.artemis-island-status { font-size: 12px; color: #ddd0f5; }
+
+.artemis-island-chevron { border-radius: 14px; padding: 6px; color: #ddd0f5; }
+.artemis-island-chevron:hover { background-color: rgba(167, 139, 250, 0.14); }
+.artemis-island-chevron-icon { icon-size: 14px; }
+
+.artemis-island-menu .popup-menu-content {
+  background-color: rgba(16, 10, 28, 0.97);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  border-radius: 18px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  padding: 8px 4px;
+}
+.artemis-island-menu .popup-menu-item { border-radius: 10px; color: #ece6f7; }
+.artemis-island-menu .popup-menu-item:hover,
+.artemis-island-menu .popup-menu-item:focus { background-color: rgba(167, 139, 250, 0.16); }
+.artemis-island-menu .popup-separator-menu-item .popup-separator-menu-item-separator { background-color: rgba(167, 139, 250, 0.2); }
+.artemis-island-menu .popup-separator-menu-item StLabel { color: #c4b5e6; }
+
+.artemis-island-ask { spacing: 6px; }
+.artemis-island-entry {
+  min-width: 320px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  color: #ffffff;
+}
+.artemis-island-entry:focus { border-color: #c4b5fd; }
+.artemis-island-hint { font-size: 13px; color: #d9cdf2; }
