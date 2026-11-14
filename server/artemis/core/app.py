@@ -93,6 +93,8 @@ class Core:
         self.sessions: dict[str, Session] = {}
         self.listen_lock = asyncio.Lock()
         self.watch_task: asyncio.Task | None = None
+        self.activity_task: asyncio.Task | None = None
+        self.activity: tuple[str, str | None] = ("idle", None)  # the last voice.activity sent
         self.heartbeat_s = heartbeat_s
         # Interpreter pre-check: probed once per process, then reused by every session.
         self._interpreter_probe: asyncio.Task | None = None
@@ -181,6 +183,32 @@ class Core:
         for s in list(self.sessions.values()):
             await s.voice_status(voice_ready, screen_reader, engine)
 
+    def voice_activity(self) -> tuple[str, str | None]:
+        """(state, engine) from the voice's real state: the mic (listening, from the press until it
+        closes), Whisper (transcribing), then audible speech (speaking). Never inferred from timers."""
+        voice = self.voice
+        if getattr(voice, "busy_listening", getattr(voice, "listening", False)):
+            return "listening", None
+        if getattr(voice, "transcribing", False):
+            return "transcribing", None
+        announcer = getattr(voice, "announcer", None)
+        method = getattr(announcer, "speaking_engine", None)
+        engine = method() if method is not None else None
+        return ("speaking", engine) if engine else ("idle", None)
+
+    async def watch_activity(self, interval_s: float = 0.1) -> None:
+        """Send voice.activity to every session when the state changes (contracts.md section 2)."""
+        while True:
+            try:
+                now = self.voice_activity()
+                if now != self.activity:
+                    self.activity = now
+                    for s in list(self.sessions.values()):
+                        await s.voice_activity(*now)
+            except Exception:  # a voice that can't be asked must not end the updates
+                log.exception("voice activity check failed")
+            await asyncio.sleep(interval_s)
+
     def wire_voice(self) -> None:
         """Say the ElevenLabs fallback notice through the bus when that voice gives up. Called at
         startup and again after every apply(), since apply() can build a new ElevenLabsSpeaker."""
@@ -229,9 +257,12 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         announcer = getattr(core.voice, "announcer", None)
         if announcer is not None and hasattr(announcer, "watch"):
             core.watch_task = asyncio.create_task(announcer.watch(core.broadcast_voice_status))
+        core.activity_task = asyncio.create_task(core.watch_activity())
         yield
         if core.watch_task:
             core.watch_task.cancel()
+        if core.activity_task:
+            core.activity_task.cancel()
         for task in [*core.background, core._interpreter_probe]:
             if task and not task.done():
                 task.cancel()
@@ -262,6 +293,8 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         session = core.new_session()
         voice_ready, screen_reader = core.voice_status()
         await session.voice_status(voice_ready, screen_reader, core.active_engine())  # §5.3: at session start
+        if core.activity[0] != "idle":  # a session starts idle; tell it if the voice is busy right now
+            await session.voice_activity(*core.activity)
         # In the background, so a slow probe never delays the client; the error event (if any)
         # still lands after voice.status and is replayed to a late SSE subscriber.
         core.spawn(core.check_interpreter(session))

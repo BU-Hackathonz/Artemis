@@ -17,6 +17,7 @@ class StubVoice:
         self.announcer = announcer or Announcer()
         self.prompt = ""
         self.listening = False
+        self.transcribing = False  # the stub's transcript is instant
 
     async def start_listening(self) -> None:
         await self.announcer.stop_speech()  # contracts.md 5.1, same as WhisperVoice

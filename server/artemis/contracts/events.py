@@ -21,6 +21,7 @@ EventType = Literal[
     "security.findings",
     "error",
     "voice.status",
+    "voice.activity",
 ]
 
 # `awaiting_reply` is reserved and unused in the MVP (design A4).
@@ -102,6 +103,13 @@ class VoiceStatusData(BaseModel):
     engine: str | None = None  # the speaker that would say the next line (docs/contracts.md section 7)
 
 
+class VoiceActivityData(BaseModel):
+    """What the voice is doing right now, from real transitions only (docs/contracts.md section 2)."""
+
+    state: Literal["idle", "listening", "transcribing", "speaking"]
+    engine: str | None = None  # who is speaking: elevenlabs, sapi, nvda (an estimate), or null
+
+
 DATA_MODELS: dict[str, type[BaseModel]] = {
     "transcript.partial": TranscriptData,
     "transcript.final": TranscriptData,
@@ -114,6 +122,7 @@ DATA_MODELS: dict[str, type[BaseModel]] = {
     "security.findings": SecurityFindings,
     "error": ErrorData,
     "voice.status": VoiceStatusData,
+    "voice.activity": VoiceActivityData,
 }
 
 

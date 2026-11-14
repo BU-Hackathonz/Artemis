@@ -479,3 +479,24 @@ def test_core_heartbeat_plays_the_tick_instead_of_the_line(tmp_path):
             assert played == ["working"] and STILL_WORKING not in sapi.said
         else:
             assert played == [] and sapi.said == [STILL_WORKING]
+
+
+def test_transcribing_is_true_only_while_whisper_runs():
+    # voice.activity reads this: "transcribing" between the mic closing and the text being ready.
+    v, _, _ = make(1)
+    seen = []
+    real = v._transcribe
+
+    def slow(audio):
+        seen.append(v.transcribing)
+        return real(audio)
+
+    v._transcribe = slow
+
+    async def run():
+        assert not v.transcribing
+        await v.start_listening()
+        await v.stop_listening("cr_1")
+
+    asyncio.run(run())
+    assert seen == [True] and not v.transcribing
