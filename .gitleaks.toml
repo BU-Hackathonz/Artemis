@@ -1,0 +1,12 @@
+# Secret scanning config (CI job "secrets" in .github/workflows/ci.yml).
+# Keep the allowlist this narrow: only the fake values the tests need.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake API key used as test input"
+regexes = ['''sk-ant-api03-FAKE[A-Za-z0-9_-]*''']
+
+[[allowlists]]
+description = "PEM header strings that are redaction test input, not keys"
+paths = ['''server/artemis/policy/test_redact\.py''']

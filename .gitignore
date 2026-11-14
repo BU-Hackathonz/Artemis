@@ -9,3 +9,8 @@ dist/
 
 # NVDA controller client DLL (download from NV Access; see server/artemis/voice/speech.py)
 server/artemis/voice/bin/
+
+# Local secrets and key material
+*.pem
+*.key
+*.pfx
