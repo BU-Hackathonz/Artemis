@@ -152,11 +152,6 @@ def test_find_python_skips_core_python_and_falls_back(tmp_path, monkeypatch):
         find_python()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="ARTEMIS_RUN_PYTHON is returned without _is_core_python, so it can name the core's own "
-    "interpreter; docs/contracts.md (Runner) says never the core's own Python",
-)
 def test_run_python_override_must_not_be_the_core_interpreter(monkeypatch):
     monkeypatch.setenv("ARTEMIS_RUN_PYTHON", sys.executable)
     with pytest.raises(NoInterpreter):

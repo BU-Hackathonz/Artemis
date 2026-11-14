@@ -52,6 +52,9 @@ def find_python(override: str | None = None) -> Path:
         path = Path(override)
         if not path.exists():
             raise NoInterpreter(f"ARTEMIS_RUN_PYTHON points to {override}, which doesn't exist. Fix or unset it, then restart Artemis.")
+        if _is_core_python(path):
+            # The override must not undo risk 7 either: user code never runs in the core's interpreter.
+            raise NoInterpreter("ARTEMIS_RUN_PYTHON points to Artemis's own Python. Point it at a separate Python, or unset it, then restart Artemis.")
         return path
     home = Path.home()  # outside any project, so uv doesn't pick the core's venv
     candidates: list[list[str]] = []
