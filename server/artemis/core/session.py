@@ -83,6 +83,26 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+def _default_earcon() -> Callable[[str], float] | None:
+    """voice/earcons.play, imported only when result earcons are on (the voice group may be absent)."""
+    try:
+        from artemis.voice.earcons import play
+    except ImportError:
+        log.warning("ARTEMIS_RESULT_EARCONS=on, but the voice group is not installed; no result earcons")
+        return None
+    return play
+
+
+def _result_cue(draft: EventDraft) -> str | None:
+    """The earcon for a spoken run result or approval request; None for every other event."""
+    if draft.type == "run.result":
+        timed_out = draft.data.get("timed_out")
+        return "failure" if timed_out or draft.data.get("exit_code") != 0 else "success"
+    if draft.type == "approval.requested":
+        return "approval"
+    return None
+
+
 class TaskActive(Exception):
     def __init__(self, task_id: str):
         self.task_id = task_id
@@ -116,6 +136,8 @@ class Session:
         on_project: Callable[[object], None] | None = None,
         heartbeat_s: float = HEARTBEAT_S,
         conversation: bool | None = None,
+        result_earcons: bool | None = None,
+        earcon: Callable[[str], float] | None = None,
     ):
         self.session_id = session_id
         self.voice = voice
@@ -141,6 +163,11 @@ class Session:
         if conversation is None:
             conversation = os.environ.get("ARTEMIS_CONVERSATION", "off").lower() == "on"
         self.conversation: Controller | None = Controller() if conversation else None
+        # ARTEMIS_RESULT_EARCONS, off by default (contracts.md 5.5): a short tone just before a run
+        # result or an approval request is spoken. The words are always said; never while listening.
+        if result_earcons is None:
+            result_earcons = os.environ.get("ARTEMIS_RESULT_EARCONS", "off").lower() == "on"
+        self._earcon: Callable[[str], float] | None = (earcon or _default_earcon()) if result_earcons else None
 
     async def emit(self, draft: EventDraft) -> None:
         if draft.announce or draft.type == "task.state":
@@ -152,6 +179,13 @@ class Session:
             # Said by the task itself while it is being canceled: the gateway's report of what
             # the cancel stopped ("Canceled. Nothing was written.", "Canceled while running main.py.").
             task.cancel_reported = True
+        if self._earcon and draft.announce and not getattr(self.voice, "listening", False):
+            cue = _result_cue(draft)
+            if cue:
+                try:
+                    self._earcon(cue)  # plays in the background; the spoken line follows on the bus
+                except Exception:  # a cue failing must never stop the event
+                    log.exception("result earcon %s failed", cue)
         await self.bus.emit(draft)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
@@ -204,8 +238,9 @@ class Session:
             self._quiet_since = time.monotonic()  # next check a full interval later
 
     async def _still_working(self, task_id: str) -> None:
-        """voice/earcons.py only has "listening" and "stopped", and both mean the mic, so reusing
-        either would mislead. Use voice.working_cue() if a voice ever offers one; until then a
+        """voice/earcons.py has "listening" and "stopped" (both mean the mic) and the result cues
+        "success", "failure" and "approval", none of which means progress, so none is reused here.
+        Use voice.working_cue() if a voice ever offers one; until then a
         low-priority progress line, which the Announcer drops while speech is busy, so it never
         talks over anything."""
         cue = getattr(self.voice, "working_cue", None)

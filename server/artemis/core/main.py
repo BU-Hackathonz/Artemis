@@ -5,6 +5,8 @@ ARTEMIS_AGENT      stub (default) | claude
 ARTEMIS_VOICE      whisper (default when the voice group is installed) | stub
 ARTEMIS_RUNNER     real (default) | fake (writes files, never runs anything)
 ARTEMIS_CONVERSATION  off (default) | on: built-in spoken phrases and follow-ups (contracts.md §5.4)
+ARTEMIS_RESULT_EARCONS  off (default) | on: a success, failure or approval tone just before that line is
+                        spoken, never while listening (contracts.md §5.5); session.py
 ARTEMIS_WHISPER_MODEL   small.en (default) | medium.en (more accurate, slower); voice/listen.py
 ARTEMIS_WHISPER_BEAM    1 (default) | 2 to 10, e.g. 5: opt-in
 ARTEMIS_PTT_POST_ROLL   0 (default, off) | seconds up to 1.0, e.g. 0.35: opt-in
