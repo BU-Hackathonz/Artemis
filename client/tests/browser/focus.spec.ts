@@ -1,9 +1,10 @@
 import {test, expect, type Page} from '@playwright/test';
 import {createServer, type ServerResponse} from 'node:http';
 
-async function fixture(approvalAtStart = false) {
+async function fixture(approvalAtStart = false, activeTask = false) {
   let events: ServerResponse | undefined;
   let seq = 0;
+  const commands: string[] = [];
   const emit = (type: string, data: object) => events!.write(`id: ${++seq}\ndata: ${JSON.stringify({seq, session_id:'ses_focus', task_id:'tsk_focus', at:new Date().toISOString(), type, data, announce:null})}\n\n`);
   const server = createServer((req, res) => {
     res.setHeader('access-control-allow-origin', 'http://127.0.0.1:1420');
@@ -15,6 +16,7 @@ async function fixture(approvalAtStart = false) {
       events = res;
       res.writeHead(200, {'content-type':'text/event-stream'});
       res.write(': connected\n\n');
+      if (activeTask && seq === 0) emit('task.state', {state:'working'});
       if (approvalAtStart && seq === 0) emit('approval.requested', {approval_id:'apr_focus', approval_hash:'sha256:focus', kind:'write_files', summary:'Focus fixture proposal', files:[], diff:null, run:null, findings:[]});
       return;
     }
@@ -22,6 +24,7 @@ async function fixture(approvalAtStart = false) {
       emit('approval.resolved', {approval_id:'apr_focus', decision:'reject', by:'user'});
       res.writeHead(204).end(); return;
     }
+    if (req.url === '/speech' || req.url?.endsWith('/cancel')) {commands.push(req.url); res.writeHead(204).end(); return;}
     res.setHeader('content-type', 'application/json');
     if (req.url === '/health') res.end(JSON.stringify({ok:true, version:'focus-fixture', voice_ready:false, screen_reader:null}));
     else if (req.url === '/sessions') res.end(JSON.stringify({session_id:'ses_focus'}));
@@ -29,6 +32,8 @@ async function fixture(approvalAtStart = false) {
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   return {
+    commands,
+    drop: () => events!.end(),
     async connect(page: Page) {
       await page.goto('/');
       await page.getByLabel('Core address').fill(`http://127.0.0.1:${(server.address() as {port:number}).port}`);
@@ -97,5 +102,30 @@ test('initial approval and later log focus retain ownership across reconnect', a
     await log.focus();
     await core.reconnect(page);
     await expect(log).toBeFocused();
+  } finally {await core.close();}
+});
+
+
+test('offline task and speech controls retain focus and ignore Enter; manual reconnect returns to request', async ({page}) => {
+  const core = await fixture(false, true);
+  try {
+    await core.connect(page);
+    await expect(page.getByText('Task: working', {exact:true})).toBeVisible();
+    for (const name of ['Cancel task', 'Repeat last speech', 'Stop speech']) {
+      const control = page.getByRole('button', {name, exact:true});
+      await control.focus();
+      await core.reconnect(page, async () => {
+        await expect(control).toBeFocused();
+        await expect(control).toHaveAttribute('aria-disabled', 'true');
+        await page.keyboard.press('Enter');
+        expect(core.commands).toEqual([]);
+      });
+      await expect(control).toBeFocused();
+    }
+    core.drop();
+    const reconnect = page.getByRole('button', {name:'Reconnect event stream', exact:true});
+    await reconnect.click();
+    await expect(page.getByRole('status')).toHaveText('Connected');
+    await expect(page.locator('#request')).toBeFocused();
   } finally {await core.close();}
 });

@@ -115,6 +115,7 @@ export function App() {
     finally {if (attempt === generation.current) setBusy(false);}
   }
   async function command(action: () => Promise<unknown>) {
+    if (!ready) return;
     setError('');
     try { await action(); } catch (e) { setError(message(e)); }
   }
@@ -164,9 +165,9 @@ export function App() {
             }} rows={4} value={text} onChange={e => setText(e.target.value)} placeholder="Create a Python program that prints Hello World" disabled={!connection} readOnly={!ready} aria-disabled={!ready} required/>
             <button disabled={!connection || !ready || busy || !text.trim() || ((pendingTaskId !== null || !terminal(state.taskState)) && state.taskState !== 'awaiting_reply')}>{state.taskState === 'awaiting_reply' ? 'Send reply' : 'Send request'}</button>
           </form>
-          <div className="actions"><button disabled={!ready || !(pendingTaskId ?? state.taskId) || (!pendingTaskId && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((pendingTaskId ?? state.taskId)!))}>Cancel task</button>
-            <button disabled={!ready || connection?.demo} onClick={() => void command(() => connection!.core.speech('repeat'))}>Repeat last speech</button>
-            <button disabled={!ready || connection?.demo} onClick={() => void command(() => connection!.core.speech('stop'))}>Stop speech</button></div>
+          <div className="actions"><button aria-disabled={!ready} disabled={!(pendingTaskId ?? state.taskId) || (!pendingTaskId && terminal(state.taskState)) || busy} onClick={() => void command(() => connection!.core.cancel((pendingTaskId ?? state.taskId)!))}>Cancel task</button>
+            <button aria-disabled={!ready} disabled={connection?.demo} onClick={() => void command(() => connection!.core.speech('repeat'))}>Repeat last speech</button>
+            <button aria-disabled={!ready} disabled={connection?.demo} onClick={() => void command(() => connection!.core.speech('stop'))}>Stop speech</button></div>
         </section>
         <section aria-labelledby="log-heading"><h2 id="log-heading">Activity log</h2><p>Latest 500 events. Tab into the log and use arrow keys to scroll.</p>
           <div role="log" aria-label="Activity log" aria-live={voiceReady ? 'off' : 'polite'} aria-relevant="additions" tabIndex={0} className="log">
