@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Get started | artemis.</title>
+<meta name="description" content="What you need to run Artemis on Windows, and how to set it up.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+<script src="motion.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+<header class="site-header">
+  <div class="nav-pill">
+    <a class="brand" href="index.html" aria-label="artemis, home">artemis.</a>
+    <nav class="site-nav" aria-label="Main">
+      <ul>
+        <li><a href="index.html">Home</a></li>
+        <li><a href="how-it-works.html">How it works</a></li>
+        <li><a href="trust.html">Accessibility and safety</a></li>
+        <li><a href="team.html">Team</a></li>
+      </ul>
+    </nav>
+    <a class="button button-solid button-small" href="get-started.html" aria-current="page">Get started</a>
+  </div>
+</header>
+
+<main id="main">
+  <div class="page-head">
+    <h1>Get started</h1>
+    <p class="lede">Artemis runs on Windows 11. Setup is a few commands in a terminal.</p>
+  </div>
+
+  <section class="block panel prose" aria-labelledby="status-title">
+    <h2 id="status-title">Before you start</h2>
+    <div class="status">
+      <p>Artemis is in active development. Today you can try the voice tools and the desktop app's simulated demo. The one-step launcher that starts everything together is in review now.</p>
+    </div>
+  </section>
+
+  <section class="block panel prose" aria-labelledby="needs-title">
+    <h2 id="needs-title">What you need</h2>
+    <ul>
+      <li>Windows 11 and a microphone</li>
+      <li><a href="https://www.nvaccess.org/download/">NVDA</a>, the free screen reader, recommended</li>
+      <li>Python 3.12 and <a href="https://docs.astral.sh/uv/">uv</a></li>
+      <li>Git and Node.js</li>
+      <li>For the desktop app: Rust and the Microsoft C++ Build Tools</li>
+    </ul>
+  </section>
+
+  <section class="block panel prose" aria-labelledby="voice-title">
+    <h2 id="voice-title">Set up voice</h2>
+    <p>Get the code and install the core with its voice tools:</p>
+<pre tabindex="0"><code>git clone https://github.com/BU-Hackathonz/Artemis.git
+cd Artemis/server
+uv sync --group voice --group dev</code></pre>
+    <p>Download the speech model and NVDA's connector once, before you need them:</p>
+<pre tabindex="0"><code>uv run --group voice python -m artemis.voice.setup</code></pre>
+    <p>Check your microphone. It asks you to speak for four seconds, then says what it heard:</p>
+<pre tabindex="0"><code>uv run --group voice python -m artemis.voice.listen</code></pre>
+  </section>
+
+  <section class="block panel prose" aria-labelledby="app-title">
+    <h2 id="app-title">Try the desktop app</h2>
+    <p>From the <code>client</code> folder:</p>
+<pre tabindex="0"><code>npm ci
+npm run tauri dev</code></pre>
+    <p>Choose <strong>Try in-memory demo</strong> to practise the approval flow with a simulated assistant. It creates no files and runs no code.</p>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <p>artemis. Built at HackUMass 2026.</p>
+  <p><a href="https://github.com/BU-Hackathonz/Artemis">Source code on GitHub</a></p>
+</footer>
+</body>
+</html>

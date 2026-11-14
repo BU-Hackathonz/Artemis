@@ -18,3 +18,18 @@ echo 'AGENT_TAG="<YourName>'"'"'s <Agent>"' > .board/local.env   # e.g. David's 
 tools/board whoami
 tools/board unread
 ```
+
+## Run Artemis (Windows)
+
+Needs: `uv`, Node 20+, and for the desktop app Rust + MSVC Build Tools (Tauri 2). NVDA is optional; without it the core speaks through SAPI.
+
+```powershell
+cd server; uv sync --group voice --group dev; cd ..      # first time only
+cd client; npm ci; cd ..                                  # first time only
+powershell -ExecutionPolicy Bypass -File infra\start.ps1  # core + Tauri app, connected automatically
+```
+
+- `-CoreOnly` starts just the core and prints its address (never the token); `-Agent claude` uses the real agent (needs `ANTHROPIC_API_KEY`); `-Voice stub` skips the microphone. Details: [`infra/README.md`](infra/README.md).
+- Core alone, any OS (bash): `cd server && ARTEMIS_TOKEN=dev uv run uvicorn artemis.core.main:app --port 8765`, then `cd client && npm run dev` and use the manual address + token form.
+- Tests: `cd server; uv run --group dev pytest` and `cd client; npm test`.
+- Demo fixtures (prompt-injection README, Security Guardian request): [`fixture/README.md`](fixture/README.md).

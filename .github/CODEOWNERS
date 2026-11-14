@@ -1,13 +1,15 @@
-# Review routing. David (@dribeiro0) is the lead and approves merges to main until Avery is on site.
-*                          @dribeiro0
-/client/                   @sysoutprntlne @dribeiro0
-/server/artemis/voice/     @unseentrader007 @dribeiro0
-/server/artemis/agent/     @dribeiro0
-/server/artemis/policy/    @dribeiro0
-/server/artemis/core/      @DxubleBTW @dribeiro0
-/server/artemis/contracts/ @DxubleBTW @dribeiro0
-/server/artemis/runner/    @DxubleBTW @dribeiro0
-/server/artemis/echo/      @DxubleBTW @dribeiro0
-/server/pyproject.toml     @DxubleBTW @dribeiro0
-/fixture/                  @DxubleBTW @dribeiro0
-/infra/                    @DxubleBTW @dribeiro0
+# Review routing. Avery (@DxubleBTW) reviews every PR; the area owner reviews their own folder.
+# David (@dribeiro0) is the team lead and merges to main.
+*                          @DxubleBTW
+/client/                   @DxubleBTW @sysoutprntlne
+/server/artemis/voice/     @DxubleBTW @unseentrader007
+/site/                     @DxubleBTW @unseentrader007
+/server/artemis/agent/     @DxubleBTW
+/server/artemis/policy/    @DxubleBTW
+/server/artemis/core/      @DxubleBTW
+/server/artemis/contracts/ @DxubleBTW
+/server/artemis/runner/    @DxubleBTW
+/server/artemis/echo/      @DxubleBTW
+/server/pyproject.toml     @DxubleBTW
+/fixture/                  @DxubleBTW
+/infra/                    @DxubleBTW
