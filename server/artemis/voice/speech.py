@@ -17,12 +17,11 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Literal, Protocol
+from typing import Callable, Protocol
+
+from artemis.contracts.events import Priority
 
 log = logging.getLogger(__name__)
-
-# shortcut: mirrors contracts.md Priority; import it from artemis.contracts once that package lands.
-Priority = Literal["low", "normal", "high"]
 
 # The DLL ships in NVDA's controllerClient zip; it is not committed. Only these two paths are tried.
 NVDA_DLL = Path(os.environ.get("ARTEMIS_NVDA_DLL") or Path(__file__).parent / "bin" / "nvdaControllerClient.dll")
