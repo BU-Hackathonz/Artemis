@@ -35,3 +35,23 @@ No files needed. Plant the bug in the request so the demo is repeatable:
 **"Create a Python program that calls pritn with Hello World, and run it."**
 Expected: the run fails, Artemis speaks the exit code and `NameError: name 'pritn' is not defined`
 verbatim before any explanation. Then: **"Fix it and run it again."**
+
+## `echo-page/`: Echo Check before and after
+
+A tiny sign-up page, `before.html`, with real accessibility bugs: no `lang`, unlabeled email and
+password fields (placeholder only), an icon-only submit button with no accessible name, a logo
+image without `alt`, low-contrast hint text, and no heading or landmarks. `after.html` is the same
+page fixed.
+
+Check either one from `server/` (needs the `echo` group and a Chromium, Chrome or Edge):
+
+```powershell
+uv run --group echo python -m artemis.echo ..\fixture\echo-page\before.html
+uv run --group echo python -m artemis.echo ..\fixture\echo-page\before.html ..\fixture\echo-page\after.html
+```
+
+Expected (checked with Chrome): `before.html` gives 7 problems, critical ones first (the button has
+no accessible name, the image has no alt), then contrast and language, then the missing heading and
+landmarks. The fields count as named only because Chrome uses the placeholder, which disappears
+while typing, so `after.html` adds real labels anyway. `after.html` reports no axe violations, and the
+second form also speaks a before/after comparison.
