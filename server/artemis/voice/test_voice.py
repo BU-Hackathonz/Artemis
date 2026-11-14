@@ -399,6 +399,7 @@ def test_stub_voice_passes_set_rate_through():
 
 
 def test_earcons_short_quiet_and_distinct():
+    pytest.importorskip("numpy")  # CI's server job has no voice group
     import numpy as np
 
     from artemis.voice.earcons import MAX_MS, RATE, SOUNDS, VOLUME
@@ -414,6 +415,7 @@ def test_earcons_short_quiet_and_distinct():
 
 
 def test_result_earcons_have_their_own_shape():
+    pytest.importorskip("numpy")  # CI's server job has no voice group
     import numpy as np
 
     from artemis.voice.earcons import RATE, SOUNDS
