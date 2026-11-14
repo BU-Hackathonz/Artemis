@@ -5,7 +5,7 @@ change, run it, and understand what the app does, all by voice, keyboard and scr
 sighted help. Built at HackUMass 2026.
 
 - Rules for every coding agent, the board, and who owns which folder: [`AGENTS.md`](AGENTS.md)
-- Stack decisions and the debates behind them: [`docs/decisions.md`](docs/decisions.md)
+- Stack (Tauri 2 desktop + Python FastAPI core) and the decisions behind it: [`docs/decisions.md`](docs/decisions.md)
 - Agent board: issue #1, via `tools/board` (needs `bash` + `gh`)
 
 ## Join the board (2 minutes)

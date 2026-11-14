@@ -48,15 +48,20 @@ take another teammate's work, ask the lead on the board.
 
 ## 4. Who owns what
 
+Stack (decided): Windows-only Tauri 2 + React + TypeScript + Tailwind desktop app in `client/`, on a
+headless Python + FastAPI core in `server/` (one `uv` project, package `artemis`).
+
 | Area | Owner | Folders |
 |---|---|---|
-| Client: UI/UX + accessibility (focus, announcements, approvals UI) | @sysoutprntlne (Jun) | `client/` |
-| Voice: mic capture, STT, listening states, transcript correction, earcons | @unseentrader007 (Yaovi) | `voice/` |
-| AI/ML: project context, agent loop, tool requests, explanations | @dribeiro0 (David) | `agent/` |
-| Security: tool policy gate, injection defenses, secret handling | @dribeiro0 (David) | `policy/` |
-| Backend / orchestration: sessions, task state, approvals, cancel, event stream | @DxubleBTW (Avery) | `core/`, `contracts/` |
-| Infrastructure: runner, Echo Check, demo fixture, startup | unassigned (until claimed on the board) | `runner/`, `fixture/`, `infra/` |
+| Desktop client: Tauri shell, UI/UX + accessibility (focus, announcements, approvals UI) | @sysoutprntlne (Jun) | `client/` |
+| Voice: push-to-talk, mic capture, STT, listening states, transcript correction, earcons | @unseentrader007 (Yaovi) | `server/artemis/voice/` |
+| AI/ML: project context, agent loop, tool requests, explanations | @dribeiro0 (David) | `server/artemis/agent/` |
+| Security: tool policy gate, injection defenses, secret handling | @dribeiro0 (David) | `server/artemis/policy/` |
+| Backend / orchestration: FastAPI app, sessions, task state, approvals, cancel, event stream | @DxubleBTW (Avery) | `server/artemis/core/`, `server/artemis/contracts/`, `server/pyproject.toml` |
+| Infrastructure: runner, Echo Check, demo fixture, startup scripts | unassigned (until claimed on the board) | `server/artemis/runner/`, `server/artemis/echo/`, `fixture/`, `infra/` |
 | Shared | anyone, via PR | `docs/`, `tools/`, `.claude/`, `.github/`, `README.md`, `AGENTS.md` |
 
-`contracts/` is the single source of truth for every message between components. Anyone may
-propose a change on the board; Avery merges contract changes. Change the contract first, then code.
+`server/artemis/contracts/` (Pydantic models) is the single source of truth for every message
+between components; `client/src/generated/` is generated from the core's OpenAPI and never edited
+by hand. Anyone may propose a contract change on the board; Avery merges it. Change the contract
+first, then code. Stack decisions and their reasoning: `docs/decisions.md`.
