@@ -25,8 +25,21 @@ MAX_SECONDS = 60  # a stuck key can't fill memory
 MIN_SECONDS = 0.3  # shorter is a key tap, not speech
 # Silence must stay silent: Whisper invents text ("Thank you.", "and still") from quiet room noise.
 # Measured on a laptop headset mic: room silence RMS 0.00002-0.00022; speech is far louder.
-MIN_RMS = 0.001  # below this average level, skip Whisper entirely
-MAX_NO_SPEECH = 0.6  # drop segments Whisper itself thinks are probably not speech (the fake one scored 0.70)
+MIN_RMS = 0.001  # if even the loudest 100 ms is below this, nobody spoke: skip Whisper
+WINDOW = RATE // 10  # 100 ms: a short word in a long key hold is judged on its own, not diluted
+# Drop segments Whisper itself thinks are probably not speech. Measured: the fake "Thank you." scored
+# 0.70; real short commands (cancel, stop, repeat, yes, no...) scored 0.07 or less. avg_logprob does not
+# separate them (commands -0.41 to -0.93, the fake -0.95), so it is deliberately not used.
+MAX_NO_SPEECH = 0.6
+
+
+def loudest_rms(audio: np.ndarray) -> float:
+    """RMS of the loudest 100 ms window."""
+    n = len(audio) // WINDOW
+    if n == 0:
+        return float(np.sqrt(np.mean(np.square(audio)))) if len(audio) else 0.0
+    frames = audio[: n * WINDOW].reshape(n, WINDOW)
+    return float(np.sqrt(np.mean(np.square(frames), axis=1)).max())
 
 
 class VoiceError(Exception):
@@ -110,7 +123,7 @@ class WhisperVoice:
             self._chunks, self._frames = [], 0
         if len(audio) < RATE * MIN_SECONDS:
             return ""
-        if float(np.sqrt(np.mean(np.square(audio)))) < MIN_RMS:
+        if loudest_rms(audio) < MIN_RMS:
             return ""  # nobody spoke
         text = await asyncio.to_thread(self._transcribe, audio)
         return strip_wake_word(text)
