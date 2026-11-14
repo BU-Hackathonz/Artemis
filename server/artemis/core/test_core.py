@@ -222,6 +222,39 @@ async def test_cancel_while_awaiting_approval(client, core):
     assert session.approvals.pending() == []
 
 
+async def test_cancel_report_is_not_cut_off_by_a_second_canceled(client, core, voice):
+    """High priority interrupts: a "Canceled." right after the gateway's "Canceled. Nothing was
+    written." left only "Canceled." audible, losing what was (not) applied (contracts.md §1)."""
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "hello"})).json()["task_id"]
+    await wait_for(session, lambda s: pending(s) is not None)
+    await client.post(f"/tasks/{tid}/cancel", headers=AUTH)
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    assert voice.spoken[-1] == ("high", "Canceled. Nothing was written.")
+    assert ("high", "Canceled.") not in voice.spoken
+    final = [e for e in session.bus.history if e.type == "task.state"][-1]
+    assert final.data["state"] == "canceled" and final.announce is None
+
+
+async def test_cancel_with_nothing_to_report_says_canceled(client, core, voice):
+    agent = SlowAgent()
+    core.make_agent = lambda: agent
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "x"})).json()["task_id"]
+    await wait_for(session, lambda s: s.tasks[tid].state == "working")
+    await client.post(f"/tasks/{tid}/cancel", headers=AUTH)
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    assert voice.spoken[-1] == ("high", "Canceled.")
+    # The next request is accepted.
+    second = await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                               json={"client_request_id": "cr_2", "source": "keyboard", "text": "y"})
+    assert second.status_code == 200
+    agent.release.set()
+    await wait_for(session, lambda s: s.active_task is None)
+
+
 async def test_agent_crash_is_spoken_not_silent(client, core, voice):
     class Boom:
         async def run(self, task, tools, emit):

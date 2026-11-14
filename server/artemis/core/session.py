@@ -83,6 +83,7 @@ class Task:
         self.state = "queued"
         self.job: asyncio.Task | None = None
         self.heartbeat: asyncio.Task | None = None
+        self.cancel_reported = False  # the job already said what its cancel stopped
 
     @property
     def active(self) -> bool:
@@ -134,6 +135,11 @@ class Session:
             # Something was said, or the state changed (e.g. back to working after an approval):
             # the heartbeat waits a full interval from here.
             self._quiet_since = time.monotonic()
+        task = self.tasks.get(draft.task_id) if draft.task_id else None
+        if draft.announce and task and task.job and task.job is asyncio.current_task() and task.job.cancelling():
+            # Said by the task itself while it is being canceled: the gateway's report of what
+            # the cancel stopped ("Canceled. Nothing was written.", "Canceled while running main.py.").
+            task.cancel_reported = True
         await self.bus.emit(draft)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
@@ -233,7 +239,10 @@ class Session:
             await self._state(tid, "succeeded")
         elif isinstance(outcome, Canceled):
             outcome_text = "canceled"
-            await self._state(tid, "canceled", "Canceled.", "high")
+            # A second high-priority "Canceled." would cut off the report of what was already
+            # applied (contracts.md §1), so it is only said when nothing else was.
+            text = None if task.cancel_reported else "Canceled."
+            await self._state(tid, "canceled", text, "high")
         else:
             outcome_text = f"failed: {outcome.code}"
             # The agent's messages are whole sentences ("No internet connection to Claude."):

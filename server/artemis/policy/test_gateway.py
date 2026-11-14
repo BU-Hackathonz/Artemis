@@ -42,10 +42,10 @@ class World:
         return self.projects / "hello-world"
 
 
-def result_of(exit_code=0, stdout="", stderr="", timed_out=False):
+def result_of(exit_code=0, stdout="", stderr="", timed_out=False, truncated=False):
     return RunResult(
         op_id="op_x", preset="python", exit_code=exit_code, timed_out=timed_out,
-        duration_ms=5, stdout_tail=stdout, stderr_tail=stderr, truncated=False,
+        duration_ms=5, stdout_tail=stdout, stderr_tail=stderr, truncated=truncated,
     )
 
 
@@ -712,6 +712,17 @@ def test_run_announcement_wording():
         "main.py failed with exit code 1. EOFError: EOF when reading a line. "
         "The program asked for input, which isn't supported yet."
     )
+
+
+def test_a_lot_of_output_is_spoken_by_how_it_ended():
+    """The runner keeps the last 64 KB, cut mid-line: speaking its first 200 characters gave
+    "It printed: 538 line 194539 ...", a fragment the program never printed first."""
+    tail = "538\n" + "".join(f"line {i}\n" for i in range(194539, 200000))
+    text = run_announcement("main.py", result_of(stdout=tail, truncated=True), 10)
+    assert text.startswith("main.py ran successfully. It printed a lot, ending with: ")
+    assert text.endswith("line 199998 line 199999") and " 538 " not in text and len(text) < 260
+    # Not truncated: still the start of the output.
+    assert run_announcement("main.py", result_of(stdout="word " * 100), 10).endswith(", and more")
 
 
 def test_run_arguments_are_in_the_summary_and_the_hash(tmp_path):
