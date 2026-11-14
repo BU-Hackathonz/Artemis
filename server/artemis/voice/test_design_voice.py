@@ -78,3 +78,57 @@ def test_no_key_is_a_clear_message(capsys, monkeypatch):
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     assert dv.main(["design"]) == 1
     assert "ELEVENLABS_API_KEY is not set" in capsys.readouterr().err
+
+
+class Answers:
+    def __init__(self, *answers):
+        self.answers, self.prompts = list(answers), []
+
+    def __call__(self, prompt):
+        self.prompts.append(prompt)
+        return self.answers.pop(0)
+
+
+class Sequence:
+    """An opener that returns each payload in turn (design, then create)."""
+
+    def __init__(self, *payloads):
+        self.payloads, self.requests = list(payloads), []
+
+    def __call__(self, request, timeout):
+        self.requests.append(request)
+        return Reply(self.payloads.pop(0))
+
+
+def _previews(*ids):
+    audio = base64.b64encode(b"ID3").decode()
+    return {"previews": [{"generated_voice_id": i, "audio_base_64": audio} for i in ids], "text": "x"}
+
+
+def test_wizard_plays_each_preview_saves_the_pick_and_remembers_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", KEY)
+    played, remembered = [], []
+    opener = Sequence(_previews("g1", "g2", "g3"), {"voice_id": "v9"})
+    answers = Answers("", "", "", "x", "2", "y")  # Enter x3, a wrong choice (asked again, no new previews), 2, yes
+    code = dv.wizard(answers, played.append, lambda v: remembered.append(v) or True, opener, tmp_path)
+    assert code == 0 and [p.name for p in played] == ["preview-1.mp3", "preview-2.mp3", "preview-3.mp3"]
+    assert len(opener.requests) == 2  # one design, one create: a wrong answer costs no credits
+    assert json.loads(opener.requests[1].data)["generated_voice_id"] == "g2"
+    assert remembered == ["v9"]
+
+
+def test_wizard_redo_makes_new_previews_with_the_change(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", KEY)
+    opener = Sequence(_previews("a1"), _previews("b1"), {"voice_id": "v1"})
+    answers = Answers("", "r", "a little deeper", "", "1", "n")
+    assert dv.wizard(answers, lambda p: None, lambda v: True, opener, tmp_path) == 0
+    second = json.loads(opener.requests[1].data)["voice_description"]
+    assert second.endswith("a little deeper") and json.loads(opener.requests[2].data)["generated_voice_id"] == "b1"
+
+
+def test_wizard_asks_for_the_key_hidden_when_it_is_not_set(tmp_path, monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.setattr(dv.getpass, "getpass", lambda prompt: KEY)
+    opener = Sequence(_previews("g1"), {"voice_id": "v1"})
+    dv.wizard(Answers("", "1", "n"), lambda p: None, lambda v: True, opener, tmp_path)
+    assert opener.requests[0].get_header("Xi-api-key") == KEY

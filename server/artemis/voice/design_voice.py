@@ -1,19 +1,22 @@
 """Design Artemis's own ElevenLabs voice from a description, then save the one you like to your account.
 
-Run in your own terminal with the key set there (it is never printed, logged or written to a file):
-    $env:ELEVENLABS_API_KEY = Read-Host "ElevenLabs key"
-    uv run python -m artemis.voice.design_voice design            # three previews into voice-previews\\
-    uv run python -m artemis.voice.design_voice create <preview>  # saves that preview as "Artemis"
+Easiest: run it with no arguments and answer the questions (it needs only Python, no project setup):
+    py .\\artemis\\voice\\design_voice.py
 
-`design` writes preview-1.mp3 to preview-3.mp3 and prints each preview's id. Listen, pick one, and run
-`create` with its id. `create` prints the new voice id: put it in ARTEMIS_ELEVEN_VOICE_ID (or the voice
-profile) and Artemis speaks with it. `--description` and `--name` change the defaults below.
+It asks for the key (hidden as you paste), makes three previews and plays each one, asks which you
+like, saves it as "Artemis", and offers to remember the voice id for Artemis. The key is never
+printed, logged or written to a file.
+
+The same steps one at a time: `design` writes preview-1.mp3 to preview-3.mp3 and prints each
+preview's id; `create <id>` saves one and prints its voice id. Both read ELEVENLABS_API_KEY.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import getpass
+import subprocess
 import json
 import os
 import sys
@@ -48,11 +51,69 @@ class ApiError(Exception):
     """A failed request. The message is the HTTP status or error type only: never the request."""
 
 
-def _key() -> str:
+def _key(ask: bool = False) -> str:
     key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not key and ask:
+        key = getpass.getpass("Paste your ElevenLabs API key (hidden), then press Enter: ").strip()
     if not key:
         raise ApiError("ELEVENLABS_API_KEY is not set in this terminal")
     return key
+
+
+def _play(path: Path) -> None:
+    """Open an mp3 in the default player. Windows only; elsewhere the path is printed."""
+    starter = getattr(os, "startfile", None)
+    if starter is None:
+        print(f"  Play it: {path}")
+        return
+    try:
+        starter(str(path))
+    except OSError:
+        print(f"  Couldn't open it; play it yourself: {path}")
+
+
+def _remember(voice_id: str) -> bool:
+    """Save the voice id (not a secret) as a user environment variable, so new terminals pick it up."""
+    if sys.platform != "win32":
+        return False
+    result = subprocess.run(["setx", "ARTEMIS_ELEVEN_VOICE_ID", voice_id], capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def wizard(input_fn: Callable[[str], str] = input, play: Callable[[Path], None] = _play,
+           remember: Callable[[str], bool] = _remember, opener: Callable | None = None,
+           out_dir: Path = Path("voice-previews")) -> int:
+    """Design, listen, pick, save: one question at a time."""
+    key = _key(ask=True)
+    description = DEFAULT_DESCRIPTION
+    print("Making three previews of Artemis's voice. This takes about half a minute.")
+    while True:
+        ids = design(description, out_dir, key, opener)
+        for n in range(1, len(ids) + 1):
+            print(f"Playing preview {n} of {len(ids)}.")
+            play(out_dir / f"preview-{n}.mp3")
+            input_fn("Press Enter for the next one. ")
+        choices = "/".join(str(n) for n in range(1, len(ids) + 1))
+        while True:  # asking again costs nothing; only r makes new previews
+            answer = input_fn(f"Which one should be Artemis's voice? Type {choices}, or r for three new ones: ").strip().lower()
+            if answer == "r" or (answer.isdigit() and 1 <= int(answer) <= len(ids)):
+                break
+            print(f"Please type {choices} or r. The files are in {out_dir.resolve()} if you want to replay them.")
+        if answer != "r":
+            break
+        change = input_fn("Describe what to change, or press Enter to keep the same description: ").strip()
+        if change:
+            description = f"{DEFAULT_DESCRIPTION} {change}"
+    voice_id = create(ids[int(answer) - 1], DEFAULT_NAME, description, key, opener)
+    print(f"Saved to your ElevenLabs account as {DEFAULT_NAME!r}. Voice id: {voice_id}")
+    if input_fn("Remember this voice for Artemis on this computer? y or n: ").strip().lower().startswith("y"):
+        if remember(voice_id):
+            print("Done. New terminals use this voice. Open a new PowerShell window before starting Artemis.")
+        else:
+            print(f"Couldn't save it. Set it yourself: $env:ARTEMIS_ELEVEN_VOICE_ID = \"{voice_id}\"")
+    else:
+        print(f"To use it: $env:ARTEMIS_ELEVEN_VOICE_ID = \"{voice_id}\"")
+    return 0
 
 
 def _post(url: str, body: dict, key: str, opener: Callable | None = None) -> dict:
@@ -111,7 +172,7 @@ def create(generated_voice_id: str, name: str, description: str, key: str,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m artemis.voice.design_voice", description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
     d = sub.add_parser("design", help="make three previews")
     d.add_argument("--description", default=DEFAULT_DESCRIPTION)
     d.add_argument("--out", type=Path, default=Path("voice-previews"))
@@ -121,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--description", default=DEFAULT_DESCRIPTION)
     args = parser.parse_args(argv)
     try:
+        if args.command is None:
+            return wizard()
         key = _key()
         if args.command == "design":
             ids = design(args.description, args.out, key)
@@ -133,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
             print("Use it with: $env:ARTEMIS_ELEVEN_VOICE_ID = \"" + voice_id + "\"")
     except ApiError as e:
         print(f"ElevenLabs request failed: {e}", file=sys.stderr)
+        return 1
+    except (KeyboardInterrupt, EOFError):
+        print("\nStopped. Nothing was saved.", file=sys.stderr)
         return 1
     return 0
 
