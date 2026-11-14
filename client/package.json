@@ -6,12 +6,13 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "test": "vitest run --exclude tests/browser/**",
+    "test": "vitest run --exclude 'tests/browser/**'",
     "test:e2e": "playwright test",
     "tauri": "tauri"
   },
   "dependencies": {
     "@microsoft/fetch-event-source": "^2.0.1",
+    "@tauri-apps/api": "^2.12.4",
     "react": "^19.0.0",
     "react-aria-components": "^1.6.0",
     "react-dom": "^19.0.0"

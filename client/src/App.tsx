@@ -9,6 +9,12 @@ import type { Core, CoreEvent, Health } from './contracts';
 import { platform } from './platform';
 
 interface Connection {core: Core; sid: string; health: Health; demo: boolean}
+async function openConnection(core: Core, demo: boolean): Promise<Connection> {
+  const health = await core.health();
+  if (!health.ok) throw new Error('Core is not healthy. Restart it and reconnect.');
+  const sid = await core.session();
+  return {core, sid, health, demo};
+}
 const message = (e: unknown) => e instanceof TypeError ? 'Artemis core is not reachable. Start the core, check its address and token, then reconnect.' : e instanceof Error ? e.message : 'Request failed. Check the core and try again.';
 function eventText(event: CoreEvent) {
   if (event.type === 'voice.status' && typeof event.data.voice_ready === 'boolean') return event.data.voice_ready ? 'Core speech is available.' : 'Core speech is unavailable. Screen reader announcements enabled.';
@@ -34,6 +40,21 @@ export function App() {
   const generation = useRef(0);
   const voiceReady = state.voiceReady ?? connection?.health.voice_ready ?? false;
   const ready = status === 'Connected' || status === 'Demo connected';
+  useEffect(() => {
+    if (!platform.native) return;
+    let active = true;
+    setBusy(true); setStatus('Connecting from launcher…');
+    void (async () => {
+      try {
+        const config = await platform.getCoreConfig();
+        const next = await openConnection(createHttpCore(config.core_url, config.token), false);
+        if (active) {setConnection(next); setStatus('Connecting event stream…');}
+      } catch (e) {
+        if (active) {setError(message(e)); setStatus('Launch failed');}
+      } finally {if (active) setBusy(false);}
+    })();
+    return () => {active = false;};
+  }, []);
   useEffect(() => {
     if (!connection) return;
     return connection.core.subscribe(connection.sid, dispatch, setStatus);
@@ -67,15 +88,14 @@ export function App() {
   }, [state.approvals.length, ready]);
   useEffect(() => () => { generation.current++; }, []);
   async function connect(demo: boolean, blockedRun = false) {
+    if (platform.native) return;
     setBusy(true); setError('');
     const attempt = ++generation.current;
     try {
       const core = demo ? createDemoCore({blockedRun}) : createHttpCore(address, token);
-      const health = await core.health();
-      if (!health.ok) throw new Error('Core is not healthy. Restart it and reconnect.');
-      const sid = await core.session();
+      const next = await openConnection(core, demo);
       if (attempt !== generation.current) return;
-      setConnection({core, sid, health, demo}); setToken(''); setStatus('Connecting event stream…');
+      setConnection(next); setToken(''); setStatus('Connecting event stream…');
     } catch (e) {setError(message(e));}
     finally {if (attempt === generation.current) setBusy(false);}
   }
@@ -105,7 +125,7 @@ export function App() {
     <main>
       <section aria-labelledby="connection-heading"><h2 id="connection-heading">Core connection</h2>
         <p role="status">{status}</p>
-        {!connection ? <><form onSubmit={e => {e.preventDefault(); void connect(false);}}>
+        {!connection && platform.native ? <><p>Start Artemis through infra/start.ps1 to connect securely to its core.</p>{!busy && <button onClick={() => window.location.reload()}>Retry launcher connection</button>}</> : !connection ? <><form onSubmit={e => {e.preventDefault(); void connect(false);}}>
           <label htmlFor="address">Core address</label><input autoFocus id="address" type="url" value={address} onChange={e => setAddress(e.target.value)} required disabled={busy}/>
           <label htmlFor="token">Launch token</label><input id="token" type="password" value={token} onChange={e => setToken(e.target.value)} required autoComplete="off" disabled={busy}/>
           <button disabled={busy}>Connect to core</button>
