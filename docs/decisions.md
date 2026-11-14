@@ -16,15 +16,21 @@ agrees on the board; record any change here.
 | 2 | Screen reader for testing | NVDA (free) on Windows 11; Narrator smoke test | Proposed | all |
 | 3 | How Tauri runs the core | Separate process on `127.0.0.1` during the hackathon; Tauri sidecar bundling is a stretch | Proposed | Avery + Jun |
 | 4 | Contracts | Pydantic models are the source; FastAPI's OpenAPI generates the TS types | Proposed | Avery |
-| 5 | Spoken output | The user's screen reader via ARIA live regions; our own TTS only as an opt-in mode | Proposed | Jun + Yaovi |
+| 5 | Spoken output | Core `announce()`: speak through NVDA's controller API when NVDA runs, Windows SAPI otherwise; never both | Proposed (refines team's SAPI pick) | Yaovi |
 | 6 | Audio capture + STT | Global push-to-talk in Tauri; the core records the mic and runs faster-whisper with a vocabulary prompt | Proposed | Yaovi |
 | 7 | Agent loop | Anthropic Python SDK, our own tools, approval pause owned by the orchestrator | Proposed | David |
 | 8 | Model | `claude-opus-5-5`, effort `medium` | Proposed | David |
 | 9 | Patch format | Search/replace edits → core-built unified diff, hashed for approval | Proposed | David + Avery |
-| 10 | Runner isolation | Named check presets, no shell; git as the undo | Proposed | Infra |
-| 11 | Echo Check | Playwright for Python (Chromium) + `aria_snapshot()` + axe-core | Proposed | Infra + Jun |
+| 10 | Runner isolation | `run_program` with a fixed argv per file type, no shell; approval + scan first; git as the undo | Proposed | Infra |
+| 11 | Echo Check | Playwright for Python (Chromium) + `aria_snapshot()` + axe-core; after the MVP, web projects only | Proposed | Infra + Jun |
 | 12 | Event transport | `POST` commands + Server-Sent Events with sequence ids | Proposed | Avery |
 | 13 | UI components | Semantic HTML first; React Aria for dialogs/listboxes; Tailwind for styling only | Proposed | Jun |
+| 14 | Security scanning | Semgrep with vendored local rules (team pick); Bandit as the Windows-safe fallback for the Python MVP | Proposed | David |
+| 15 | Windows UI Automation | Not needed for the MVP (WebView2 already exposes UIA to NVDA); revisit for inspecting native apps | Deferred | Jun |
+
+The confirmed MVP is "create a Python program that prints Hello World, run it, hear the result".
+The architecture, risks and build order are in [`architecture.md`](architecture.md); the API is in
+[`contracts.md`](contracts.md).
 
 ---
 
@@ -69,18 +75,23 @@ models validate tool arguments in the policy gate. Next to them sit the four sam
 handoff names (submission, approve/reject, failed check, successful Echo Check) as JSON fixtures.
 Everyone stubs against those samples first. Avery merges contract changes.
 
-## 5. Spoken output: our own voice or the screen reader?
+## 5. Spoken output: SAPI, live regions, or NVDA itself?
 
-**Our own TTS voice.** For: we control timing; works without a screen reader. Against: blind
+**Windows SAPI only (team's proposal).** For: always available, and we control it. Against: blind
 developers run NVDA fast, with their own voice. A second voice talking over NVDA is the most common
 complaint about "accessible" tools, and stopping one voice doesn't stop the other.
-**Screen reader first (pick).** The event stream renders as text in a `role="log"` region. Short
-announcements go to a polite live region, assertive only for failures and approval requests. NVDA
-speaks them at the user's rate and voice, and Ctrl stops speech. This one path covers the handoff's
-"speak the same outcome that appears in accessible text" and "stop or replay it". Own TTS
-(Windows SAPI via `pyttsx3`, or Piper) is an opt-in mode for users without a screen reader. When
-it's on, the live region is silenced so nothing is spoken twice. Earcons (short sounds for
-listening on/off, awaiting approval, success, failure) are Yaovi's and don't collide with speech.
+**ARIA live regions in the app.** For: NVDA speaks in the user's voice. Against: NVDA only reads
+live regions from the *foreground* window. With a global push-to-talk key the user may be in
+another app when the result arrives, and would hear nothing.
+**Pick: one `announce(text, priority)` in the core, two backends.** If NVDA is running, speak
+through NVDA's Controller Client (`nvdaControllerClient.dll`: `speakText`, `cancelSpeech`, and
+`brailleMessage` for braille displays). That uses the user's voice and rate, and works whatever app
+is focused. If NVDA isn't running, use Windows SAPI (`win32com` `SAPI.SpVoice`, interruptible).
+Never both. The same text always goes to the app's `role="log"` region, so it can be reviewed and
+replayed. `high` priority (approvals, failures) interrupts current speech, and failures always say
+the exit code and the first error line verbatim before any explanation. Earcons (listening on/off,
+waiting for approval, success, failure, a "still working" heartbeat) are Yaovi's and don't collide
+with speech.
 
 ## 6. Audio capture and speech-to-text
 
@@ -91,8 +102,9 @@ and transcribes locally with **faster-whisper** (`small.en` or `distil-small.en`
 2 s per sentence). Push-to-talk also keeps the mic from transcribing NVDA's own speech.
 
 **Accuracy on code words.** Pass Whisper an `initial_prompt` built from the workspace's file names
-and symbols (`LoginForm`, `aria-label`, `index.html`). The transcript always lands in an editable
-field and is announced before submit; that's the handoff's correction step. A hosted STT can sit
+and symbols (`LoginForm`, `aria-label`, `index.html`). The transcript is read back ("Heard: …") and
+stays in an editable field, so the user can correct it and resend. Writes and runs still need
+approval, so a misheard request can't change anything on its own. A hosted STT can sit
 behind the same `voice/` interface as a fallback.
 
 **Shortcut choice.** Pick something that doesn't collide with NVDA (Insert or Caps Lock modifiers)
@@ -103,11 +115,12 @@ or Windows (Win+H is dictation), e.g. Ctrl+Alt+Space.
 **Claude Agent SDK (Claude Code as a library).** Against: its built-in Bash/Edit tools act on the
 filesystem directly. The handoff requires every action to pass our policy gate, with approval
 bound to the exact patch.
-**Our own tools on the Anthropic Python SDK (pick).** Tools that match the contract: `read_file`,
-`list_files`, `search_code`, `stage_patch`, `run_check`, `inspect_page`, `ask_user`, with `strict`
-schemas. The agent can only *stage* a patch. Applying it is a user action the orchestrator
-performs after approval, so "the agent can't write without approval" is a property of the design,
-not a prompt instruction. Use the SDK's tool runner if its per-turn hooks fit the approval pause;
+**Our own tools on the Anthropic Python SDK (pick).** The tools are the ones in
+[`contracts.md`](contracts.md) §3.2 (`create_project`, `list_files`, `read_file`, `write_file`,
+`run_program`, `ask_user`, then `edit_file`, `scan` and `inspect_page`), with `strict` schemas. Every
+call goes through the policy gate, which pauses the call until the user approves any write or run.
+So "the agent can't write or run without approval" is a property of the design, not a prompt
+instruction. Use the SDK's tool runner if its per-turn hooks fit the approval pause;
 otherwise a manual loop where the orchestrator owns the pause across user turns.
 
 ## 8. Model
@@ -129,10 +142,12 @@ through by hunk and by line from the keyboard.
 
 ## 10. Runner isolation
 
-Docker Desktop on Windows is a classic demo-day failure. **Pick:** `run_check` takes a preset name
-(`test`, `a11y`), never a command string. Each preset is a fixed argv run through
-`subprocess.run(..., shell=False)` with a fixed cwd inside the fixture, a scrubbed environment, a
-timeout and an output cap. Paths go through `Path.resolve()` and must stay under the workspace root,
+Docker Desktop on Windows is a classic demo-day failure. **Pick:** `run_program` takes an entry
+file, never a command string. The file type picks a fixed argv (`.py` → `[python, "-I", entry]`) run
+with `shell=False`, the project folder as cwd, an explicit minimal environment (so a generated
+program can't read `ANTHROPIC_API_KEY`), a timeout, an output cap, and a kill of the whole process
+tree. Every run needs approval, and the code is scanned first (§14). Use a separate Python
+interpreter, never the core's venv. Paths go through `Path.resolve()` and must stay under the workspace root,
 which also catches symlinks and Windows junctions. The fixture is a git repo, so "recover an
 unwanted edit" means restoring the touched files with git, recorded in the event log. Say plainly in
 the pitch that this is allow-listing, not OS sandboxing.
@@ -160,6 +175,17 @@ semantic elements first (`button`, `form`, `label`, headings); React Aria Compon
 widgets (approval dialog, diff navigator, task history listbox); Tailwind's `sr-only` for text only
 screen-reader users need. Never a `div` with `onClick`, and every state change the user needs is
 announced. Focus moves deliberately: to the approval dialog when one opens, and back when it closes.
+
+## 14. Security scanning
+
+**Semgrep (team pick).** For: multi-language, well known, a strong "AI security" story. Against:
+native Windows support is newer, and `--config p/python` downloads rules from the registry, which
+fails on bad venue Wi-Fi. **Bandit.** For: pure Python, pip-installs anywhere, made exactly for the
+Python MVP. Against: Python only. **Pick:** run both behind one `scan()` interface. Semgrep uses
+rules vendored into the repo (no network); if Semgrep doesn't install cleanly on the demo laptop in
+the kickoff time-box, Bandit carries the MVP. Findings are spoken as "1 high-severity issue in
+main.py line 4: subprocess call with shell=True", and a high finding blocks the run until the user
+explicitly approves it.
 
 ## Security notes (David)
 
