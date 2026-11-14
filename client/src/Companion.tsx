@@ -5,6 +5,7 @@ import {companionText, startingStatus} from './desktopStatus';
 export function Companion() {
   const [status, setStatus] = useState(startingStatus);
   const [error, setError] = useState('');
+  const [pollError, setPollError] = useState('');
   const open = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     document.documentElement.classList.add('companion-page');
@@ -13,8 +14,8 @@ export function Companion() {
     async function refresh() {
       try {
         const next = await platform.getCompanionStatus();
-        if (active) setStatus(next);
-      } catch {if (active) setError('Open controls to check Artemis.');}
+        if (active) {setStatus(next); setPollError('');}
+      } catch {if (active) setPollError('Open controls to check Artemis.');}
       if (active) timer = setTimeout(() => void refresh(), 750);
     }
     void refresh();
@@ -28,7 +29,7 @@ export function Companion() {
   return <main className="companion" aria-label="Artemis desktop status" onKeyDown={event => {
     if (event.key === 'Escape') {event.preventDefault(); void showControls();}
   }}>
-    <div className="companion-copy"><h1>Artemis<span aria-hidden="true"> ·</span></h1><p role={error ? 'alert' : undefined} aria-live={error ? 'assertive' : 'off'}>{error || companionText(status)}</p></div>
-    <button ref={open} onClick={() => void showControls()}>Open controls</button>
+    <div className="companion-copy"><h1>Artemis<span aria-hidden="true"> ·</span></h1><p id="desktop-status" role={error ? 'alert' : pollError ? 'status' : undefined} aria-live={error ? 'assertive' : pollError ? 'polite' : 'off'}>{error || pollError || companionText(status)}</p></div>
+    <button ref={open} aria-describedby="desktop-status" onClick={() => void showControls()}>Open controls</button>
   </main>;
 }
