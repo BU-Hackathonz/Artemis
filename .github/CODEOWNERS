@@ -1,0 +1,13 @@
+# Review routing. David (@dribeiro0) is the lead and approves merges to main until Avery is on site.
+*                          @dribeiro0
+/client/                   @sysoutprntlne @dribeiro0
+/server/artemis/voice/     @unseentrader007 @dribeiro0
+/server/artemis/agent/     @dribeiro0
+/server/artemis/policy/    @dribeiro0
+/server/artemis/core/      @DxubleBTW @dribeiro0
+/server/artemis/contracts/ @DxubleBTW @dribeiro0
+/server/artemis/runner/    @DxubleBTW @dribeiro0
+/server/artemis/echo/      @DxubleBTW @dribeiro0
+/server/pyproject.toml     @DxubleBTW @dribeiro0
+/fixture/                  @DxubleBTW @dribeiro0
+/infra/                    @DxubleBTW @dribeiro0
