@@ -847,3 +847,18 @@ def test_task_message_and_vocabulary_do_not_follow_a_link_out_of_the_project(tmp
     text_ = task_message(TaskContext(task_id="t", request="r", project=project))
     assert "main.py" in text_ and "secret" not in text_
     assert "launch_codes" not in vocabulary(project) and "secret" not in vocabulary(project)
+
+
+@pytest.mark.parametrize("error", [
+    lambda: anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")),
+    lambda: api_error(anthropic.AuthenticationError, 401),
+    lambda: api_error(anthropic.PermissionDeniedError, 403),
+    lambda: anthropic.AnthropicError("Could not resolve authentication method"),
+], ids=["offline", "bad_key", "forbidden", "no_key"])
+def test_a_failure_before_any_answer_does_not_leave_the_request_in_the_conversation(tmp_path, error):
+    """The core now speaks the failure; the agent must still forget the request nobody answered,
+    or the next task would replay it together with its own."""
+    w = World(tmp_path, [error()])
+    outcome = asyncio.run(w.run())
+    assert isinstance(outcome, Failed)
+    assert w.agent.messages == []
