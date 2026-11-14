@@ -448,8 +448,19 @@ def _plain(value):
     return value.model_dump(mode="json") if hasattr(value, "model_dump") else str(value)
 
 
+def _separate_python() -> str | None:
+    """The base interpreter behind the core's venv: a Python the runner accepts on CI, where uv's
+    own Python may be the only one installed (the runner refuses the core's venv by path)."""
+    if sys.prefix == sys.base_prefix:
+        return None  # not in a venv: let the runner find one as it would on a laptop
+    base = Path(getattr(sys, "_base_executable", "") or "")
+    return str(base) if base.is_file() else None
+
+
 @pytest.fixture
 def launch(tmp_path, monkeypatch):
+    if not os.environ.get("ARTEMIS_RUN_PYTHON") and (python := _separate_python()):
+        monkeypatch.setenv("ARTEMIS_RUN_PYTHON", python)
     return Launch(tmp_path, monkeypatch)
 
 
