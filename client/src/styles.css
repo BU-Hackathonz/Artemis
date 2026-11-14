@@ -1,0 +1,35 @@
+@import "tailwindcss";
+:root { font-family: system-ui, sans-serif; color: #e9eef7; background: #0b1220; font-size: 18px; line-height: 1.6; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header, main, footer { max-width: 76rem; margin: auto; padding: 1.5rem 2rem; }
+header { border-bottom: 1px solid #52617a; }
+header > p:first-child { color: #8edddd; letter-spacing: .15em; font-weight: 700; }
+h1 { font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.2; font-weight: 700; margin: .5rem 0; }
+h2 { font-size: 1.4rem; font-weight: 700; margin: 0 0 .75rem; }
+h3 { font-weight: 700; }
+p { margin: .65rem 0; }
+section { border: 1px solid #52617a; border-radius: .6rem; padding: 1.3rem; margin-bottom: 1.3rem; min-width: 0; }
+label { display: block; font-weight: 650; margin-top: .7rem; }
+input, textarea { display: block; width: 100%; color: #fff; background: #101d31; border: 1px solid #8193af; border-radius: .25rem; padding: .65rem; margin: .3rem 0 .8rem; font: inherit; }
+input { max-width: 32rem; }
+textarea { resize: vertical; }
+button, .react-aria-Button { font: inherit; font-weight: 650; color: #071321; background: #91e4db; border: 2px solid transparent; border-radius: .35rem; padding: .6rem 1rem; min-height: 44px; cursor: pointer; margin: .25rem .4rem .25rem 0; }
+button:disabled, [data-disabled] { color: #b7c3d3; background: #28374c; cursor: default; }
+:focus-visible, [data-focus-visible] { outline: 3px solid #ffdb70; outline-offset: 4px; }
+.actions { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .7rem; }
+.workspace { display: grid; grid-template-columns: 1fr 1fr; gap: 1.3rem; }
+.log { max-height: 32rem; overflow: auto; min-height: 8rem; padding: .3rem; }
+.log article { border-bottom: 1px solid #52617a; padding: .5rem 0; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #08101b; padding: .8rem; font-size: .9rem; max-height: 20rem; overflow: auto; }
+summary { cursor: pointer; padding: .6rem; }
+ul { padding-left: 1.4rem; list-style: disc; }
+[role=alert] { color: #ffc5c5; }
+.react-aria-ModalOverlay { position: fixed; inset: 0; background: #000b; display: flex; align-items: center; justify-content: center; padding: 1.2rem; overflow: auto; }
+.react-aria-Modal { width: min(44rem, 100%); max-height: 90dvh; overflow: auto; background: #132036; border: 2px solid #91e4db; border-radius: .6rem; padding: 1.6rem; }
+.react-aria-Dialog { outline: none; }
+.skip { position: absolute; top: -10rem; left: 1rem; background: #ffdb70; color: #111; padding: .7rem; z-index: 10; }
+.skip:focus { top: 1rem; }
+footer { color: #b7c3d3; }
+@media (max-width: 800px) { .workspace { grid-template-columns: 1fr; } header,main,footer { padding: 1rem; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

@@ -1,0 +1,1 @@
+{"$schema":"../gen/schemas/desktop-schema.json", "identifier":"main", "description":"Client window with no privileged native commands", "windows":["main"], "permissions":[]}
