@@ -11,7 +11,7 @@ from .approvals import (
     RunSpec,
     Severity,
 )
-from .client import ClientDiagnostic, DiagnosticCode
+from .client import ClientDiagnostic, ClientReady, DiagnosticCode
 from .events import (
     DATA_MODELS,
     AgentMessageData,

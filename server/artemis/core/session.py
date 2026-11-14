@@ -111,6 +111,7 @@ class Session:
         self._by_request: dict[str, str] = {}  # client_request_id -> task_id (idempotency)
         self.history: list[TurnSummary] = []
         self.reported: set[tuple[str, str | None]] = set()  # (code, shortcut) already spoken
+        self.greeted = False  # the ready line (POST /sessions/{sid}/ready) is spoken once
         self._on_project = on_project
         # contracts.md §5.4, off by default: None means today's §5.2 rules, unchanged.
         if conversation is None:
