@@ -59,6 +59,7 @@ headless Python + FastAPI core in `server/` (one `uv` project, package `artemis`
 | Security: tool policy gate, injection defenses, secret handling | @dribeiro0 (David) | `server/artemis/policy/` |
 | Backend / orchestration: FastAPI app, sessions, task state, approvals, cancel, event stream | @DxubleBTW (Avery) | `server/artemis/core/`, `server/artemis/contracts/`, `server/pyproject.toml` |
 | Infrastructure: runner, Echo Check, demo fixture, startup scripts | @DxubleBTW (Avery) | `server/artemis/runner/`, `server/artemis/echo/`, `fixture/`, `infra/` |
+| Landing site: public static site for judges and users (no tracking, no third-party scripts) | @unseentrader007 (Yaovi) | `site/` |
 | Shared | anyone, via PR | `docs/`, `tools/`, `.claude/`, `.github/`, `README.md`, `AGENTS.md` |
 
 `server/artemis/contracts/` (Pydantic models) is the single source of truth for every message
