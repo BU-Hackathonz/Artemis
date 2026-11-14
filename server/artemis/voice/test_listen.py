@@ -91,6 +91,24 @@ def test_segments_whisper_doubts_are_dropped():
     assert asyncio.run(v.stop_listening("cr_1")) == "run main.py"
 
 
+def test_quiet_word_inside_a_long_hold_still_reaches_whisper():
+    # Avery's probe on #24: 1 s of quiet speech (RMS 0.003) inside a 10 s hold of room hiss.
+    rng = np.random.default_rng(2)
+    hold = (rng.standard_normal(RATE * 10) * 0.0002).astype(np.float32)
+    hold[RATE * 4 : RATE * 5] += speech_like(1, level=0.003)
+    v, model, _ = make(10, audio=hold, text="cancel")
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_1")) == "cancel"
+    assert len(model.calls) == 1
+
+
+def test_short_commands_survive_the_segment_filter():
+    # Measured on small.en: cancel, stop, repeat, yes, no all scored no_speech_prob <= 0.07.
+    v, _, _ = make(1, segs=[Seg(" Cancel.", 0.07)])
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_1")) == "Cancel."
+
+
 def test_speech_stops_and_earcon_ends_before_mic_opens():
     log = []
     v, _, _ = make(1, log=log)
