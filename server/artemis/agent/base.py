@@ -15,6 +15,8 @@ async def say(
     """Emit an agent.message. The spoken text has markdown stripped, and an answer or question is
     shaped for the ear (spoken_answer); the log keeps the original."""
     spoken = for_speech(text) if kind == "progress" else spoken_answer(text)
+    if not spoken and kind != "progress":
+        spoken = "Done."  # nothing but markers or emoji: never announce an empty line
     await emit(
         EventDraft(
             task_id=task_id,

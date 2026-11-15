@@ -235,3 +235,41 @@ def test_symbols_and_paths_keep_their_meaning(text, spoken):
     from artemis.agent.speech_text import spoken_answer
 
     assert spoken_answer(text) == spoken
+
+
+# ----- spoken answers: structure, tracebacks, emoji, abbreviations, questions -----
+
+from artemis.agent.speech_text import spoken_answer  # noqa: E402
+
+
+def test_headings_bullets_and_paragraphs_are_separate_sentences():
+    md = "## Summary\n\nHere is the fix:\n\n- Changed `add()` in `utils.py`\n- All tests pass\n\n1. First\n2. Second"
+    assert spoken_answer(md) == "Summary. Here is the fix: Changed add in utils.py. All tests pass. First. The rest is in the log."
+    # A hard-wrapped sentence is still one sentence.
+    assert spoken_answer("It reads the file\nand prints it.") == "It reads the file and prints it."
+
+
+def test_a_table_is_read_by_row_without_the_rule_line():
+    assert spoken_answer("| a | b |\n|---|---|\n| 1 | 2 |") == "a, b. 1, 2."
+
+
+def test_a_pasted_traceback_is_not_read_frame_by_frame():
+    text = 'It failed:\nTraceback (most recent call last):\n  File "main.py", line 3, in <module>\n    print(1/0)\nZeroDivisionError: division by zero\n\nGuard the divisor.'
+    spoken = spoken_answer(text)
+    assert "File" not in spoken and "module" not in spoken and "print" not in spoken
+    assert "ZeroDivisionError: division by zero." in spoken and spoken.endswith("Guard the divisor.")
+
+
+def test_emoji_are_not_spoken_and_an_answer_of_only_markers_is_not_empty():
+    assert spoken_answer("Great job! \U0001F389 All done ✅.") == "Great job! All done."
+    assert for_speech("\U0001F389") == ""
+
+
+def test_an_abbreviation_does_not_end_a_sentence_at_the_cut():
+    text = "One. Two. Three. See Dr. Smith about it. Then more. And more."
+    assert spoken_answer(text) == "One. Two. Three. See Dr. Smith about it. The rest is in the log."
+
+
+def test_a_question_before_a_closing_remark_survives_the_cut():
+    text = "One. Two. Three. Four. Should I run it? I will wait."
+    assert spoken_answer(text) == "One. Two. Three. The rest is in the log. Should I run it?"
