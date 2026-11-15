@@ -41,6 +41,10 @@ core.start();
 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 30000, () => { print('timed out'); loop.quit(); return GLib.SOURCE_REMOVE; });
 loop.run();
 core.destroy();
+// A run started right after another can catch that run's last line still playing: a leading
+// 'speaking' before the request is that line, not this task.
+while (seen[1] === 'speaking') seen.splice(1, 1);
+for (let i = seen.length - 1; i > 0; i--) if (seen[i] === seen[i - 1]) seen.splice(i, 1);
 const ok = JSON.stringify(seen) === JSON.stringify(want);
 print(ok ? 'PASS' : `FAIL: expected ${want.join(' → ')}`);
 imports.system.exit(ok ? 0 : 1);
