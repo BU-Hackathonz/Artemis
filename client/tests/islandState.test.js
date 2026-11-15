@@ -80,7 +80,7 @@ describe('voice overlay', () => {
     s = reduce(s, ev('approval.requested', 'tsk_a', {approval_id: 'apr_1', kind: 'write_files'}));
     expect(view(s)).toMatchObject({state: 'editing', waiting: true});
     s = reduce(s, ev('voice.activity', null, {state: 'speaking'}));
-    expect(view(s)).toMatchObject({state: 'speaking', base: 'editing'});
+    expect(view(s)).toMatchObject({state: 'editing', base: 'editing', speaking: true});
     s = reduce(s, ev('voice.activity', null, {state: 'listening'}));
     expect(view(s)).toMatchObject({state: 'listening', base: 'editing', waiting: false});
   });
@@ -94,10 +94,10 @@ describe('voice overlay', () => {
     });
   });
 
-  it('speaking overlays thinking, with the task state as base', () => {
+  it('speaking keeps the task state in the name (no overlay over a task)', () => {
     let s = reduce(initial(true), ev('task.state', 'tsk_a', {state: 'working'}));
     s = reduce(s, ev('voice.activity', null, {state: 'speaking'}));
-    expect(view(s)).toMatchObject({state: 'speaking', base: 'thinking', label: 'Speaking'});
+    expect(view(s)).toMatchObject({state: 'thinking', base: 'thinking', speaking: true, label: 'Thinking'});
     s = reduce(s, ev('voice.activity', null, {state: 'idle'}));
     expect(view(s)).toMatchObject({state: 'thinking', base: 'thinking'});
   });
@@ -266,5 +266,23 @@ describe('purity', () => {
     reduce(before, ev('approval.requested', 'tsk_a', {approval_id: 'apr_3', kind: 'write_files'}));
     reduce(before, ev('task.state', 'tsk_a', {state: 'succeeded'}));
     expect(JSON.stringify(before)).toBe(snapshot);
+  });
+});
+
+describe('speaking over a task (David\'s run with real speech)', () => {
+  it('keeps Editing, Running and Done in the name while Artemis talks', () => {
+    let s = initial(true);
+    const talk = () => { s = reduce(s, ev('voice.activity', null, {state: 'speaking'})); };
+    s = reduce(s, ev('task.state', 'tsk_s', {state: 'queued'})); talk();
+    s = reduce(s, ev('file.changed', 'tsk_s', {path: 'main.py'}));
+    expect(view(s).accessibleName).toBe('Artemis: Editing files');
+    s = reduce(s, ev('task.state', 'tsk_s', {state: 'running'}));
+    expect(view(s).accessibleName).toBe('Artemis: Running the program');
+    s = reduce(s, ev('task.state', 'tsk_s', {state: 'succeeded'}));
+    expect(view(s)).toMatchObject({state: 'done', speaking: true, accessibleName: 'Artemis: Done'});
+  });
+  it('shows speaking on its own only when idle', () => {
+    const s = reduce(initial(true), ev('voice.activity', null, {state: 'speaking'}));
+    expect(view(s)).toMatchObject({state: 'speaking', label: 'Speaking'});
   });
 });

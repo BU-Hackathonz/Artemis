@@ -4,8 +4,9 @@
 // client/tests/islandState.test.js replays recorded event sequences through reduce().
 //
 // The eight island states: idle, listening, thinking, editing, running, speaking, done, error.
-//   - speaking overlays the task's state (Artemis talks while it works); listening and
-//     transcribing win over speaking, because push-to-talk stops speech (§5.1).
+//   - speaking shows only when no task state holds; over a task the task's state stays shown
+//     (Artemis talks through most of a task), with view().speaking true. Listening and
+//     transcribing win over both, because push-to-talk stops speech (§5.1).
 //   - awaiting_approval is not a state of its own: the task keeps its state, marked as waiting.
 //   - done goes back to idle after about 3 s; that delay is the client's (DONE_MS), the only timer.
 
@@ -162,8 +163,8 @@ export function expireDone(state) {
 }
 
 /**
- * What to show: {state, base, waiting, label, accessibleName, description}.
- * `state` is one of STATES; `base` is the task's own state under a speaking overlay.
+ * What to show: {state, base, waiting, speaking, label, accessibleName, description}.
+ * `state` is one of STATES; `base` is the task's own state; `speaking` is true while Artemis talks.
  */
 export function view(state) {
     if (!state.connected) {
@@ -176,13 +177,17 @@ export function view(state) {
     }
     const base = state.phase;
     let shown = base;
+    // Artemis talks through most of a task, so speaking only shows on its own when no task state
+    // holds (idle). Over a task, the task's state stays in the name and label (Editing files,
+    // Running the program, Done), and `speaking` says that Artemis is also talking.
     if (state.voice === 'listening') shown = 'listening';
     else if (state.voice === 'transcribing') shown = 'thinking';
-    else if (state.voice === 'speaking') shown = 'speaking';
+    else if (state.voice === 'speaking' && base === 'idle') shown = 'speaking';
+    const speaking = state.voice === 'speaking';
     const waiting = state.waiting && shown !== 'listening';
     let label = LABELS[shown];
     if (state.voice === 'transcribing') label = 'Transcribing';
     if (waiting) label += ', waiting for your approval';
     const description = waiting ? 'Artemis is waiting for you to approve or reject a change.' : DESCRIPTIONS[shown];
-    return {state: shown, base, waiting, connected: true, label, accessibleName: `Artemis: ${label}`, description};
+    return {state: shown, base, waiting, speaking, connected: true, label, accessibleName: `Artemis: ${label}`, description};
 }
