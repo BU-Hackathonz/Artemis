@@ -8,6 +8,7 @@ import asyncio
 import hmac
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from artemis.contracts import (
 )
 from artemis.runner.local import NoInterpreter
 from artemis.voice import profile as voice_profile
+from artemis.voice.speech import orca_running
 
 from . import settings as voice_settings
 from .approvals import ApprovalNotFound, ApprovalStale
@@ -171,7 +173,27 @@ class Core:
         announcer = getattr(self.voice, "announcer", None)
         if announcer is None:
             return False, None
-        return announcer.status()
+        voice_ready, screen_reader = announcer.status()
+        # Orca runs beside Artemis's own Linux voice, so the core reports it (contracts.md §5.3).
+        if sys.platform.startswith("linux") and orca_running():
+            screen_reader = "orca"
+        return voice_ready, screen_reader
+
+    async def watch_voice_status(self, interval_s: float = 2.0) -> None:
+        """Emit voice.status at start and on every change of voice_status(), Orca included.
+
+        The announcer's own watch cannot see Orca start or stop, so the core polls voice_status().
+        """
+        last = None
+        while True:
+            now = self.voice_status()
+            if now != last:
+                last = now
+                try:
+                    await self.broadcast_voice_status(*now)
+                except Exception:  # one failed emit must not end status updates for the session
+                    log.exception("voice status broadcast failed")
+            await asyncio.sleep(interval_s)
 
     def active_engine(self) -> str:
         """The speaker that would say the next line, or "none" when the voice has no announcer."""
@@ -284,8 +306,8 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             except Exception:
                 log.exception("voice warm-up failed; push-to-talk will report the problem")
         announcer = getattr(core.voice, "announcer", None)
-        if announcer is not None and hasattr(announcer, "watch"):
-            core.watch_task = asyncio.create_task(announcer.watch(core.broadcast_voice_status))
+        if announcer is not None:
+            core.watch_task = asyncio.create_task(core.watch_voice_status())
         core.activity_task = asyncio.create_task(core.watch_activity())
         if os.environ.get("ARTEMIS_LISTEN_MODE", "").strip().lower() == "wake":
             core.start_wake()

@@ -20,7 +20,7 @@ Errors outside the table: a missing or wrong token is `401 {error: "unauthorized
 
 | Method | Path | Body → Response | Notes |
 |---|---|---|---|
-| GET | `/health` | → `{ok, version, voice_ready, screen_reader}` | `screen_reader`: `"nvda"` or `null` |
+| GET | `/health` | → `{ok, version, voice_ready, screen_reader}` | `screen_reader`: `"nvda"`, `"orca"` or `null`. **Proposed (Avery)**, §5.3: `"orca"` means Orca runs on Linux |
 | POST | `/sessions` | `{}` → `{session_id}` | One session per app launch |
 | GET | `/sessions/{sid}/events` | SSE stream of `Event` (§2) | Replays every kept event after `Last-Event-ID` (the last 5000; none or not a number replays from the start), then live |
 | POST | `/sessions/{sid}/tasks` | `{client_request_id, source: "voice"\|"keyboard", text}` → `{task_id}`, or `409 {error: "task_active", task_id}` | Idempotent per `client_request_id` (a repeat gets the same `task_id`, even while that task is active); one active task per session (§5.2) |
@@ -68,7 +68,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 | `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}`, announced at high by the gateway (§4 samples 4 and 5). `exit_code` is null when the run timed out |
 | `security.findings` | `{op_id, tool: "bandit"\|"semgrep", findings: [{rule, severity, path, line, message}]}`, not announced: the findings are spoken in the approval summary that follows, or in `scan_project`'s own line. Sent only when there are findings. `tool` is always `"bandit"` today (Semgrep is not implemented) |
 | `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on. Announced at high as "message recovery", except a failed task's, which says "The task failed. <reason> You can try again." |
-| `voice.status` | `{voice_ready, screen_reader, engine}`, emitted at session start and whenever either value changes (§5.3). `engine` (**Proposed (Avery)**, §7) is the speaker that would say the next line: `elevenlabs`, `nvda`, `sapi` or `none`; a settings change that alters it is also emitted |
+| `voice.status` | `{voice_ready, screen_reader, engine}`, emitted at session start and whenever either value changes (§5.3). `screen_reader` is `"nvda"`, `"orca"` (**Proposed (Avery)**, §5.3) or `null`. `engine` (**Proposed (Avery)**, §7) is the speaker that would say the next line: `elevenlabs`, `nvda`, `sapi` or `none`; a settings change that alters it is also emitted |
 | `voice.activity` | `{state: "idle"\|"listening"\|"transcribing"\|"speaking", engine}` (approved by Avery, §8), not announced. Sent to every session when the voice's real state changes, never from timers: `listening` from the push-to-talk press until the mic closes (the listening earcon and any post-roll included), `transcribing` while Whisper turns the recording into text, `speaking` while Artemis's line is audible (`engine` says who: `elevenlabs` while its audio plays, `sapi` while SpVoice speaks, `nvda` for Artemis's own estimate, since NVDA can't report playback), `idle` otherwise. A session starts idle; one created while the voice is busy gets the current state once. State and engine only: no text, transcript or audio |
 
 ```jsonc
@@ -261,7 +261,8 @@ not the task, and a spoken request during a task waits its turn).
 - **Typed request while a task is active:** `POST /sessions/{sid}/tasks` returns
   `409 {error: "task_active", task_id}`. No second task starts.
 - **Spoken request while a task is active:** the core still emits `transcript.final` (so the text
-  stays in the editable field) but doesn't create a task. It emits `error`
+  stays in the log; since #151 the client no longer copies it into the request field, where a stray
+  Enter could resend it) but doesn't create a task. It emits `error`
   `{code: "task_active", message, recovery}` with `announce` at `high`:
   "Still working on the last request. Say cancel to stop it, or wait."
 - **Spoken control words.** The core checks the final transcript (the voice has already stripped a
@@ -282,6 +283,12 @@ running but its controller DLL is missing, which makes the core silent. The core
 `voice.status` at session start and on every change. The client turns its log's live region on
 (`aria-live="polite"`) whenever `voice_ready` is false and off when it's true, instead of deciding
 once from `/health` at connect.
+
+**Proposed (Avery):** on Linux, `screen_reader` is `"orca"` while the Orca screen reader runs
+(detected from the process list, so it is reported even though Artemis's own Linux voice does not
+speak through Orca). The client's live region keeps the rule above: it follows `voice_ready` only,
+so Orca does not switch it on or off. The core polls this value every 2 s and emits `voice.status`
+when Orca starts or stops. Orca's own speech is never reported.
 
 What the developer can change by voice depends on who is speaking. With SAPI, "stop talking" stops
 only Artemis. With NVDA, Artemis speaks through NVDA's controller, so stopping also cuts whatever
