@@ -114,8 +114,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Say what you will do for this request, before acting: the goal and the steps in order. "
         "Each step has say (one short spoken sentence), action (think, read, write, run, open, type "
         "or explain) and target (editor, terminal, file, browser, an app name, or null). Required "
-        "before any tool that writes, runs, opens, reads outside the project or types. Call it "
-        "again to re-plan."
+        "before any tool that writes, runs, opens, reads outside the project or types: write_files, "
+        "edit_file, run_program, run_command, open_app, open_path, read_path, type_text and press_keys. "
+        "Without a plan they return plan_required. Call it again to re-plan."
     ),
     "open_app": (
         "Open an installed app on the developer's desktop, by name (\"VS Code\", \"Terminal\", "
@@ -124,6 +125,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "open_path": (
         "Open a file or folder in the developer's home folder, in its default app or in the app "
         "you name in with_app (null for the default). A relative path is in the current project. "
+        "Script files such as .py are refused, so this does not open Python files in an editor. "
         "The developer approves it first."
     ),
     "read_path": (
@@ -156,7 +158,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Make an existing project the current one, by name. Use it when the developer refers "
         "to a project that already exists. If the name is not found, the error lists the "
         "projects that exist. Files in an opened project can be read and run, and new files "
-        "can be added, but existing files cannot be overwritten."
+        "can be added. To change an existing file in it, use edit_file: write_files cannot "
+        "replace an existing file in a project that was not created in this session."
     ),
     "list_files": (
         "List the files in the current project, or in one folder of it. Returns up to 200 "
