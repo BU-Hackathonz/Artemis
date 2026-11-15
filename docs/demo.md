@@ -388,3 +388,39 @@ Keys on Ubuntu:
 
 The scripted demo presets and the virtual keyboard typing are removed from the Ubuntu build. The
 scripted five-part demo above does not run on Ubuntu. Use the end-to-end check in `infra/README.md`.
+
+## The closer: a prototype from voice alone (Ubuntu, GNOME 46)
+
+From an empty folder to a working, accessible web page and a GitHub repository, by voice. The only
+key presses are the ones that must stay on the keyboard: opening the browser and publishing. Needs
+#176, #177, #196 and #197 on main, and Artemis started with `--agent claude --conversation`.
+
+**Before the demo:**
+- Orca is off; Artemis speaks as Morgan.
+- No project called `tip-calculator` exists in `~/ArtemisProjects`, and there's no repository of
+  that name on GitHub.
+- `gh auth status` says signed in.
+
+| # | Say | Artemis | You |
+|---|---|---|---|
+| 1 | "Hey Artemis, let's build a tip calculator web page. Bill, tip percent and number of people, and it shows what each person pays." | Says the plan in two or three steps; the panel lists them | — |
+| 2 | — | Proposes `index.html`, `style.css` and `app.js` in one change and reads the summary | "Approve." |
+| 3 | "Check it's accessible." | Runs Echo Check on the page and says what it found, for example a missing label | — |
+| 4 | "Fix that." | Proposes the edit and reads it | "Approve." |
+| 5 | "Open it in the browser." | The open needs the keyboard | **Enter** |
+| 6 | "Round each share up to the nearest cent, and add a reset button." | The edit | "Approve." |
+| 7 | "What changed?" | Lists the files | — |
+| 8 | "Put it on GitHub as a private repo called tip-calculator." | The dialog names the repository, "private" and every file | **Enter** |
+| 9 | — | "Published to GitHub as …/tip-calculator, private." | — |
+
+**If it goes wrong:**
+- **A line runs long:** say "stop", and the task keeps going.
+- **A wrong step:** say "reject", then say what you want instead. Artemis won't propose the same
+  change again.
+- **"Hey Artemis" isn't heard:** use push-to-talk, Ctrl+Shift+Space.
+- **The browser doesn't open:** say "what are you doing" to hear the state. If #177 isn't merged,
+  skip step 5.
+
+**Why the keyboard stays for steps 5 and 8:** voice can approve only a clean write or run inside the
+project. Anything that reaches outside it (the browser, GitHub, a command, typing) takes one key
+press, so a misheard word can never publish code or act on the desktop.
