@@ -463,7 +463,7 @@ class Session:
                 EventDraft(
                     task_id=task_id,
                     type="agent.message",
-                    announce=Announce(text=text, priority="high"),
+                    announce=Announce(text=text, priority="normal"),
                     data=AgentMessageData(text=text, kind="progress").model_dump(),
                 )
             )

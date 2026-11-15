@@ -69,3 +69,32 @@ export function caretAnchor(caret, screen, lift = 18) {
         y: clamp(caret.y - caret.height / 2 - lift, screen.y + lift, screen.y + screen.height - lift),
     };
 }
+
+// The window a cue names (as cueTargetRect picks it), or null when none is open: an "open" cue for an
+// app with no window yet sends the droplet to the app's icon in the dock instead (launchFlight.js).
+export function cueWindow(cue, windows = []) {
+    const target = typeof cue?.target === 'string' ? cue.target.trim() : '';
+    if (!target || cue?.action === 'done') return null;
+    const kind = KIND_OF_TARGET[target.toLowerCase()];
+    return kind ? findKind(windows, kind) : findNamed(windows, target);
+}
+
+// Names people and the core use for an app, to the word its launcher id or name contains.
+const APP_ALIASES = {'vs code': 'code', 'vscode': 'code', 'visual studio code': 'code', 'browser': 'firefox',
+    'terminal': 'terminal', 'files': 'nautilus', 'text editor': 'texteditor'};
+
+const squash = (s) => (s ?? '').toLowerCase().replace(/\.desktop$/, '').replace(/[^a-z0-9]+/g, '');
+
+/**
+ * True when an app ({id: "code_code.desktop", name: "Visual Studio Code"}) is the one a cue's target
+ * names ("Visual Studio Code", "VS Code", "code", "firefox"). Pure, for the tests.
+ * The whole name, the alias, or the launcher id's last part ("code_code" -> "code") must match.
+ */
+export function appMatches(target, app) {
+    const t = (target ?? '').trim().toLowerCase();
+    if (!t || !app) return false;
+    const want = squash(APP_ALIASES[t] ?? t);
+    const name = squash(app.name);
+    const idParts = (app.id ?? '').toLowerCase().replace(/\.desktop$/, '').split(/[._-]/).map(squash).filter(Boolean);
+    return name === squash(t) || name === want || idParts.includes(want) || squash(app.id) === want;
+}

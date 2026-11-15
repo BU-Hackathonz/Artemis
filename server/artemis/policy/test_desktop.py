@@ -576,10 +576,11 @@ def test_the_terminal_by_its_everyday_name_opens_whichever_one_is_installed(home
 
 def test_a_launcher_of_my_own_that_looks_normal_opens_without_the_dialog(home, monkeypatch, launched):
     """A tarball VS Code or a Chrome app in ~/.local/share/applications is the developer's own."""
-    _apps(home, monkeypatch, firefox="Name=Firefox\nExec=/opt/firefox/firefox %u\n")
+    # A name no system folder has, so a real /usr/share/applications (CI runners have Firefox) can't twin it.
+    _apps(home, monkeypatch, artemistarball="Name=Artemis Tarball\nExec=/opt/artemistarball/run %u\n")
     g, _, approvals = gate(home, [Decision.reject])
-    assert run(g.call("t1", "open_app", {"app": "firefox"})).ok
-    assert approvals.requests == [] and launched == [["gtk-launch", "firefox.desktop"]]
+    assert run(g.call("t1", "open_app", {"app": "artemistarball"})).ok
+    assert approvals.requests == [] and launched == [["gtk-launch", "artemistarball.desktop"]]
 
 
 def test_a_launcher_that_replaces_a_system_app_asks_with_the_blocking_key(home, monkeypatch, launched):
