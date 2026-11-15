@@ -59,7 +59,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 
 | `type` | `data` |
 |---|---|
-| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal (an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
+| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal unless it starts a task (then it is silent and "Working on: …" says the same words once, §5.1); an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
 | `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
 | `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`) is `progress` at `low` |
 | `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval` |
@@ -253,6 +253,14 @@ default 0, off) does it keep the mic open that long (the end of the last word), 
 The core doesn't call `stop_speech()` itself here. Artemis's own voice (SAPI through the speakers)
 must never be recorded and transcribed as a request. The client's own "Stop speech" control is
 unchanged. Cutting off speech never hides an open approval: see §5.4.
+
+**The transcript is spoken once.** A final transcript that starts a task has `announce: null`; the
+same words are read back by the task's first line, "Working on: <request>" (the `queued`
+`task.state`). There is no "Heard: <text>" before it. The text stays in `transcript.final`
+`data.text`, so the editable field and the log keep it. Every other final transcript (control
+words, a spoken request while a task is active or waiting, "Nothing to cancel.") keeps
+"Heard: <text>", since no task line follows. An empty transcript is silent. A typed request is
+unchanged: no `transcript.final`, and "Working on:" is its only line.
 
 **Proposed (Avery): why a release gave no request.** `stop_listening()` still returns a `str`; when it
 is empty it may be an `artemis.voice.text.Heard`, whose `dropped` says why: `"short"` (a tap: under
