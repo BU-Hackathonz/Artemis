@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -18,6 +19,7 @@ from artemis.contracts import (
     RunResult,
     TaskRequest,
 )
+import artemis.core.app as app_module
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
@@ -1036,3 +1038,53 @@ async def test_stub_voice_with_result_earcons_on_does_not_fail(tmp_path):
                       result_earcons=True)
     await session.emit(run_draft(0))
     await session.emit(approval_draft())
+
+
+# ----- Orca on Linux (contracts.md §5.3): health and voice.status -----
+
+
+@pytest.fixture
+def platform(monkeypatch, voice):
+    """Set the platform the core sees (app.py reads sys.platform) and whether Orca runs."""
+    def set_(name, orca, screen_reader=None):
+        monkeypatch.setattr(app_module, "sys", SimpleNamespace(platform=name))
+        monkeypatch.setattr(app_module, "orca_running", lambda: orca)
+        voice.announcer.state = (True, screen_reader)
+    return set_
+
+
+@pytest.mark.parametrize("name,orca,announcer_reader,expected", [
+    ("linux", True, None, "orca"),
+    ("linux", False, None, None),
+    ("win32", True, "nvda", "nvda"),  # Windows is unchanged: Orca is never looked for
+    ("win32", True, None, None),
+])
+async def test_health_reports_orca_only_on_linux(client, platform, name, orca, announcer_reader, expected):
+    platform(name, orca, announcer_reader)
+    r = await client.get("/health", headers=AUTH)
+    assert r.json()["screen_reader"] == expected
+    assert r.json()["voice_ready"] is True
+
+
+async def test_voice_status_at_session_start_reports_orca(client, core, platform):
+    platform("linux", True)
+    sid, session = await start(client, core)
+    first = session.bus.history[0]
+    assert first.type == "voice.status"
+    assert first.data == {"voice_ready": True, "screen_reader": "orca", "engine": "none"}
+
+
+async def test_orca_starting_and_stopping_emits_voice_status(client, core, platform):
+    def last_reader(session):
+        return [e.data["screen_reader"] for e in session.bus.history if e.type == "voice.status"][-1]
+
+    platform("linux", False)
+    sid, session = await start(client, core)
+    watcher = asyncio.create_task(core.watch_voice_status(interval_s=0.01))
+    try:
+        platform("linux", True)  # Orca starts
+        await wait_for(session, lambda s: last_reader(s) == "orca")
+        platform("linux", False)  # and stops
+        await wait_for(session, lambda s: last_reader(s) is None)
+    finally:
+        watcher.cancel()
