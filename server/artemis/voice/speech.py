@@ -603,7 +603,6 @@ class SpeechDispatcherSpeaker:
     """
 
     name = "speechd"  # what Announcer.speaking_engine() reports (#141, the wake word)
-    TAKES_PRIORITY = True  # the Announcer passes the line's priority (contracts.md 2) to speak()
     REPLY_TIMEOUT_S = 1.0
     RETRY_S = 5.0  # after a failed connect, don't try again on every announce
 
@@ -942,7 +941,7 @@ class Announcer:
             return  # contracts.md: low may be dropped while speech is busy
         if priority != "low":
             self.last = text
-        if getattr(speaker, "TAKES_PRIORITY", False):  # speech-dispatcher: the level decides who may cut whom
+        if isinstance(speaker, SpeechDispatcherSpeaker):  # the level decides who may cut whom; no probe of other speakers
             speaker.speak(text, interrupt=priority == "high", priority=priority)
         else:  # NVDA, SAPI, ElevenLabs: unchanged
             speaker.speak(text, interrupt=priority == "high")
