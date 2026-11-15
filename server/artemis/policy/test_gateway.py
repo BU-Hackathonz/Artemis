@@ -42,10 +42,10 @@ class World:
         return self.projects / "hello-world"
 
 
-def result_of(exit_code=0, stdout="", stderr="", timed_out=False):
+def result_of(exit_code=0, stdout="", stderr="", timed_out=False, truncated=False):
     return RunResult(
         op_id="op_x", preset="python", exit_code=exit_code, timed_out=timed_out,
-        duration_ms=5, stdout_tail=stdout, stderr_tail=stderr, truncated=False,
+        duration_ms=5, stdout_tail=stdout, stderr_tail=stderr, truncated=truncated,
     )
 
 
@@ -172,6 +172,21 @@ def test_path_escape_is_rejected_without_asking(tmp_path, path):
     assert error.announce.priority == "high"
 
 
+def test_a_backslash_path_writes_into_the_folder_on_every_desktop(tmp_path):
+    # On Linux too: never a file named "src\\main.py" in the project root.
+    async def go():
+        w = World(tmp_path)
+        await w.call("create_project", name="hello-world")
+        return w, await w.write(path="src\\main.py")
+
+    w, result = asyncio.run(go())
+    root = w.projects / "hello-world"
+    assert result.ok, result
+    assert (root / "src" / "main.py").read_bytes() == HELLO.encode()
+    assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()) == ["src/main.py"]
+    assert "src/main.py" in w.approvals.requests[0].summary
+
+
 def test_read_and_run_paths_are_checked_too(tmp_path):
     async def go():
         w = World(tmp_path)
@@ -189,6 +204,28 @@ def test_read_and_run_paths_are_checked_too(tmp_path):
     env, read, ran, listed, w = asyncio.run(go())
     assert [r.error for r in (env, read, ran, listed)] == ["path_rejected"] * 4
     assert w.runner.runs == [] and len(w.approvals.requests) == 1  # only the hello write
+
+
+def test_a_link_to_a_protected_file_is_not_read(tmp_path):
+    # Issue #158 (Jun's repro): an innocently named link must not return .env or .git contents.
+    async def go():
+        w = World(tmp_path)
+        root = await w.hello()
+        (root / ".env.local").write_text("SYNTHETIC_FIXTURE")
+        (root / ".git").mkdir()
+        (root / ".git" / "config").write_text("SYNTHETIC_FIXTURE")
+        try:
+            os.symlink(root / ".env.local", root / "public.txt")
+            os.symlink(root / ".git", root / "docs", target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks need Developer Mode on Windows")
+        return (await w.call("read_file", path="public.txt"), await w.call("read_file", path="docs/config"),
+                await w.call("list_files"))
+
+    file_link, dir_link, listed = asyncio.run(go())
+    assert [r.error for r in (file_link, dir_link)] == ["path_rejected"] * 2
+    assert "SYNTHETIC_FIXTURE" not in repr(listed.data)
+    assert ".env.local" not in repr(listed.data) and "public.txt" not in repr(listed.data)
 
 
 def test_one_bad_path_rejects_the_whole_batch(tmp_path):
@@ -712,6 +749,17 @@ def test_run_announcement_wording():
         "main.py failed with exit code 1. EOFError: EOF when reading a line. "
         "The program asked for input, which isn't supported yet."
     )
+
+
+def test_a_lot_of_output_is_spoken_by_how_it_ended():
+    """The runner keeps the last 64 KB, cut mid-line: speaking its first 200 characters gave
+    "It printed: 538 line 194539 ...", a fragment the program never printed first."""
+    tail = "538\n" + "".join(f"line {i}\n" for i in range(194539, 200000))
+    text = run_announcement("main.py", result_of(stdout=tail, truncated=True), 10)
+    assert text.startswith("main.py ran successfully. It printed a lot, ending with: ")
+    assert text.endswith("line 199998 line 199999") and " 538 " not in text and len(text) < 260
+    # Not truncated: still the start of the output.
+    assert run_announcement("main.py", result_of(stdout="word " * 100), 10).endswith(", and more")
 
 
 def test_run_arguments_are_in_the_summary_and_the_hash(tmp_path):

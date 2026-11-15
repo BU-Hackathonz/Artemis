@@ -14,8 +14,14 @@ Settings (environment):
   after release (people let go of the key while still saying the last word), closes, and only then plays
   "stopped", so that beep is never transcribed either.
 - ARTEMIS_WHISPER_PROMPT: unset (default) is the word-list prompt; natural is the spoken-style lead (text.py).
-A beam above 1, a post-roll and the natural prompt are opt-in: switch them on for the stage only after
+- ARTEMIS_WHISPER_HOTWORDS: unset (default) is off; on also passes the prompt's fixed lead (wake word and demo
+  words, text.py HOTWORDS) as faster-whisper's hotwords. Ignored by a faster-whisper without that parameter.
+- ARTEMIS_WORKING_CUE: unset (default) keeps the core's spoken "Still working."; earcon plays a soft
+  "working" tick instead (working_cue, contracts.md 3.3), only when a voice can speak and never into the mic.
+A beam above 1, a post-roll, the natural prompt and hotwords are opt-in: switch them on for the stage only after
 docs/demo.md row 3 (the demo sentence, word for word) passes with them on, on the demo laptop.
+
+Every transcript then gets text.py's fixes for known mishearings (CORRECTIONS), push-to-talk and wake word alike.
 
 Manual check on a laptop: python -m artemis.voice.listen  (records 4 s, prints the transcript and time)
 """
@@ -23,6 +29,7 @@ Manual check on a laptop: python -m artemis.voice.listen  (records 4 s, prints t
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import threading
@@ -32,7 +39,7 @@ import numpy as np
 
 from . import earcons
 from .speech import Announcer, Priority, RateStatus
-from .text import strip_wake_word, vocabulary_prompt
+from .text import HOTWORDS, correct_transcript, strip_wake_word, vocabulary_prompt
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +97,25 @@ def whisper_natural_prompt() -> bool:
     return os.environ.get("ARTEMIS_WHISPER_PROMPT", "").strip().lower() == "natural"
 
 
+def whisper_hotwords() -> bool:
+    """ARTEMIS_WHISPER_HOTWORDS=on also passes the fixed demo vocabulary as hotwords; unset or anything else, off."""
+    return os.environ.get("ARTEMIS_WHISPER_HOTWORDS", "").strip().lower() == "on"
+
+
+def takes_hotwords(model) -> bool:
+    """faster-whisper 1.0+ has transcribe(hotwords=...); an older one (or another model) does not."""
+    try:
+        params = inspect.signature(model.transcribe).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "hotwords" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+
+def working_earcon_on() -> bool:
+    """ARTEMIS_WORKING_CUE=earcon swaps the spoken "Still working." for a soft tick; anything else keeps the line."""
+    return os.environ.get("ARTEMIS_WORKING_CUE", "").strip().lower() == "earcon"
+
+
 def loudest_rms(audio: np.ndarray) -> float:
     """RMS of the loudest 100 ms window."""
     n = len(audio) // WINDOW
@@ -103,6 +129,13 @@ class VoiceError(Exception):
     """Microphone problems the core should turn into an `error` event."""
 
 
+def _sentence(prefix: str, error: Exception) -> str:
+    """'prefix: detail.' always ending in a full stop, so the spoken recovery tip after it is a new sentence."""
+    detail = str(error).strip().rstrip(".")
+    text = f"{prefix}: {detail}" if detail else prefix
+    return text if text.endswith(("!", "?")) else text + "."
+
+
 def _input_stream(callback):
     import sounddevice as sd
 
@@ -112,16 +145,20 @@ def _input_stream(callback):
 class WhisperVoice:
     def __init__(self, announcer: Announcer | None = None, model_name: str | None = None, model=None, stream_factory=None,
                  earcon=earcons.play, beam_size: int | None = None, post_roll: float | None = None,
-                 natural_prompt: bool | None = None) -> None:
+                 natural_prompt: bool | None = None, working_earcon: bool | None = None,
+                 hotwords: bool | None = None) -> None:
         self.announcer = announcer or Announcer()
         self.model_name = model_name or whisper_model()
         self.beam_size = beam_size or whisper_beam()
         self.post_roll = ptt_post_roll() if post_roll is None else post_roll
         self.natural_prompt = whisper_natural_prompt() if natural_prompt is None else natural_prompt
+        self.working_earcon = working_earcon_on() if working_earcon is None else working_earcon
+        self.hotwords = whisper_hotwords() if hotwords is None else hotwords
         self._model = model
         self._stream_factory = stream_factory or _input_stream
         self._earcon = earcon
         self._stream = None
+        self.transcribing = False  # Whisper is turning the last recording into text (voice.activity)
         self._wanted = False  # key is held; cleared by stop, even while the start earcon plays
         self._gen = 0  # bumped by every press and release, so a stale start never opens the mic
         self._tail: tuple[asyncio.Event, asyncio.Event] | None = None  # (cut, closed) during an opt-in post-roll
@@ -134,8 +171,51 @@ class WhisperVoice:
     def listening(self) -> bool:
         return self._stream is not None
 
+    @property
+    def working_cue(self):
+        """contracts.md 3.3: the core plays this instead of saying "Still working." while a task runs.
+
+        None (the default, or when no voice can speak) makes the core keep its spoken line, so a user
+        whose speech goes through the client's live region still gets the words, not a silent tick.
+        """
+        if not self._working_earcon_on() or not self.announcer.voice_ready:
+            return None
+        return self._tick
+
+    def _working_earcon_on(self) -> bool:
+        """The Announcer's working_cue_earcon, set by apply() from the voice profile (which already holds
+        ARTEMIS_WORKING_CUE), wins when it is on. Otherwise the env value read at construction (or passed in).
+        A settings PATCH cannot turn the cue off while ARTEMIS_WORKING_CUE pins it on (409), so the two agree."""
+        if getattr(self.announcer, "working_cue_earcon", False):
+            return True
+        return self.working_earcon
+
+    def _tick(self) -> None:
+        if self._wanted or self._stream is not None or self._tail is not None:
+            return  # push-to-talk is under way: a tick now would be recorded into the request
+        if self.announcer.current().busy():
+            return  # never over speech; the next heartbeat tries again
+        self._earcon("working")
+
+    @property
+    def busy_listening(self) -> bool:
+        """True for the whole push-to-talk cycle, from the press until the mic is closed.
+
+        Wider than `listening` (the mic stream is open): it also covers the listening earcon before
+        the mic opens, and the opt-in post-roll after release, when the mic is still recording. The
+        core must not play a sound in that window, or it would land in the request.
+        """
+        return self._wanted or self._stream is not None or self._tail is not None
+
     def warm(self) -> None:
         """Load the model now (about 3 s, longer on first download) instead of on the first request."""
+        # Importing sounddevice initialises PortAudio, which probes every audio device: 1.5 s on David's
+        # Ubuntu laptop. Done lazily, that landed on the first push-to-talk, so the mic opened about 1.4 s
+        # after the tone. Doing it here, at startup, makes the first press as fast as the rest.
+        try:
+            import sounddevice  # noqa: F401
+        except Exception as e:  # no audio stack: push-to-talk reports it when used
+            log.warning("Audio could not be initialised at startup: %s", type(e).__name__)
         if self._model is None:
             from faster_whisper import WhisperModel
 
@@ -170,7 +250,7 @@ class WhisperVoice:
             stream.start()
         except Exception as e:  # no device, device busy, permission denied
             self._wanted = False
-            raise VoiceError(f"Microphone not available: {e}") from e
+            raise VoiceError(_sentence("Microphone not available", e)) from e
         self._stream = stream
 
     async def stop_listening(self, client_request_id: str) -> str:
@@ -187,11 +267,20 @@ class WhisperVoice:
         else:  # the default: no post-roll
             self._earcon("stopped")  # mic is about to close; no need to wait
             audio, rolled = self._close(stream), 0.0
+        # Each drop is logged with its reason and numbers only, never words, so an empty push-to-talk
+        # can be told apart: a tap, a silent hold, or (later) Whisper's no-speech filter.
         if len(audio) < RATE * (MIN_SECONDS + rolled):
+            log.warning("Release dropped: too short (%.2f s of audio, needs %.2f s)", len(audio) / RATE, MIN_SECONDS + rolled)
             return ""
-        if loudest_rms(audio) < MIN_RMS:
+        level = loudest_rms(audio)
+        if level < MIN_RMS:
+            log.warning("Release dropped: silent (loudest 100 ms RMS %.5f, needs %.3f)", level, MIN_RMS)
             return ""  # nobody spoke
-        text = await asyncio.to_thread(self._transcribe, audio)
+        self.transcribing = True
+        try:
+            text = await asyncio.to_thread(self._transcribe, audio)
+        finally:
+            self.transcribing = False
         return strip_wake_word(text)
 
     def _close(self, stream) -> np.ndarray:
@@ -202,7 +291,7 @@ class WhisperVoice:
         except Exception as e:  # mic unplugged mid-recording
             with self._lock:
                 self._chunks, self._frames = [], 0
-            raise VoiceError(f"Microphone stopped unexpectedly: {e}") from e
+            raise VoiceError(_sentence("Microphone stopped unexpectedly", e)) from e
         with self._lock:
             audio = np.concatenate(self._chunks)[: RATE * MAX_SECONDS] if self._chunks else np.zeros(0, np.float32)
             self._chunks, self._frames = [], 0
@@ -232,8 +321,9 @@ class WhisperVoice:
     def _transcribe(self, audio: np.ndarray) -> str:
         self.warm()
         # Pass numpy, not a file: faster-whisper's file decoder breaks on current PyAV.
+        extra = {"hotwords": HOTWORDS} if self.hotwords and takes_hotwords(self._model) else {}  # opt-in
         segments, _ = self._model.transcribe(
-            audio, language="en", beam_size=self.beam_size, vad_filter=True, initial_prompt=self.prompt or None
+            audio, language="en", beam_size=self.beam_size, vad_filter=True, initial_prompt=self.prompt or None, **extra
         )
         kept = []
         for s in segments:
@@ -242,12 +332,17 @@ class WhisperVoice:
             else:  # where and how sure, never the words: tells a dropped last phrase from a dropped "Thank you."
                 log.warning("Dropped a segment Whisper scored as probably not speech (no_speech_prob %.2f, %.1f-%.1f s of %.1f s)",
                             s.no_speech_prob, getattr(s, "start", 0.0), getattr(s, "end", 0.0), len(audio) / RATE)
-        return " ".join(s.text.strip() for s in kept).strip()
+        return correct_transcript(" ".join(s.text.strip() for s in kept).strip())
 
     def set_vocabulary(self, words: list[str]) -> None:
         self.prompt = vocabulary_prompt(words, natural=self.natural_prompt)
 
     async def announce(self, text: str, priority: Priority) -> None:
+        if priority == "low" and (self.busy_listening or self.transcribing):
+            # A low line ("Still working.", progress) said now would be recorded into the request, or
+            # talk over a release; low lines may be dropped (contracts.md §2). The log still has it.
+            log.debug("Low line not spoken: push-to-talk has the microphone")
+            return
         await self.announcer.announce(text, priority)
 
     async def stop_speech(self) -> None:
@@ -271,7 +366,8 @@ if __name__ == "__main__":
         began = time.monotonic()
         text = await v.stop_listening("cr_demo")
         print(repr(text), f"{time.monotonic() - began:.1f} s after release ({v.model_name}, beam {v.beam_size}, "
-              f"post-roll {v.post_roll} s, {'natural' if v.natural_prompt else 'list'} prompt)")
+              f"post-roll {v.post_roll} s, {'natural' if v.natural_prompt else 'list'} prompt, "
+              f"hotwords {'on' if v.hotwords else 'off'})")
         await v.announce(f"Heard: {text}" if text else "I didn't hear anything.", "high")
 
     asyncio.run(_demo())

@@ -102,7 +102,7 @@ export function App() {
     window.addEventListener('focus', restoreRequestFocus);
     return () => window.removeEventListener('focus', restoreRequestFocus);
   }, [ready, state.approvals.length]);
-  useEffect(() => { if (state.transcript !== null) setText(state.transcript); }, [state.transcript]);
+  // The core already handles voice transcripts; keep them in the log, never in the keyboard draft.
   useEffect(() => {
     const open = state.approvals.length > 0;
     if (hadApproval.current && !open && ready) {

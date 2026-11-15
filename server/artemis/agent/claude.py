@@ -60,7 +60,8 @@ class ClaudeAgent:
             # doesn't replay it. Nothing that was answered is ever removed.
             if len(self.messages) == start + 1:
                 del self.messages[start:]
-            await say(emit, task.task_id, message)
+            # Not said here: the core speaks every Failed once, at high priority ("The task
+            # failed. <message> You can try again."). Saying it here too put it in the log twice.
             return Failed(code=code, message=message)
 
         for _ in range(self._config.max_iterations):
@@ -87,7 +88,7 @@ class ClaudeAgent:
                 return await fail("offline", "No internet connection to Claude.")
             except anthropic.APIStatusError as exc:
                 log.error("Claude API error %s: %s", exc.status_code, redact(str(exc.message)))
-                return await fail("api_error", "Claude returned an error. Try again.")
+                return await fail("api_error", "Claude returned an error.")
             except anthropic.AnthropicError as exc:
                 # Raised before any request is sent when no credentials can be found.
                 log.error("Claude client error: %s", redact(str(exc)))

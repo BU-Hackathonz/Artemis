@@ -1,8 +1,17 @@
-"""Strip markdown before text is spoken (design A9). The log keeps the original text."""
+"""Strip markdown before text is spoken (design A9). The log keeps the original text.
+
+Code is never read out symbol by symbol: a fenced block becomes one spoken pointer to the log,
+and inline code that isn't a plain name (a file, a function, a variable) becomes "a snippet".
+"""
 
 import re
 
-_FENCE = re.compile(r"^\s*```.*$", re.MULTILINE)
+# A whole fenced block, up to its closing fence or the end of the text if it never closes.
+_BLOCK = re.compile(r"^[ \t]*```.*?(?:^[ \t]*```[ \t]*$|\Z)", re.MULTILINE | re.DOTALL)
+_INLINE = re.compile(r"`([^`\n]+)`")
+# Inline code that sounds fine: a name or a relative path made of names, optionally called.
+_NAME = re.compile(r"[\w.-]+(?:/[\w.-]+)*(?:\(\))?")
+_IN_LOG = "The code is in the log."
 _IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
@@ -14,8 +23,18 @@ _EMPHASIS = re.compile(r"(\*\*\*|\*\*|\*|~~)(?=\S)(.+?)(?<=\S)\1")
 _UNDERSCORE = re.compile(r"(?<![\w.])(_{1,3})(?=[^\s_])(.+?)(?<=[^\s_])\1(?!\w|\.\w)")
 
 
+def _inline(match: re.Match) -> str:
+    code = match.group(1).strip()
+    if _NAME.fullmatch(code) and not code.startswith(("..", "/")) and "//" not in code:
+        return code.removesuffix("()")
+    return "a snippet"
+
+
 def for_speech(text: str) -> str:
-    text = _FENCE.sub("", text)
+    text = _BLOCK.sub(f" {_IN_LOG} ", text)
+    # One pointer is enough when several blocks follow each other.
+    text = re.sub(rf"(?:{re.escape(_IN_LOG)}\s*){{2,}}", f"{_IN_LOG} ", text)
+    text = _INLINE.sub(_inline, text)
     text = _IMAGE.sub(r"\1", text)
     text = _LINK.sub(r"\1", text)
     text = _RULE.sub("", text)

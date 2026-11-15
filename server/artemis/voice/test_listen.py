@@ -7,10 +7,15 @@ import pytest
 np = pytest.importorskip("numpy")  # skip, don't fail collection, without the voice group
 
 from artemis.voice.listen import MAX_SECONDS, RATE, VoiceError, WhisperVoice  # noqa: E402
-from artemis.voice.text import NATURAL_LEAD
+from artemis.voice.text import CORRECTIONS, HOTWORDS, NATURAL_LEAD, correct_transcript
 
-LIST_PROMPT = "Hey Artemis, Artemis, Python, main.py"  # main's #98 prompt, still the default
-SETTINGS = ("ARTEMIS_WHISPER_MODEL", "ARTEMIS_WHISPER_BEAM", "ARTEMIS_PTT_POST_ROLL", "ARTEMIS_WHISPER_PROMPT")
+# main's #98 prompt plus the demo's coding words, still a word list (the default)
+LIST_PROMPT = ("Hey Artemis, Artemis, Python, main.py, print, prints, Hello World, function, variable, program, run, "
+               "file, create")
+DEMO_WORDS = ["Python", "print", "prints", "Hello World", "main.py", "function", "variable", "program", "run", "file",
+              "create"]
+SETTINGS = ("ARTEMIS_WHISPER_MODEL", "ARTEMIS_WHISPER_BEAM", "ARTEMIS_PTT_POST_ROLL", "ARTEMIS_WHISPER_PROMPT",
+            "ARTEMIS_WHISPER_HOTWORDS")
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +101,7 @@ def test_defaults_are_mains_speech_settings():
     assert asyncio.run(v.stop_listening("cr_1")) == "create a Python program"
     n, kw = model.calls[0]
     assert n == RATE and kw["beam_size"] == 1 and kw["initial_prompt"] == LIST_PROMPT
+    assert "hotwords" not in kw  # opt-in
     assert log == ["stop_speech", "listening", "mic_open", "stopped"]
     assert closed_at_earcon == [None, False]  # as on main: "stopped" plays, then the mic closes at once
     v.set_vocabulary(["LoginForm"])
@@ -147,6 +153,37 @@ def test_post_roll_comes_from_the_environment(monkeypatch, caplog):
         assert f"ARTEMIS_PTT_POST_ROLL={bad!r}" in caplog.text
 
 
+
+def test_busy_listening_covers_the_earcon_and_the_post_roll():
+    # The core reads busy_listening before playing a result earcon (#127); a tone in this window is recorded.
+    v, _, _ = make(1, earcon_s=0.1, post_roll=0.2)
+
+    async def run():
+        assert not v.busy_listening
+        start = asyncio.create_task(v.start_listening())
+        await asyncio.sleep(0.03)
+        assert v.busy_listening and not v.listening  # the listening earcon plays; the mic isn't open yet
+        await start
+        assert v.busy_listening and v.listening
+        stop = asyncio.create_task(v.stop_listening("cr_1"))
+        await asyncio.sleep(0.05)
+        assert v.busy_listening and not v.listening  # released, but the post-roll still records
+        await stop
+        assert not v.busy_listening and not v.listening
+
+    asyncio.run(run())
+
+
+def test_stub_busy_listening_matches_listening():
+    from artemis.voice import StubVoice
+
+    v = StubVoice(announcer=FakeAnnouncer([]))
+    assert not v.busy_listening
+    asyncio.run(v.start_listening())
+    assert v.busy_listening
+    asyncio.run(v.stop_listening("cr_1"))
+    assert not v.busy_listening
+
 def test_press_during_post_roll_closes_that_mic_first_and_skips_its_stopped_earcon():
     log = []
     v, _, streams = make(1, log=log, post_roll=5.0)
@@ -196,12 +233,123 @@ def test_natural_prompt_is_opt_in(monkeypatch):
     assert model.calls[0][1]["initial_prompt"] == NATURAL_LEAD + " LoginForm."
 
 
+def test_word_list_prompt_and_hotwords_carry_the_demo_vocabulary():
+    words = [w.strip() for w in LIST_PROMPT.split(",")]
+    assert all(w in words for w in DEMO_WORDS)
+    assert [w.strip() for w in HOTWORDS.split(",")] == words  # the same fixed list, without project words
+
+
+def test_hotwords_are_opt_in_and_only_for_a_model_that_takes_them(monkeypatch):
+    for raw in ("", "off", "1", "yes"):
+        monkeypatch.setenv("ARTEMIS_WHISPER_HOTWORDS", raw)
+        assert make(1)[0].hotwords is False, raw
+    monkeypatch.setenv("ARTEMIS_WHISPER_HOTWORDS", "on")
+    v, model, _ = make(1)
+    v.set_vocabulary(["LoginForm"])
+    asyncio.run(v.start_listening())
+    asyncio.run(v.stop_listening("cr_1"))
+    kw = model.calls[0][1]
+    assert kw["hotwords"] == HOTWORDS and "LoginForm" not in kw["hotwords"]
+    assert kw["initial_prompt"] == LIST_PROMPT + ", LoginForm"  # the prompt is unchanged
+
+    class OldModel:  # faster-whisper before 1.0: no hotwords parameter
+        def __init__(self):
+            self.calls = []
+
+        def transcribe(self, audio, language=None, beam_size=5, vad_filter=False, initial_prompt=None):
+            self.calls.append((language, beam_size, vad_filter, initial_prompt))
+            return iter([Seg(" create a Python program")]), None
+
+    v, _, _ = make(1)
+    v._model = old = OldModel()
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_2")) == "create a Python program"  # no TypeError: the old call
+    assert old.calls == [("en", 1, True, LIST_PROMPT)]
+
+
+def test_the_locked_faster_whisper_takes_hotwords():
+    fw = pytest.importorskip("faster_whisper")
+    from artemis.voice.listen import takes_hotwords
+
+    assert takes_hotwords(fw.WhisperModel.__new__(fw.WhisperModel))
+
+
+@pytest.mark.parametrize("heard, meant", [
+    ("create a Python program that princehello world", "create a Python program that prints hello world"),
+    ("create a Python program that prince hello world", "create a Python program that prints hello world"),
+    ("create a Python program that Prince, hello world.", "create a Python program that Prints hello world."),  # case kept
+    ("Create a python program that princehelloworld", "Create a python program that prints hello world"),
+    ("create a Python program that brings the low world", "create a Python program that prints hello world"),
+    ("create a Python program that prints hollow world", "create a Python program that prints hello world"),
+    ("prints Hallo World", "prints Hello world"),
+    ("prints hullo-world", "prints hello world"),
+    ("Hollow world.", "Hello world."),
+    ("create a pie thon program", "create a python program"),
+    ("create a Pi-thon program", "create a Python program"),
+])
+def test_known_mishearings_are_fixed(heard, meant):
+    assert correct_transcript(heard) == meant
+
+
+def test_every_correction_row_applies():
+    for heard, meant in CORRECTIONS:
+        assert correct_transcript(f"say {heard} now") == f"say {meant} now", heard
+        assert correct_transcript(heard.upper()) == meant[:1].upper() + meant[1:], heard
+
+
+@pytest.mark.parametrize("text", [
+    "create a Python program that prints Hello World",
+    "run main.py",
+    "the prince said hello",  # "prince" alone, not before "hello"
+    "a hollow log in the world",
+    "pie chart for the thon",
+    "",
+])
+def test_unrelated_text_is_unchanged(text, caplog):
+    with caplog.at_level("INFO"):
+        assert correct_transcript(text) == text
+    assert "mishearing" not in caplog.text
+
+
+@pytest.mark.parametrize("text", [
+    "princehellos", "xprincehello", "prince helloworld", "prince hellos", "hollow worlds", "shallow world",
+    "hallowed world", "pie thong", "pi thonic", "brings the low worldly", "apie thon", "princehello_x",
+])
+def test_corrections_never_apply_inside_other_words(text):
+    assert correct_transcript(text) == text
+
+
+def test_transcripts_are_corrected_and_only_the_count_is_logged(caplog):
+    v, _, _ = make(1, text="Artemis,| create a Python program that princehello world")
+    asyncio.run(v.start_listening())
+    with caplog.at_level("INFO"):
+        assert asyncio.run(v.stop_listening("cr_1")) == "create a Python program that prints hello world"
+    assert "fixed 1 known mishearing" in caplog.text
+    assert "prince" not in caplog.text.lower() and "hello" not in caplog.text.lower()
+
+
 def test_dropped_segments_are_logged_without_their_words(caplog):
     v, _, _ = make(2, segs=[Seg(" run main.py", 0.05), Seg(" and run it secret", 0.8)])
     asyncio.run(v.start_listening())
     assert asyncio.run(v.stop_listening("cr_1")) == "run main.py"
     assert "no_speech_prob 0.80" in caplog.text and "secret" not in caplog.text
 
+
+
+def test_dropped_releases_log_their_reason_without_words(caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="artemis.voice.listen")
+    v, model, _ = make(0.1)  # a tap
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_1")) == ""
+    assert "Release dropped: too short" in caplog.text
+    hiss = (np.random.default_rng(2).standard_normal(RATE * 2) * 0.0002).astype(np.float32)
+    v, model, _ = make(2, audio=hiss)  # a silent hold
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_2")) == ""
+    assert "Release dropped: silent" in caplog.text and not model.calls
+    assert "create a Python program" not in caplog.text  # numbers only, never words
 
 def test_room_silence_never_reaches_whisper():
     # The loudest room silence measured on the demo laptop's headset mic: RMS 0.00022.
@@ -389,3 +537,137 @@ def test_missing_microphone_raises_voice_error():
         with pytest.raises(VoiceError, match="Microphone not available"):
             asyncio.run(v.start_listening())
     assert not v.listening
+
+
+# ----- working cue (ARTEMIS_WORKING_CUE=earcon; the core's "Still working." heartbeat) -----
+
+
+class Speaking:
+    name = "sapi"
+
+    def __init__(self, busy=False):
+        self.is_busy, self.said = busy, []
+
+    def available(self):
+        return True
+
+    def speak(self, text, interrupt):
+        self.said.append(text)
+
+    def cancel(self):
+        pass
+
+    def busy(self):
+        return self.is_busy
+
+
+def working_voice(on=True, busy=False, sapi_up=True):
+    from artemis.voice.speech import Announcer
+
+    sapi = Speaking(busy)
+    sapi.available = lambda: sapi_up
+    played = []
+    v = WhisperVoice(announcer=Announcer(nvda=Speaking(), sapi=sapi, is_nvda_running=lambda: False),
+                     model=FakeModel("x"), stream_factory=lambda cb: FakeStream(cb, speech_like(1)),
+                     earcon=lambda name: (played.append(name), 0.0)[1], working_earcon=on)
+    return v, played, sapi
+
+
+def test_working_cue_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("ARTEMIS_WORKING_CUE", raising=False)
+    v, _, _ = working_voice(on=None)
+    assert v.working_cue is None  # the core keeps saying "Still working."
+    monkeypatch.setenv("ARTEMIS_WORKING_CUE", "earcon")
+    v, _, _ = working_voice(on=None)
+    assert callable(v.working_cue)
+
+
+def test_working_cue_ticks_but_never_over_speech_or_into_the_mic():
+    v, played, sapi = working_voice()
+    v.working_cue()
+    assert played == ["working"]
+    sapi.is_busy = True
+    v.working_cue()  # Artemis is talking: skip this beat
+    sapi.is_busy = False
+    asyncio.run(v.start_listening())
+    v.working_cue()  # the mic is open: a tick would be transcribed
+    asyncio.run(v.stop_listening("cr_1"))
+    assert played == ["working", "listening", "stopped"]  # one tick; only push-to-talk's own cues after it
+
+
+def test_no_working_tick_when_no_voice_can_speak():
+    v, _, _ = working_voice(sapi_up=False)
+    assert v.working_cue is None  # voice_ready is false: the live region needs the words
+
+
+def test_core_heartbeat_plays_the_tick_instead_of_the_line(tmp_path):
+    from artemis.core.session import STILL_WORKING, Session
+
+    for on in (False, True):
+        v, played, sapi = working_voice(on=on)
+        session = Session("ses_t", voice=v, runner=None, agent=None, projects_dir=tmp_path)
+        asyncio.run(session._still_working("tsk_1"))
+        if on:
+            assert played == ["working"] and STILL_WORKING not in sapi.said
+        else:
+            assert played == [] and sapi.said == [STILL_WORKING]
+
+
+def test_transcribing_is_true_only_while_whisper_runs():
+    # voice.activity reads this: "transcribing" between the mic closing and the text being ready.
+    v, _, _ = make(1)
+    seen = []
+    real = v._transcribe
+
+    def slow(audio):
+        seen.append(v.transcribing)
+        return real(audio)
+
+    v._transcribe = slow
+
+    async def run():
+        assert not v.transcribing
+        await v.start_listening()
+        await v.stop_listening("cr_1")
+
+    asyncio.run(run())
+    assert seen == [True] and not v.transcribing
+
+
+def test_warm_initialises_audio_so_the_first_press_is_fast(monkeypatch):
+    # Measured on Ubuntu: import sounddevice takes 1.5 s (PortAudio probes the devices). warm() runs at
+    # core startup, so after it the first push-to-talk doesn't pay that cost.
+    import sys
+
+    pytest.importorskip("sounddevice")
+    monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
+    v, _, _ = make(1)
+    v.warm()
+    assert "sounddevice" in sys.modules
+
+
+class SpeakingAnnouncer(FakeAnnouncer):
+    async def announce(self, text, priority):
+        self.log.append(("say", text, priority))
+
+
+def test_low_lines_are_not_spoken_while_push_to_talk_has_the_mic():
+    # "Still working." during a long run must not be recorded into "cancel" (a whole-utterance control word).
+    log = []
+    v, _, _ = make(1, log=log)
+    v.announcer = SpeakingAnnouncer(log)
+
+    async def run():
+        await v.announce("Still working.", "low")  # idle: spoken
+        v._wanted = True  # pressed: the listening earcon and the mic are next
+        await v.announce("Still working.", "low")  # not spoken
+        await v.announce("Created main.py, 1 line.", "normal")  # normal lines are unchanged
+        v._wanted = False
+        v.transcribing = True
+        await v.announce("Still working.", "low")  # not spoken while Whisper runs
+        v.transcribing = False
+        await v.announce("Still working.", "low")  # spoken again
+
+    asyncio.run(run())
+    said = [e for e in log if isinstance(e, tuple)]
+    assert said == [("say", "Still working.", "low"), ("say", "Created main.py, 1 line.", "normal"), ("say", "Still working.", "low")]

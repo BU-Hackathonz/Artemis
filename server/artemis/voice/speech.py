@@ -14,13 +14,26 @@ import asyncio
 import ctypes
 import inspect
 import logging
+import json
 import os
+import queue
+import shutil
+import subprocess
 import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from artemis.contracts.events import Priority
+from artemis.policy.redact import redact
+
+if TYPE_CHECKING:  # profile.py imports this module, so the runtime import would be circular
+    from artemis.voice.profile import VoiceProfile
 
 log = logging.getLogger(__name__)
 
@@ -78,12 +91,24 @@ class Speaker(Protocol):
     def busy(self) -> bool: ...
 
 
+def speech_seconds(text: str, words_per_second: float) -> float:
+    """Rough time to say `text`: its word count at the given pace."""
+    return len(text.split()) / words_per_second
+
+
 class NvdaSpeaker:
     """NVDA Controller Client: speaks in the user's own NVDA voice and rate, from any focused app."""
 
     name = "nvda"
+    # The controller can't say whether NVDA is still talking, so busy() estimates it from word count.
+    # 3.5 words a second is an assumption, not measured on NVDA. The error runs both ways: if the user's
+    # NVDA is slower, a low line can still be spoken over our last line; if it is faster, a low line can
+    # be dropped after NVDA has already gone quiet. Normal and high lines are never dropped by busy().
+    WORDS_PER_SECOND = 3.5
 
-    def __init__(self, dll_path: Path = NVDA_DLL) -> None:
+    def __init__(self, dll_path: Path = NVDA_DLL, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._done_at = 0.0  # when the text we sent should have finished
         self._dll = None
         if sys.platform == "win32" and dll_path.is_file():
             try:
@@ -100,16 +125,26 @@ class NvdaSpeaker:
         return self._dll is not None and self._dll.nvdaController_testIfRunning() == 0
 
     def speak(self, text: str, interrupt: bool) -> None:
+        now = self._clock()
         if interrupt:
             self._dll.nvdaController_cancelSpeech()
+            self._done_at = now
         self._dll.nvdaController_speakText(text)
         self._dll.nvdaController_brailleMessage(text)
+        # Without interrupt NVDA queues the text after whatever it is still saying.
+        self._done_at = max(self._done_at, now) + speech_seconds(text, self.WORDS_PER_SECOND)
 
     def cancel(self) -> None:
         self._dll.nvdaController_cancelSpeech()
+        self._done_at = 0.0
+
+    def braille(self, text: str) -> None:
+        """Send text to the braille display only; NVDA does not speak it."""
+        self._dll.nvdaController_brailleMessage(text)
 
     def busy(self) -> bool:
-        return False  # the controller API can't tell; low-priority text is spoken anyway
+        # An estimate of our own text only: NVDA reading the user's code is invisible to the controller.
+        return self._clock() < self._done_at
 
 
 class SapiSpeaker:
@@ -141,7 +176,7 @@ class SapiSpeaker:
             try:
                 self.set_rate(rate)
             except Exception as e:  # a COM hiccup here must never stop the core from starting
-                log.warning("Could not set the SAPI rate: %s", e)
+                log.warning("Could not set the SAPI rate: %s", type(e).__name__)
 
     def available(self) -> bool:
         return self._voice is not None
@@ -179,6 +214,349 @@ class SapiSpeaker:
         return self._voice.Status.RunningState == self._SPEAKING
 
 
+# ----- ElevenLabs (opt-in: ARTEMIS_VOICE_ENGINE=elevenlabs; used only when NVDA is not running) -----
+
+ELEVEN_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
+ELEVEN_PCM_RATE = 22_050  # output_format=pcm_22050: 16-bit mono, playable as each chunk arrives
+SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
+FAILURES_BEFORE_SAPI = 3
+PERMANENT_FAILURES = {"HTTP 401", "HTTP 402", "HTTP 403"}  # retrying can't help: give up at once
+def _local_voice_name() -> str:
+    return "NVDA or the Windows voice" if sys.platform == "win32" else "the offline voice"
+
+
+def fallback_notice() -> str:
+    """The give-up line. On Linux it never names Windows, SAPI or NVDA."""
+    local = "the Windows voice" if sys.platform == "win32" else "the offline voice"
+    return f"My natural voice isn't reachable, so I'm using {local}."
+
+
+FALLBACK_NOTICE = fallback_notice()
+# Short fixed lines worth keeping as audio so they play at once. Only these exact strings are cached:
+# never transcripts, code, file contents or anything the agent wrote.
+CACHED_LINES = frozenset({
+    "Artemis is ready. Hold Control Shift Space and speak, or type a request.",
+    "Artemis is ready. Use the Start listening button and speak, or type a request.",
+    "Canceled.",
+    "Canceled. Nothing was written.",
+    "Speaking faster.",
+    "Speaking slower.",
+    "That's the fastest I go.",
+    "That's the slowest I go.",
+    "Still working.",
+})
+PLACEHOLDER_VOICE = "<PASTE_VOICE_ID>"  # what the setup docs show; treated as unset
+DEFAULT_VOICE_ID = "SAxJUlDKRc79XAyeWyMu"  # Morgan (Deep, Powerful, and Confident), chosen by Yaovi; ARTEMIS_ELEVEN_VOICE_ID overrides it
+
+
+def _env_float(name: str, default: float, low: float | None = None, high: float | None = None) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        log.warning("%s=%r is not a number; using %s", name, raw, default)
+        return default
+    if value != value:  # nan
+        return default
+    if low is not None:
+        value = max(low, value)
+    if high is not None:
+        value = min(high, value)
+    return value
+
+
+def clamp_speed(speed: float) -> float:
+    return round(max(SPEED_MIN, min(SPEED_MAX, float(speed))), 2)
+
+
+def _open_stream(request: urllib.request.Request, timeout_s: float):
+    return urllib.request.urlopen(request, timeout=timeout_s)  # noqa: S310 (fixed https URL)
+
+
+def _output_stream():
+    import sounddevice as sd
+
+    return sd.RawOutputStream(samplerate=ELEVEN_PCM_RATE, channels=1, dtype="int16")
+
+
+def _chain(first: bytes, rest):
+    yield first
+    yield from rest
+
+
+ENGINES = ("elevenlabs", "nvda", "sapi")
+
+
+def voice_engine() -> str:
+    """ARTEMIS_VOICE_ENGINE picks Artemis's own voice: elevenlabs (the default), nvda or sapi."""
+    raw = os.environ.get("ARTEMIS_VOICE_ENGINE", "").strip().lower()
+    if raw and raw not in ENGINES:
+        log.warning("ARTEMIS_VOICE_ENGINE=%r is not one of %s; using elevenlabs", raw, ", ".join(ENGINES))
+    return raw if raw in ENGINES else "elevenlabs"
+
+
+class ElevenLabsSpeaker:
+    """ElevenLabs streaming text-to-speech, played as the first audio chunk arrives.
+
+    The network and the audio device run on one worker thread, so the event loop never waits on them.
+    A line that can't start within the timeout (no key, a failed request, a slow first chunk) is spoken
+    by the fallback speaker instead (NVDA when it runs, else SAPI). After FAILURES_BEFORE_SAPI failures
+    in a row this speaker reports unavailable for the rest of the session, so the router falls back
+    too. When NVDA runs, every line also goes to the braille display through `braille`. The API key is
+    only ever sent in the request header: it is never logged, spoken or put in an event.
+    """
+
+    name = "elevenlabs"
+
+    def __init__(self, api_key: str | None = None, voice_id: str | None = None, model: str | None = None,
+                 speed: float | None = None, stability: float | None = None, timeout_s: float | None = None,
+                 fallback: Speaker | None = None, opener=_open_stream, output=_output_stream,
+                 on_give_up: Callable[[str], None] | None = None) -> None:
+        self._key = api_key if api_key is not None else os.environ.get("ELEVENLABS_API_KEY", "").strip()
+        env_voice = os.environ.get("ARTEMIS_ELEVEN_VOICE_ID", "").strip()
+        self.voice_id = voice_id or (env_voice if env_voice and env_voice != PLACEHOLDER_VOICE else DEFAULT_VOICE_ID)
+        self.model = model or os.environ.get("ARTEMIS_ELEVEN_MODEL", "").strip() or "eleven_flash_v2_5"
+        self.speed = clamp_speed(speed if speed is not None else _env_float("ARTEMIS_ELEVEN_SPEED", 1.0))
+        self.stability = stability if stability is not None else _env_float("ARTEMIS_ELEVEN_STABILITY", 0.5, 0.0, 1.0)
+        self.timeout_s = timeout_s if timeout_s is not None else _env_float("ARTEMIS_ELEVEN_TIMEOUT_S", 1.5, 0.2, 10.0)
+        self.fallback = fallback
+        self.on_give_up = on_give_up  # the core can set this to say FALLBACK_NOTICE through the bus
+        self.braille: Callable[[str], None] | None = None  # set by the Announcer: NVDA's braille display
+        self._opener, self._output = opener, output
+        self._queue: queue.Queue = queue.Queue()
+        self._gen = 0  # bumped by cancel (and so by interrupt): work holding an older number stops
+        self._lock = threading.Lock()
+        self._playing = threading.Event()
+        self._idle = threading.Event()
+        self._idle.set()
+        self._stream = None  # the open output stream, so cancel() can abort it from the loop thread
+        self._response = None  # the open HTTP response, so cancel() can abandon the download
+        self._failures = 0
+        self.gave_up = False
+        self._cache: dict[tuple, bytes] = {}
+        self.last_first_audio_s: float | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._worker: threading.Thread | None = None
+        if not self._key:
+            log.warning("ElevenLabs voice: ELEVENLABS_API_KEY is not set; using %s", _local_voice_name())
+        elif self.voice_id == PLACEHOLDER_VOICE:
+            log.warning("ElevenLabs voice: ARTEMIS_ELEVEN_VOICE_ID is not set; using %s", _local_voice_name())
+
+    # Speaker protocol
+
+    def available(self) -> bool:
+        return bool(self._key) and self.voice_id != PLACEHOLDER_VOICE and not self.gave_up
+
+    def speak(self, text: str, interrupt: bool) -> None:
+        try:
+            self._loop = asyncio.get_running_loop()  # the SAPI fallback must run on the loop's thread (COM)
+        except RuntimeError:
+            self._loop = None
+        if interrupt:
+            self.cancel()
+        if self.braille is not None:
+            try:
+                self.braille(text)  # the same line on the braille display, as NVDA would send it
+            except Exception:
+                pass
+        with self._lock:
+            gen = self._gen
+            self._idle.clear()
+            self._queue.put((gen, text))
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(target=self._run, name="artemis-elevenlabs", daemon=True)
+                self._worker.start()
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._gen += 1
+            stream, response = self._stream, self._response
+            try:
+                while True:
+                    self._queue.get_nowait()
+            except queue.Empty:
+                pass
+        for thing, how in ((stream, "abort"), (response, "close")):
+            if thing is not None:
+                try:
+                    getattr(thing, how)()  # stop the sound now, and abandon the download
+                except Exception:
+                    pass
+        if self.fallback is not None:
+            try:
+                self.fallback.cancel()  # a line that fell back stops too (push-to-talk)
+            except Exception:
+                pass
+
+    def busy(self) -> bool:
+        return self._playing.is_set() or not self._queue.empty()
+
+    def speaking(self) -> bool:
+        """Audio is playing now (a queued or downloading line is not speech yet)."""
+        return self._playing.is_set()
+
+    # Speed: "faster" and "slower"
+
+    def step_speed(self, delta: int) -> RateStatus:
+        if not delta:
+            return RateStatus.UNCHANGED
+        after = clamp_speed(self.speed + (SPEED_STEP if delta > 0 else -SPEED_STEP))
+        if after == self.speed:
+            return RateStatus.AT_MAX if delta > 0 else RateStatus.AT_MIN
+        self.speed = after
+        return RateStatus.FASTER if delta > 0 else RateStatus.SLOWER
+
+    # Worker thread
+
+    def wait_idle(self, timeout: float = 5.0) -> bool:
+        """For tests and measurements: wait until everything queued was played or dropped."""
+        return self._idle.wait(timeout)
+
+    def _current(self, gen: int) -> bool:
+        with self._lock:
+            return gen == self._gen
+
+    def _run(self) -> None:
+        while True:
+            try:
+                gen, text = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                with self._lock:
+                    if self._queue.empty():
+                        self._idle.set()
+                        self._worker = None
+                        return
+                continue
+            if self._current(gen):
+                self._say(gen, text)
+            with self._lock:
+                if self._queue.empty():
+                    self._idle.set()
+
+    def _say(self, gen: int, text: str) -> None:
+        key = (self.voice_id, self.model, self.speed, text)
+        cached = self._cache.get(key)
+        if cached is not None:
+            self.last_first_audio_s = 0.0
+            self._play(iter([cached]), gen)
+            return
+        started = time.monotonic()
+        try:
+            chunks = self._fetch(text)
+            first = next(chunks)
+        except StopIteration:
+            self._failed(text, gen, "the stream returned no audio")
+            return
+        except Exception as e:
+            self._failed(text, gen, self._reason(e))
+            return
+        self.last_first_audio_s = time.monotonic() - started
+        self._failures = 0
+        played = self._play(_chain(first, chunks), gen)
+        if played is not None and text in CACHED_LINES:
+            self._cache[key] = played
+
+    def _fetch(self, text: str):
+        # The only place text leaves the computer: redact here, so answers, "Heard:" transcripts and
+        # error lines that never passed the gateway are scrubbed too. The fallback speakers are local.
+        body = json.dumps({
+            "text": redact(text),
+            "model_id": self.model,
+            "voice_settings": {"stability": self.stability, "similarity_boost": 0.75,
+                               "use_speaker_boost": True, "speed": self.speed},
+        }).encode("utf-8")
+        url = ELEVEN_URL.format(voice_id=urllib.parse.quote(self.voice_id, safe="")) + f"?output_format=pcm_{ELEVEN_PCM_RATE}"
+        request = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"xi-api-key": self._key, "Content-Type": "application/json", "Accept": "audio/pcm"},
+        )
+        response = self._opener(request, self.timeout_s)
+        with self._lock:
+            self._response = response
+        try:
+            while True:
+                chunk = response.read(4096)
+                if not chunk:
+                    return
+                yield chunk
+        finally:
+            with self._lock:
+                self._response = None
+            try:
+                response.close()
+            except Exception:
+                pass
+
+    def _play(self, chunks, gen: int) -> bytes | None:
+        """Play PCM chunks as they come. Returns the whole audio if it played to the end, else None."""
+        stream = self._output()
+        with self._lock:
+            if gen != self._gen:
+                return None
+            self._stream = stream
+        kept = bytearray()
+        self._playing.set()
+        try:
+            stream.start()
+            for chunk in chunks:
+                if not self._current(gen):
+                    return None
+                stream.write(chunk)
+                kept += chunk
+            stream.stop()  # drains the buffer, so busy() stays true until the last word is heard
+            return bytes(kept) if self._current(gen) else None
+        except Exception as e:
+            if self._current(gen):
+                log.warning("ElevenLabs playback stopped: %s", type(e).__name__)
+            return None
+        finally:
+            self._playing.clear()
+            with self._lock:
+                self._stream = None
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _reason(e: Exception) -> str:
+        """A short reason for the log. Never the request, its headers or body: the key lives there."""
+        if isinstance(e, urllib.error.HTTPError):
+            return f"HTTP {e.code}"
+        if isinstance(e, TimeoutError) or "timed out" in str(e).lower():
+            return "no audio within the timeout"
+        return type(e).__name__
+
+    def _failed(self, text: str, gen: int, reason: str) -> None:
+        if not self._current(gen):
+            return  # canceled meanwhile: say nothing
+        self._failures += 1
+        if reason in PERMANENT_FAILURES:
+            # A bad key, a plan without API access to this voice (402, e.g. a free key with a library voice),
+            # or forbidden: no later line can succeed, so give up now instead of trying every line.
+            self._failures = FAILURES_BEFORE_SAPI
+        log.warning("ElevenLabs failed (%s); this line uses the local voice", reason)
+        if self._failures >= FAILURES_BEFORE_SAPI and not self.gave_up:
+            self.gave_up = True
+            log.warning("ElevenLabs failed %d times in a row; using the local voice for this session", self._failures)
+            notice = fallback_notice()
+            if self.on_give_up is not None:
+                self._on_loop(self.on_give_up, notice)
+            else:
+                log.warning("Not spoken yet (the core doesn't wire it): %s", notice)
+        if self.fallback is not None and self.fallback.available():
+            self._on_loop(self.fallback.speak, text, False)
+
+    def _on_loop(self, fn, *args) -> None:
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(fn, *args)
+        else:
+            fn(*args)
+
+
 class NullSpeaker:
     """No voice output. The core reports voice_ready=false so the client's live region speaks instead."""
 
@@ -197,17 +575,341 @@ class NullSpeaker:
         return False
 
 
-class Announcer:
-    """announce() for the core: picks NVDA, SAPI or silence, applies priority, remembers the last line."""
+# ----- Linux: the offline voice (speech-dispatcher), and Orca detection -----
 
-    def __init__(self, nvda: Speaker | None = None, sapi: Speaker | None = None, is_nvda_running: Callable[[], bool] = nvda_running) -> None:
+
+def orca_running(proc: Path = Path("/proc")) -> bool:
+    """True while the Orca screen reader runs (Linux). Detection only: voice.status can't report it yet."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        for comm in proc.glob("[0-9]*/comm"):
+            try:
+                if comm.read_text(encoding="utf-8", errors="ignore").strip() == "orca":
+                    return True
+            except OSError:
+                continue  # the process ended while we looked
+    except OSError:
+        pass
+    return False
+
+
+# Artemis's priorities as speech-dispatcher levels (approved by Avery). high speaks over Orca and Orca can't
+# cut it; normal shares Orca's level, so each cuts the other; low never interrupts Orca and is dropped if
+# anything else speaks.
+SSIP_PRIORITY = {"high": "message", "normal": "text", "low": "notification"}
+
+
+class SpeechDispatcherSpeaker:
+    """Offline Linux voice: speech-dispatcher (ships with Ubuntu and Orca), spoken to directly over its
+    SSIP socket with the standard library, no new dependency.
+
+    Why not spd-say: its --cancel cancels every client's speech, Orca's included, and as a separate
+    process it can land after the next line and wipe that out. On our own connection, CANCEL self stops
+    only Artemis's messages, and commands are handled in order, so a cancel always lands before the
+    line that follows it. busy() and speaking() come from speech-dispatcher's own BEGIN/END events.
+    """
+
+    name = "speechd"  # what Announcer.speaking_engine() reports (#141, the wake word)
+    REPLY_TIMEOUT_S = 1.0
+    RETRY_S = 5.0  # after a failed connect, don't try again on every announce
+
+    def __init__(self, connect=None, clock: Callable[[], float] = time.monotonic) -> None:
+        self._connect = connect or _speechd_connect
+        self._clock = clock
+        self._sock = None
+        self._failed_at: float | None = None
+        self._send_lock = threading.Lock()
+        self._connect_lock = threading.Lock()  # one connection at a time, even if available() and speak() race
+        self._replies: queue.Queue = queue.Queue()  # replaced with every connection (see _ensure)
+        self._queued: set[str] = set()  # message ids speech-dispatcher still has for us
+        self._playing = threading.Event()
+        self._state = threading.Lock()
+        self._level: str | None = None  # the SSIP priority last set on this connection
+
+    # connection
+
+    def _ensure(self):
+        if self._sock is not None:
+            return self._sock
+        with self._connect_lock:
+            if self._sock is not None:  # another thread connected while we waited
+                return self._sock
+            return self._open()
+
+    def _open(self):
+        if self._failed_at is not None and self._clock() - self._failed_at < self.RETRY_S:
+            return None
+        try:
+            sock = self._connect()
+            # Each connection gets its own reply queue: a reply that arrives after a command timed out
+            # stays with the dead connection instead of answering the next connection's command.
+            replies: queue.Queue = queue.Queue()
+            self._replies = replies
+            self._sock = sock
+            threading.Thread(target=self._read, args=(sock, replies), name="artemis-speechd", daemon=True).start()
+            self._command("SET self CLIENT_NAME user:artemis:voice")
+            self._command("SET self NOTIFICATION all on")
+            self._failed_at = None
+            return sock
+        except Exception as e:  # no speech-dispatcher: the router falls back to silence
+            log.warning("speech-dispatcher is not reachable: %s", type(e).__name__)
+            self._drop()
+            self._failed_at = self._clock()
+            return None
+
+    def _drop(self) -> None:
+        sock, self._sock = self._sock, None
+        self._level = None  # a new connection starts at speech-dispatcher's default again
+        with self._state:
+            self._queued.clear()
+        self._playing.clear()
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _send(self, *lines: str) -> None:
+        self._sock.sendall("".join(line + "\r\n" for line in lines).encode("utf-8"))
+
+    def _reply(self) -> list[str]:
+        lines = self._replies.get(timeout=self.REPLY_TIMEOUT_S)
+        if not lines[-1][:1] == "2":  # 2xx is success; 3xx/4xx/5xx are errors
+            raise OSError(f"speech-dispatcher said {lines[-1][:3]}")
+        return lines
+
+    def _command(self, line: str) -> list[str]:
+        with self._send_lock:
+            self._send(line)
+            return self._reply()
+
+    def _read(self, sock, replies: queue.Queue) -> None:
+        """Reader thread: split replies (to the waiting command) from events (7xx, which update state)."""
+        buffer, block = b"", []
+        try:
+            while True:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                buffer += data
+                while b"\r\n" in buffer:
+                    raw, buffer = buffer.split(b"\r\n", 1)
+                    line = raw.decode("utf-8", "replace")
+                    block.append(line)
+                    if len(line) >= 4 and line[3] == "-":
+                        continue  # more lines of this block follow
+                    if line.startswith("7"):
+                        if self._sock is sock:  # a dead connection's events never touch the new one's state
+                            self._event(block)
+                    else:
+                        replies.put(block)
+                    block = []
+        except OSError:
+            pass
+        if self._sock is sock:
+            self._drop()
+
+    def _event(self, block: list[str]) -> None:
+        code = block[-1][:3]
+        msg_id = block[0][4:] if len(block) > 1 else ""
+        if code == "701":  # BEGIN
+            self._playing.set()
+        elif code in ("702", "703"):  # END, CANCELED
+            with self._state:
+                self._queued.discard(msg_id)
+                if not self._queued:
+                    self._playing.clear()
+
+    # Speaker protocol
+
+    def available(self) -> bool:
+        return self._ensure() is not None
+
+    def speak(self, text: str, interrupt: bool, priority: Priority | None = None) -> None:
+        if self._ensure() is None:
+            return
+        # SSIP data: one line per line; a line that starts with "." gets a second "." (dot-stuffing).
+        lines = [("." + line) if line.startswith(".") else line for line in text.replace("\r", "").split("\n")]
+        level = SSIP_PRIORITY.get(priority or ("high" if interrupt else "normal"), "text")
+        try:
+            with self._send_lock:
+                if interrupt:
+                    self._send("CANCEL self")  # only Artemis's own messages; never Orca's
+                    self._reply()
+                    with self._state:
+                        self._queued.clear()
+                    self._playing.clear()
+                if level != self._level:  # one round trip only when the level changes
+                    self._send(f"SET self PRIORITY {level}")
+                    self._reply()
+                    self._level = level
+                self._send("SPEAK")
+                self._reply()  # 230 OK RECEIVING DATA
+                self._send(*lines, ".")
+                queued = self._reply()  # 225-<msg id> / 225 OK MESSAGE QUEUED
+            # A notification can be discarded silently, with no END or CANCELED event, so it is never
+            # counted: otherwise busy() would stay true for the session and every later low line be lost.
+            if len(queued) > 1 and level != "notification":
+                with self._state:
+                    self._queued.add(queued[0][4:])
+        except Exception as e:
+            log.warning("speech-dispatcher failed to speak: %s", type(e).__name__)
+            self._drop()
+
+    def cancel(self) -> None:
+        if self._sock is None:
+            return
+        try:
+            self._command("CANCEL self")
+        except Exception:
+            self._drop()
+            return
+        with self._state:
+            self._queued.clear()
+        self._playing.clear()
+
+    def busy(self) -> bool:
+        with self._state:
+            return bool(self._queued)
+
+    def speaking(self) -> bool:
+        """Audio is playing now: between speech-dispatcher's BEGIN and END events for our message."""
+        return self._playing.is_set()
+
+
+def _speechd_connect():
+    """Connect to speech-dispatcher's socket, starting it once (argv only) if it isn't running yet."""
+    import socket
+
+    address = os.environ.get("SPEECHD_ADDRESS", "")
+    if address.startswith("unix_socket:"):
+        path = Path(address.split(":", 1)[1])
+    else:
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        path = Path(runtime) / "speech-dispatcher" / "speechd.sock"
+    if not path.exists():
+        spawn = shutil.which("speech-dispatcher")
+        if spawn is None:
+            raise FileNotFoundError("speech-dispatcher")
+        subprocess.run([spawn, "--spawn"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5, check=False)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(None)
+    sock.connect(str(path))
+    return sock
+
+
+class _Fallback:
+    """Where a line goes when ElevenLabs can't say it: NVDA when it runs (never a second voice over it),
+    else SAPI. cancel() stops only the speaker this fallback last used, so NVDA's own reading of the
+    screen is never cut off by Artemis."""
+
+    name = "fallback"
+
+    def __init__(self, announcer: "Announcer") -> None:
+        self._a, self._last = announcer, None
+
+    def _target(self) -> Speaker | None:
+        a = self._a
+        if a.is_nvda_running():
+            return a.nvda if a.nvda.available() else None
+        return a.sapi if a.sapi.available() else None
+
+    def available(self) -> bool:
+        return self._target() is not None
+
+    def speak(self, text: str, interrupt: bool) -> None:
+        target = self._target()
+        if target is not None:
+            self._last = target
+            target.speak(text, interrupt)
+
+    def cancel(self) -> None:
+        if self._last is not None:
+            self._last.cancel()
+            self._last = None
+
+    def busy(self) -> bool:
+        return self._last is not None and self._last.busy()
+
+
+class Announcer:
+    """announce() for the core. Artemis's voice is ARTEMIS_VOICE_ENGINE: elevenlabs (the default) speaks
+    even while NVDA runs, and NVDA keeps the screen and the braille display; with no key, or with nvda
+    or sapi chosen, it is NVDA when it runs, else SAPI, else silence. Never two voices for one line."""
+
+    def __init__(self, nvda: Speaker | None = None, sapi: Speaker | None = None, is_nvda_running: Callable[[], bool] = nvda_running,
+                 eleven: Speaker | None = None) -> None:
         self.nvda = nvda or NvdaSpeaker()
-        self.sapi = sapi or SapiSpeaker()
+        # The local voice: SAPI on Windows, speech-dispatcher elsewhere. NVDA only ever runs on Windows
+        # (nvda_running() is False elsewhere), so on Linux the order is ElevenLabs, offline, silence.
+        self.sapi = sapi or (SapiSpeaker() if sys.platform == "win32" else SpeechDispatcherSpeaker())
         self.is_nvda_running = is_nvda_running
+        self.engine = voice_engine()
+        if eleven is None and self.engine == "elevenlabs":
+            eleven = ElevenLabsSpeaker(fallback=_Fallback(self))
+        if eleven is not None and hasattr(eleven, "braille"):
+            eleven.braille = self._braille
+        self.eleven = eleven
         self.last: str | None = None
         self._warned = False
+        self.working_cue_earcon = False  # set by apply(); listen.py still reads ARTEMIS_WORKING_CUE (wired with the settings route)
+
+    def _braille(self, text: str) -> None:
+        if self.is_nvda_running() and self.nvda.available() and hasattr(self.nvda, "braille"):
+            self.nvda.braille(text)
+
+    def apply(self, profile: "VoiceProfile") -> None:
+        """Switch Artemis's voice from the next line on. A line already playing is not cancelled.
+
+        Runs on the event-loop thread and does no network I/O: the ElevenLabs worker thread does the
+        requests. NVDA's voice and rate are never touched here.
+        """
+        self.engine = profile.engine
+        self.working_cue_earcon = profile.working_cue
+        if self.engine == "elevenlabs" and self.eleven is None:
+            eleven = ElevenLabsSpeaker(fallback=_Fallback(self))
+            if hasattr(eleven, "braille"):
+                eleven.braille = self._braille
+            self.eleven = eleven
+        if self.eleven is not None:
+            if profile.eleven_voice_id is not None:
+                self.eleven.voice_id = profile.eleven_voice_id
+            self.eleven.speed = clamp_speed(profile.eleven_speed)  # the cache key holds voice and speed: no flush
+        if self.sapi.available():
+            if profile.sapi_voice is not None:
+                try:
+                    self.sapi.choose_voice(profile.sapi_voice)
+                except Exception as e:  # a COM hiccup must not stop the voice change
+                    log.warning("Could not choose the SAPI voice: %s", type(e).__name__)
+            if profile.sapi_rate is not None:
+                try:
+                    self.sapi.set_rate(profile.sapi_rate)
+                except Exception as e:
+                    log.warning("Could not set the SAPI rate: %s", type(e).__name__)
+
+    def speaking_engine(self) -> str | None:
+        """Which speaker is audibly saying Artemis's line now, or None. ElevenLabs: its audio is playing.
+        SAPI: SpVoice is speaking. NVDA: only Artemis's own estimate, since NVDA can't report playback."""
+        eleven = self.eleven
+        if eleven is not None and getattr(eleven, "speaking", eleven.busy)():
+            return "elevenlabs"
+        for speaker in (self.sapi, self.nvda):
+            try:
+                if speaker.available() and speaker.busy():
+                    return speaker.name
+            except Exception:  # a speaker that can't be asked is not speaking
+                continue
+        return None
+
+    def active_engine(self) -> str:
+        """The name of the speaker that would speak the next line: elevenlabs, nvda, sapi or none."""
+        return self.current().name
 
     def current(self) -> Speaker:
+        if self.engine == "elevenlabs" and self.eleven is not None and self.eleven.available():
+            return self.eleven  # the user's chosen voice, with or without NVDA
         if self.is_nvda_running():
             if self.nvda.available():
                 return self.nvda
@@ -218,7 +920,11 @@ class Announcer:
         return self.sapi if self.sapi.available() else NullSpeaker()
 
     def status(self) -> tuple[bool, str | None]:
-        """(voice_ready, screen_reader) as contracts.md voice.status and /health report them."""
+        """(voice_ready, screen_reader) as contracts.md voice.status and /health report them.
+
+        screen_reader is "nvda" only when Artemis speaks through NVDA: with ElevenLabs speaking it is
+        None, so "faster" reaches ElevenLabs instead of the NVDA rate line.
+        """
         name = self.current().name
         return name != "none", "nvda" if name == "nvda" else None
 
@@ -257,7 +963,10 @@ class Announcer:
             return  # contracts.md: low may be dropped while speech is busy
         if priority != "low":
             self.last = text
-        speaker.speak(text, interrupt=priority == "high")
+        if isinstance(speaker, SpeechDispatcherSpeaker):  # the level decides who may cut whom; no probe of other speakers
+            speaker.speak(text, interrupt=priority == "high", priority=priority)
+        else:  # NVDA, SAPI, ElevenLabs: unchanged
+            speaker.speak(text, interrupt=priority == "high")
 
     async def stop_speech(self) -> None:
         self.current().cancel()
@@ -275,6 +984,8 @@ class Announcer:
         speaker = self.current()
         if speaker.name == "nvda":
             return RateStatus.NVDA
+        if hasattr(speaker, "step_speed"):  # ElevenLabs: speed 0.7..1.2 in steps of 0.1, for this session
+            return speaker.step_speed(delta)
         if not hasattr(speaker, "set_rate"):
             return RateStatus.NO_OUTPUT  # no voice output at all; there is nothing to make faster or slower
         if not delta:

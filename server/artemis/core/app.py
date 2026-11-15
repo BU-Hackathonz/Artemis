@@ -7,13 +7,15 @@ Run: ARTEMIS_TOKEN=... uv run uvicorn artemis.core.main:app --host 127.0.0.1 --p
 import asyncio
 import hmac
 import logging
+import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -22,9 +24,13 @@ from artemis.contracts import (
     ClientDiagnostic,
     ClientReady,
     TaskRequest,
+    VoiceSettingsPatch,
 )
 from artemis.runner.local import NoInterpreter
+from artemis.voice import profile as voice_profile
+from artemis.voice.speech import orca_running
 
+from . import settings as voice_settings
 from .approvals import ApprovalNotFound, ApprovalStale
 from .session import HEARTBEAT_S, Session, TaskActive, new_id
 
@@ -41,7 +47,10 @@ class ListenBody(BaseModel):
 
 
 class SpeechBody(BaseModel):
-    action: str  # "stop" | "repeat"
+    action: str  # "stop" | "repeat" | "sample"
+
+
+SAMPLE_TEXT = "This is how I sound."  # the voice picker's Test voice: fixed, never free text
 
 
 class Guard(BaseHTTPMiddleware):
@@ -89,10 +98,14 @@ class Core:
         self.sessions: dict[str, Session] = {}
         self.listen_lock = asyncio.Lock()
         self.watch_task: asyncio.Task | None = None
+        self.activity_task: asyncio.Task | None = None
+        self.wake = None  # the "Hey Artemis" listener, when ARTEMIS_LISTEN_MODE=wake
+        self.activity: tuple[str, str | None] = ("idle", None)  # the last voice.activity sent
         self.heartbeat_s = heartbeat_s
         # Interpreter pre-check: probed once per process, then reused by every session.
         self._interpreter_probe: asyncio.Task | None = None
         self.background: set[asyncio.Task] = set()  # per-session checks, canceled at shutdown
+        self.wire_voice()
 
     def new_session(self) -> Session:
         sid = new_id("ses")
@@ -160,11 +173,120 @@ class Core:
         announcer = getattr(self.voice, "announcer", None)
         if announcer is None:
             return False, None
-        return announcer.status()
+        voice_ready, screen_reader = announcer.status()
+        # Orca runs beside Artemis's own Linux voice, so the core reports it (contracts.md §5.3).
+        if sys.platform.startswith("linux") and orca_running():
+            screen_reader = "orca"
+        return voice_ready, screen_reader
+
+    async def watch_voice_status(self, interval_s: float = 2.0) -> None:
+        """Emit voice.status at start and on every change of voice_status(), Orca included.
+
+        The announcer's own watch cannot see Orca start or stop, so the core polls voice_status().
+        """
+        last = None
+        while True:
+            now = self.voice_status()
+            if now != last:
+                last = now
+                try:
+                    await self.broadcast_voice_status(*now)
+                except Exception:  # one failed emit must not end status updates for the session
+                    log.exception("voice status broadcast failed")
+            await asyncio.sleep(interval_s)
+
+    def active_engine(self) -> str:
+        """The speaker that would say the next line, or "none" when the voice has no announcer."""
+        method = getattr(getattr(self.voice, "announcer", None), "active_engine", None)
+        return method() if method is not None else "none"
+
+    def voice_state(self) -> tuple[bool, str | None, str]:
+        voice_ready, screen_reader = self.voice_status()
+        return voice_ready, screen_reader, self.active_engine()
 
     async def broadcast_voice_status(self, voice_ready: bool, screen_reader: str | None) -> None:
+        engine = self.active_engine()
         for s in list(self.sessions.values()):
-            await s.voice_status(voice_ready, screen_reader)
+            await s.voice_status(voice_ready, screen_reader, engine)
+
+    def voice_activity(self) -> tuple[str, str | None]:
+        """(state, engine) from the voice's real state: the mic (listening, from the press until it
+        closes), Whisper (transcribing), then audible speech (speaking). Never inferred from timers."""
+        voice = self.voice
+        if getattr(voice, "busy_listening", getattr(voice, "listening", False)):
+            return "listening", None
+        if self.wake is not None and self.wake.armed:  # heard "Hey Artemis": waiting for the request
+            return "listening", None
+        if getattr(voice, "transcribing", False):
+            return "transcribing", None
+        announcer = getattr(voice, "announcer", None)
+        method = getattr(announcer, "speaking_engine", None)
+        engine = method() if method is not None else None
+        return ("speaking", engine) if engine else ("idle", None)
+
+    async def watch_activity(self, interval_s: float = 0.1) -> None:
+        """Send voice.activity to every session when the state changes (contracts.md section 2)."""
+        while True:
+            try:
+                now = self.voice_activity()
+                if now != self.activity:
+                    self.activity = now
+                    for s in list(self.sessions.values()):
+                        await s.voice_activity(*now)
+            except Exception:  # a voice that can't be asked must not end the updates
+                log.exception("voice activity check failed")
+            await asyncio.sleep(interval_s)
+
+    def wake_request(self, text: str) -> None:
+        """A request heard after "Hey Artemis": handled exactly like a push-to-talk transcript."""
+        session = self.current()
+        if session is None:
+            log.warning("Wake word: a request was heard before any session; ignoring it")
+            return
+        self.spawn(session.spoken(text, new_id("cr")))
+
+    def start_wake(self) -> None:
+        """Start hands-free listening if ARTEMIS_LISTEN_MODE=wake and the voice can transcribe."""
+        if not hasattr(self.voice, "_transcribe"):
+            log.warning("ARTEMIS_LISTEN_MODE=wake needs the Whisper voice; push-to-talk only")
+            return
+        from artemis.voice.wake import WakeListener  # numpy and the mic only when asked for
+
+        listener = WakeListener(self.voice, self.wake_request)
+        try:
+            listener.start()
+        except Exception as e:  # no device, busy, permission: push-to-talk still works
+            log.warning("Wake word could not start the microphone (%s); push-to-talk only", type(e).__name__)
+            return
+        self.wake = listener
+
+    def wire_voice(self) -> None:
+        """Say the ElevenLabs fallback notice through the bus when that voice gives up. Called at
+        startup and again after every apply(), since apply() can build a new ElevenLabsSpeaker."""
+        eleven = getattr(getattr(self.voice, "announcer", None), "eleven", None)
+        if eleven is not None and hasattr(eleven, "on_give_up"):
+            eleven.on_give_up = self._say_fallback_notice
+
+    def _say_fallback_notice(self, text: str) -> None:
+        # Called on the event-loop thread (ElevenLabsSpeaker hands it over with call_soon_threadsafe).
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            log.warning("fallback notice not spoken: no event loop")
+            return
+        session = self.current()
+        if session is None:
+            log.warning("fallback notice not spoken: no session yet")
+            return
+        self.spawn(session.say(None, text))  # an agent.message at normal priority, spoken once
+
+    def apply_voice_profile(self, profile: voice_profile.VoiceProfile) -> None:
+        """Switch the voice to `profile` from the next line on, then re-wire the fallback notice."""
+        announcer = getattr(self.voice, "announcer", None)
+        if announcer is None or not hasattr(announcer, "apply"):
+            return
+        announcer.apply(profile)
+        self.wire_voice()
 
 
 def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
@@ -173,6 +295,10 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        try:  # the saved voice profile, with the environment on top, so it holds across restarts
+            core.apply_voice_profile(voice_profile.load())
+        except Exception:
+            log.exception("voice profile could not be applied; using the environment only")
         warm = getattr(core.voice, "warm", None)
         if warm_voice and warm:
             try:
@@ -180,11 +306,18 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             except Exception:
                 log.exception("voice warm-up failed; push-to-talk will report the problem")
         announcer = getattr(core.voice, "announcer", None)
-        if announcer is not None and hasattr(announcer, "watch"):
-            core.watch_task = asyncio.create_task(announcer.watch(core.broadcast_voice_status))
+        if announcer is not None:
+            core.watch_task = asyncio.create_task(core.watch_voice_status())
+        core.activity_task = asyncio.create_task(core.watch_activity())
+        if os.environ.get("ARTEMIS_LISTEN_MODE", "").strip().lower() == "wake":
+            core.start_wake()
         yield
+        if core.wake is not None:
+            core.wake.stop()
         if core.watch_task:
             core.watch_task.cancel()
+        if core.activity_task:
+            core.activity_task.cancel()
         for task in [*core.background, core._interpreter_probe]:
             if task and not task.done():
                 task.cancel()
@@ -201,7 +334,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
     app.add_middleware(  # outermost: answers preflights for the two listed origins
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH"],  # PATCH: /settings/voice only
         allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
     )
 
@@ -214,7 +347,9 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
     async def create_session():
         session = core.new_session()
         voice_ready, screen_reader = core.voice_status()
-        await session.voice_status(voice_ready, screen_reader)  # §5.3: at session start
+        await session.voice_status(voice_ready, screen_reader, core.active_engine())  # §5.3: at session start
+        if core.activity[0] != "idle":  # a session starts idle; tell it if the voice is busy right now
+            await session.voice_activity(*core.activity)
         # In the background, so a slow probe never delays the client; the error event (if any)
         # still lands after voice.status and is replayed to a late SSE subscriber.
         core.spawn(core.check_interpreter(session))
@@ -245,6 +380,43 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
                 session.bus.unsubscribe(queue)
 
         return EventSourceResponse(stream(), ping=PING_S)
+
+    @app.get("/settings/voice")
+    async def get_voice_settings():
+        profile = await asyncio.to_thread(voice_profile.load)  # the file, then the environment on top
+        return voice_settings.settings_from(profile, core.active_engine())
+
+    @app.patch("/settings/voice")
+    async def patch_voice_settings(request: Request):
+        """Validate (422 invalid_setting), refuse env-pinned fields (409 set_by_environment), save the
+        file, apply to the voice, and return what is now in effect. Nothing is saved when any check fails."""
+        try:
+            raw = await request.json()
+        except ValueError:
+            return _invalid_setting("body")
+        try:
+            patch = VoiceSettingsPatch.model_validate(raw)
+        except ValidationError as exc:
+            return _invalid_setting(voice_settings.invalid_field(exc))
+        pinned = voice_settings.pinned_in_patch(patch, os.environ)
+        if pinned is not None:
+            return JSONResponse({"error": "set_by_environment", "field": pinned}, status_code=409)
+
+        path = voice_profile.default_path()
+        before = core.voice_state()
+        stored = await asyncio.to_thread(voice_profile.load, path, {})  # the file alone: no env values written back
+        voice_settings.apply_patch(patch, stored)
+        await asyncio.to_thread(voice_profile.save, stored, path)
+        effective = await asyncio.to_thread(voice_profile.load, path)
+        core.apply_voice_profile(effective)
+        after = core.voice_state()
+        if after != before:  # the engine may change without the ready state changing, so the watcher would miss it
+            await core.broadcast_voice_status(after[0], after[1])
+        return voice_settings.settings_from(effective, core.active_engine())
+
+    @app.get("/voices")
+    async def get_voices():
+        return await voice_settings.list_voices()
 
     @app.post("/sessions/{sid}/tasks")
     async def create_task(sid: str, body: TaskRequest):
@@ -333,11 +505,22 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             await core.voice.stop_speech()
         elif body.action == "repeat":
             await core.voice.repeat_last()
+        elif body.action == "sample":
+            # the voice picker's Test voice: a fixed line, normal priority; a voice with no announcer stays silent
+            announcer = getattr(core.voice, "announcer", None)
+            if announcer is not None:
+                last = announcer.last  # the announcer records every normal line as "last"; "repeat" must keep the real one
+                await core.voice.announce(SAMPLE_TEXT, "normal")
+                announcer.last = last
         else:
             raise HTTPException(422, {"error": "bad_action"})
         return Response(status_code=204)
 
     return app
+
+
+def _invalid_setting(field: str) -> JSONResponse:
+    return JSONResponse({"error": "invalid_setting", "field": field}, status_code=422)
 
 
 async def _probe_python(runner) -> str | None:

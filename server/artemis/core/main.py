@@ -5,12 +5,28 @@ ARTEMIS_AGENT      stub (default) | claude
 ARTEMIS_VOICE      whisper (default when the voice group is installed) | stub
 ARTEMIS_RUNNER     real (default) | fake (writes files, never runs anything)
 ARTEMIS_CONVERSATION  off (default) | on: built-in spoken phrases and follow-ups (contracts.md §5.4)
+ARTEMIS_RESULT_EARCONS  off (default) | on: a success, failure or approval tone just before that line is
+                        spoken, never while listening (contracts.md §5.5); session.py
 ARTEMIS_WHISPER_MODEL   small.en (default) | medium.en (more accurate, slower); voice/listen.py
 ARTEMIS_WHISPER_BEAM    1 (default) | 2 to 10, e.g. 5: opt-in
 ARTEMIS_PTT_POST_ROLL   0 (default, off) | seconds up to 1.0, e.g. 0.35: opt-in
 ARTEMIS_WHISPER_PROMPT  word list (default) | natural (spoken-style lead): opt-in
+ARTEMIS_WHISPER_HOTWORDS  off (default) | on (the prompt's demo words also as hotwords): opt-in
   Opt-in speech settings go on stage only after docs/demo.md row 3 passes with them on, on the demo laptop.
-ARTEMIS_PROJECTS_DIR, ARTEMIS_LOG_DIR
+ARTEMIS_PROJECTS_DIR    ~/ArtemisProjects (default); where projects are created and opened
+ARTEMIS_LOG_DIR         ~/.artemis/logs (default); one <session_id>.jsonl event log per session
+
+Also read by the parts this builds, so the whole list is here:
+ARTEMIS_MODEL           claude-opus-5-5 (default); agent/config.py, with ARTEMIS_EFFORT (medium)
+                        and ARTEMIS_MAX_ITERATIONS (12)
+ANTHROPIC_API_KEY       needed by ARTEMIS_AGENT=claude; read only by the Anthropic SDK
+ANTHROPIC_WORKSPACE_ID  optional, for a key not scoped to a workspace; agent/config.py
+ARTEMIS_RUN_PYTHON      the Python that runs user programs (default: uv python find, py -3, then
+                        PATH; never the core's own); runner/local.py, contracts.md §3.4
+ARTEMIS_SAPI_VOICE      part of an installed SAPI voice's name; voice/speech.py
+ARTEMIS_SAPI_RATE       -3 to 6 (clamped); default the Windows rate; voice/speech.py, contracts.md §5.3
+ARTEMIS_NVDA_DLL        path to nvdaControllerClient.dll (default voice/bin/); voice/speech.py
+ARTEMIS_CHROME          a browser executable for Echo Check, tried first; echo/check.py
 """
 
 import functools
