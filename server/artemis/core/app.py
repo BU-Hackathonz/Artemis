@@ -45,7 +45,10 @@ class ListenBody(BaseModel):
 
 
 class SpeechBody(BaseModel):
-    action: str  # "stop" | "repeat"
+    action: str  # "stop" | "repeat" | "sample"
+
+
+SAMPLE_TEXT = "This is how I sound."  # the voice picker's Test voice: fixed, never free text
 
 
 class Guard(BaseHTTPMiddleware):
@@ -480,6 +483,13 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             await core.voice.stop_speech()
         elif body.action == "repeat":
             await core.voice.repeat_last()
+        elif body.action == "sample":
+            # the voice picker's Test voice: a fixed line, normal priority; a voice with no announcer stays silent
+            announcer = getattr(core.voice, "announcer", None)
+            if announcer is not None:
+                last = announcer.last  # the announcer records every normal line as "last"; "repeat" must keep the real one
+                await core.voice.announce(SAMPLE_TEXT, "normal")
+                announcer.last = last
         else:
             raise HTTPException(422, {"error": "bad_action"})
         return Response(status_code=204)

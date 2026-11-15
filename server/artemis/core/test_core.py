@@ -22,6 +22,7 @@ from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
 from artemis.core.session import Session, normalize, spoken_error
+from artemis.voice import Announcer
 from artemis.voice.stub import StubVoice
 from artemis.policy.testing import FakeRunner
 
@@ -32,6 +33,7 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 class FakeAnnouncer:
     def __init__(self):
         self.state = (True, "nvda")
+        self.last = None
 
     def status(self):
         return self.state
@@ -377,6 +379,73 @@ async def test_speech_controls(client, voice):
     await client.post("/speech", headers=AUTH, json={"action": "stop"})
     await client.post("/speech", headers=AUTH, json={"action": "repeat"})
     assert voice.calls == ["stop_speech", "repeat"]
+
+
+async def test_sample_speaks_the_fixed_line_at_normal_priority(client, voice):
+    assert (await client.post("/speech", headers=AUTH, json={"action": "sample"})).status_code == 204
+    assert voice.spoken == [("normal", "This is how I sound.")]
+
+
+async def test_sample_without_an_announcer_is_silent(client, voice):
+    voice.announcer = None
+    assert (await client.post("/speech", headers=AUTH, json={"action": "sample"})).status_code == 204
+    assert voice.spoken == []
+
+
+async def test_bad_speech_actions_are_422(client, voice):
+    r = await client.post("/speech", headers=AUTH, json={"action": "play"})
+    assert r.status_code == 422 and r.json()["detail"] == {"error": "bad_action"}
+    assert voice.spoken == [] and voice.calls == []
+
+
+class SpeakerLog:
+    name = "sapi"
+
+    def __init__(self):
+        self.said: list[tuple[str, bool]] = []
+
+    def available(self):
+        return True
+
+    def busy(self):
+        return False
+
+    def speak(self, text, interrupt):
+        self.said.append((text, interrupt))
+
+    def cancel(self):
+        pass
+
+
+class SpeakingVoice(FakeVoice):
+    """A voice with a real Announcer over a recording speaker, so `last` and repeat behave as in the core."""
+
+    def __init__(self, speaker):
+        super().__init__()
+        self.announcer = Announcer(nvda=SpeakerLog(), sapi=speaker, is_nvda_running=lambda: False, eleven=None)
+
+    async def announce(self, text, priority):
+        await self.announcer.announce(text, priority)
+
+    async def repeat_last(self):
+        await self.announcer.repeat_last()
+
+
+async def test_sample_does_not_change_what_repeat_says(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARTEMIS_VOICE_ENGINE", "sapi")
+    speaker = SpeakerLog()
+    voice = SpeakingVoice(speaker)
+    core = Core(voice=voice, make_runner=FakeRunner, make_agent=StubAgent,
+                projects_dir=tmp_path / "projects", log_dir=tmp_path / "logs")
+    app = create_app(core, TOKEN, warm_voice=False)
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
+            await voice.announce("Build finished.", "normal")
+            assert (await c.post("/speech", headers=AUTH, json={"action": "sample"})).status_code == 204
+            assert speaker.said[-1] == ("This is how I sound.", False)
+            assert (await c.post("/speech", headers=AUTH, json={"action": "repeat"})).status_code == 204
+            assert speaker.said[-1] == ("Build finished.", True)
 
 
 def test_normalize():
