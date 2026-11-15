@@ -23,6 +23,7 @@ from artemis.contracts import (
     ApprovalResponse,
     ClientDiagnostic,
     ClientReady,
+    DesktopResult,
     TaskRequest,
     VoiceSettingsPatch,
 )
@@ -53,8 +54,19 @@ class SpeechBody(BaseModel):
 SAMPLE_TEXT = "This is how I sound."  # the voice picker's Test voice: fixed, never free text
 
 
+ALLOWED_HOSTS = ("127.0.0.1", "localhost")
+
+
+def host_allowed(host: str) -> bool:
+    """The Host header must name the loopback address (any port): 127.0.0.1 or localhost."""
+    name, sep, port = host.strip().lower().rpartition(":")
+    if not sep or not port.isdigit():
+        name = host.strip().lower()  # no port
+    return name in ALLOWED_HOSTS
+
+
 class Guard(BaseHTTPMiddleware):
-    """§6: an unlisted Origin (including "null") gets 403; every request needs the Bearer token.
+    """§6: an unlisted Origin or a non-loopback Host gets 403; every request needs the Bearer token.
 
     CORS preflights are answered by CORSMiddleware outside this one, so they never reach it.
     """
@@ -64,6 +76,8 @@ class Guard(BaseHTTPMiddleware):
         self._expected = f"Bearer {token}".encode()
 
     async def dispatch(self, request: Request, call_next):
+        if not host_allowed(request.headers.get("host", "")):  # DNS rebinding: a page on evil.example
+            return JSONResponse({"error": "host_not_allowed"}, status_code=403)  # resolving to 127.0.0.1
         origin = request.headers.get("origin")
         if origin is not None and origin not in ALLOWED_ORIGINS:
             return JSONResponse({"error": "origin_not_allowed"}, status_code=403)
@@ -169,6 +183,12 @@ class Core:
             if s.approvals.has(aid):
                 return s
         raise HTTPException(404, {"error": "approval_not_found"})
+
+    def find_desktop_op(self, op_id: str) -> Session:
+        for s in self.sessions.values():
+            if s.desktop.has(op_id):
+                return s
+        raise HTTPException(404, {"error": "desktop_op_not_found"})
 
     def current(self) -> Session | None:
         """Voice belongs to the newest session (one per app launch)."""
@@ -327,6 +347,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             if task and not task.done():
                 task.cancel()
         for s in core.sessions.values():
+            s.desktop.cancel_all()  # the session is over: nothing waits for the island
             for t in s.tasks.values():
                 if t.job and not t.job.done():
                     t.job.cancel()
@@ -369,20 +390,27 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             last = 0
         queue = session.bus.subscribe()
 
+        stale = session.desktop.is_stale  # a finished desktop.action is never sent again, live or replayed
+
         async def stream():
             try:
                 seen = last
                 for event in session.bus.since(last):  # replay, then live
                     seen = event.seq
+                    if stale(event):
+                        continue
                     yield {"id": str(event.seq), "data": event.model_dump_json()}
                 while True:
                     event = await queue.get()
                     if event.seq <= seen:
                         continue
                     seen = event.seq
+                    if stale(event):
+                        continue
                     yield {"id": str(event.seq), "data": event.model_dump_json()}
             finally:
                 session.bus.unsubscribe(queue)
+                session.desktop.subscribers_changed()  # an op waiting on a vanished island ends now
 
         return EventSourceResponse(stream(), ping=PING_S)
 
@@ -454,6 +482,13 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             raise HTTPException(404, {"error": "approval_not_found"})
         return Response(status_code=204)
 
+    @app.post("/desktop/{op_id}/result", status_code=204)
+    async def desktop_result(op_id: str, body: DesktopResult):
+        session = core.find_desktop_op(op_id)
+        if not session.desktop.resolve(op_id, body):
+            raise HTTPException(404, {"error": "desktop_op_not_found"})
+        return Response(status_code=204)
+
     @app.post("/voice/listen", status_code=204)
     async def listen(body: ListenBody):
         session = core.current()
@@ -501,6 +536,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         it registered, so the first thing a blind user hears is how to start. Fixed text, like the
         diagnostics; normal priority, so it never talks over an error."""
         session = core.session(sid)
+        session.desktop_ready = body.desktop
         if not session.greeted:
             session.greeted = True
             await session.say(None, ready_text(body.shortcut))

@@ -187,7 +187,7 @@ async def test_hello_world_approve_twice(client, core, voice):
     assert session.tasks[tid].state == "succeeded"
     t = types(session)
     assert t[:2] == ["voice.status", "task.state"]
-    assert "file.changed" in t and "run.result" in t and t[-1] == "task.state"
+    assert "file.changed" in t and "run.result" in t and t[-2:] == ["task.state", "ring.cue"]  # done cue follows the final state
     seqs = [e.seq for e in session.bus.history]
     assert seqs == list(range(1, len(seqs) + 1))
     assert any("Hello, World" in text for _, text in voice.spoken)

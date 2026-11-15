@@ -37,6 +37,7 @@ from artemis.policy.gateway import ToolGateway
 
 from .approvals import SessionApprovals
 from .bus import EventBus
+from .desktop import DesktopOps
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +119,12 @@ def _result_cue(draft: EventDraft) -> str | None:
     return None
 
 
+def _requires_plan(agent: object) -> bool:
+    """§10: the real agent must plan first. By class in the MRO, so a subclass or wrapper-subclass of
+    ClaudeAgent still counts (the SDK is not imported here: the stub runs without it)."""
+    return any(c.__name__ == "ClaudeAgent" for c in type(agent).__mro__)
+
+
 class TaskActive(Exception):
     def __init__(self, task_id: str):
         self.task_id = task_id
@@ -131,6 +138,7 @@ class Task:
         self.job: asyncio.Task | None = None
         self.heartbeat: asyncio.Task | None = None
         self.cancel_reported = False  # the job already said what its cancel stopped
+        self.done_cued = False  # ring.cue done was sent (once, after the final task.state)
 
     @property
     def active(self) -> bool:
@@ -154,6 +162,7 @@ class Session:
         prefs_path: Path | None = None,
         result_earcons: bool | None = None,
         earcon: Callable[[str], float] | None = None,
+        require_plan: bool | None = None,  # None: only for a ClaudeAgent (or a subclass of it)
     ):
         self.session_id = session_id
         self.voice = voice
@@ -167,7 +176,17 @@ class Session:
             log_path=(log_dir / f"{session_id}.jsonl") if log_dir else None,
         )
         self.approvals = SessionApprovals()
-        self.gateway = ToolGateway(runner, self.approvals, self.emit, projects_dir=projects_dir, scan=scan)
+        self.desktop_ready = False  # set by /ready when the island can type (contracts.md §9)
+        self.desktop = DesktopOps(
+            self.emit, ready=lambda: self.desktop_ready, subscribers=lambda: self.bus.subscriber_count,
+            forget=self.bus.forget_desktop_text,
+        )
+        self.gateway = ToolGateway(
+            runner, self.approvals, self.emit, projects_dir=projects_dir, scan=scan,
+            desktop=self._desktop_bridge,
+            # §10: the real agent plans before it acts; scripted agents (stub, tests) may skip it
+            require_plan=_requires_plan(agent) if require_plan is None else require_plan,
+        )
         self.agent = agent
         self.tasks: dict[str, Task] = {}
         self._by_request: dict[str, str] = {}  # client_request_id -> task_id (idempotency)
@@ -218,11 +237,25 @@ class Session:
         await self.bus.emit(draft)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
+            await self._cue_done(self.tasks[draft.task_id])
         if self.conversation:
             try:
                 self.conversation.observe(draft)
             except Exception:  # a controller bug must never break the event stream
                 log.exception("conversation controller failed to observe %s", draft.type)
+
+    async def _cue_done(self, task: Task) -> None:
+        """A task reached a final state: tell the ring, once (contracts.md section 10)."""
+        if task.active or task.done_cued:
+            return
+        task.done_cued = True
+        await self.gateway.ring_done(task.task_id)  # the ring goes home, and the gate forgets the plan
+
+    async def _desktop_bridge(self, task_id: str, _op_id: str, kind: str, text: str, window: str | None):
+        """The gate's typing bridge (contracts.md §9): (ok, message, window). The core mints its own
+        op_id (random, single-use), so the gate's is not used."""
+        result = await self.desktop.request(kind, text, task_id, window=window)
+        return result.ok, result.message, result.window
 
     @property
     def active_task(self) -> Task | None:
@@ -356,6 +389,7 @@ class Session:
         if not task or not task.active or not task.job:
             return False
         task.job.cancel()
+        self.desktop.cancel_all()
         try:
             await asyncio.wait_for(asyncio.shield(task.job), timeout=5)
         except (asyncio.CancelledError, asyncio.TimeoutError):
