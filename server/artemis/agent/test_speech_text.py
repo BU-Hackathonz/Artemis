@@ -196,3 +196,42 @@ def test_say_shapes_answers_and_questions_but_keeps_the_log_whole():
     assert seen[0].data["text"] == CELSIUS_ANSWER and seen[0].announce.text.endswith("The rest is in the log.")
     assert seen[1].announce.text == "Note. The file is app.py. Should I run it?"
     assert seen[2].announce.text == "Reading src/app.py." and seen[2].announce.priority == "low"  # progress: markdown only
+
+
+@pytest.mark.parametrize(
+    "text,spoken",
+    [
+        # Symbols that carry meaning stay.
+        ("I wrote it in C# and F#.", "I wrote it in C# and F#."),
+        ("It costs $20 a month.", "It costs $20 a month."),
+        ("Mail user@example.com today.", "Mail user@example.com today."),
+        ("AT&T and R&D agree.", "AT&T and R&D agree."),
+        ("It takes ~5 minutes.", "It takes about 5 minutes."),
+        ("Read it; then run it.", "Read it. then run it."),
+        ("Done;", "Done."),
+        ("Done.;", "Done."),
+        # Noise symbols still go.
+        ("a == b and c -> d", "a b and c d"),
+        ("x && y", "x y"),
+        # Dates, lists and product names are not paths.
+        ("It is due 11/15/2026.", "It is due 11/15/2026."),
+        ("The date is 2026/11/15.", "The date is 2026/11/15."),
+        ("It uses HTML/CSS/JS.", "It uses HTML/CSS/JS."),
+        ("Permissions are read/write/execute.", "Permissions are read/write/execute."),
+        ("The stack is React/Next.js.", "The stack is React/Next.js."),
+        ("See github.com/BU-Hackathonz/Artemis now.", "See github.com/BU-Hackathonz/Artemis now."),
+        ("Score is 25/40 and/or more.", "Score is 25/40 and/or more."),
+        # Real paths still shorten.
+        ("Open ~/Artemis/server/main.py now.", "Open main.py now."),
+        ("Open ./src/app.tsx now.", "Open app.tsx now."),
+        ("Open ../lib/util.py now.", "Open util.py now."),
+        ("Open C:\\Users\\me\\notes.txt now.", "Open notes.txt now."),
+        ("Open /usr/local/bin now.", "Open bin now."),
+        ("Open src/app.tsx now.", "Open app.tsx now."),
+        ("Open server/artemis/agent/speech_text.py now.", "Open speech_text.py now."),
+    ],
+)
+def test_symbols_and_paths_keep_their_meaning(text, spoken):
+    from artemis.agent.speech_text import spoken_answer
+
+    assert spoken_answer(text) == spoken

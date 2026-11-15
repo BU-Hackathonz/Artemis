@@ -82,18 +82,51 @@ MAX_SENTENCES = 4
 _REST_IN_LOG = "The rest is in the log."
 _SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])")
 # A relative or absolute path: keep its last part, the file or folder name. URLs are left alone.
-_PATH = re.compile(r"(~?/|\.{1,2}/|[A-Za-z]:\\)?((?:[\w.-]+[/\\])+)([\w-]+(?:\.[\w-]+)*)")
-# Symbols that are noise when spoken: ==, !=, ->, &&, {}, [], ;, and so on. ! ends a sentence, so it stays.
-_SYMBOLS = re.compile(r"(?:==|!=|<=|>=|->|=>|&&|\|\||[{}\[\];~^$#@\\=<>|&])+")
+_PATH = re.compile(r"(~/|/|\.{1,2}/|[A-Za-z]:\\)?((?:[\w.-]+[/\\])+)([\w-]+(?:\.[\w-]+)*)")
+# A word that starts like a host name (github.com/org/repo): protected like a URL.
+_HOST_LIKE = re.compile(r"[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}/")
+# "Next.js", "Node.js": a product name, not a file.
+_PRODUCT = re.compile(r"(?:next|node|vue|nuxt|three|d3|p5|ember|alpine|backbone|express|chart|socket)\.(?:js|io)", re.I)
+# Symbols that are noise when spoken: ==, !=, ->, &&, {}, [], and so on. ! ends a sentence, so it stays.
+# Kept: C#/F#, $ before a digit, @ inside a word, & between letters. "~5" is "about 5"; ";" is a full stop.
+_SYMBOLS = re.compile(
+    r"(?P<keep>(?<!\w)[A-Za-z]#(?!\w)|\$(?=\d)|(?<=\w)@(?=\w)|(?<=[A-Za-z])&(?=[A-Za-z]))"
+    r"|(?P<about>~(?=\d))"
+    r"|(?P<stop>;+)"
+    r"|(?:==|!=|<=|>=|->|=>|&&|\|\||[{}\[\]~^$#@\\=<>|&])+"
+)
 _CALL = re.compile(r"\b(\w+)\(\)")
 
 
 def _file_name(match: re.Match) -> str:
-    # Only a real path: a root or ./ in front, two folders, or a file extension. "25/40" and "and/or" stay.
+    # Only a real path: a root (~/ / ./ ../ C:\) in front, or a last part with a real file extension and
+    # no all-digit part. "25/40", "11/15/2026", "and/or", "HTML/CSS/JS", "React/Next.js" stay.
     root, folders, name = match.groups()
-    if root or len(re.findall(r"[/\\]", folders)) > 1 or re.search(r"\.[A-Za-z]\w*$", name):
+    if root:
+        return name
+    parts = re.split(r"[/\\]", folders)[:-1] + [name]
+    if any(p.isdigit() for p in parts) or _PRODUCT.fullmatch(name):
+        return match.group(0)
+    if re.search(r"\.[A-Za-z]\w{0,5}$", name):
         return name
     return match.group(0)
+
+
+def _shorten_path(word: str) -> str:
+    if "://" in word or _HOST_LIKE.match(word):
+        return word
+    return _PATH.sub(_file_name, word)
+
+
+def _symbol(match: re.Match) -> str:
+    if match.group("keep"):
+        return match.group("keep")
+    if match.group("about"):
+        return "about "
+    if match.group("stop"):
+        before = match.string[: match.start()].rstrip()
+        return "" if before[-1:] in ".!?,:;" or not before else ". "
+    return " "
 
 
 def _sentences(text: str) -> list[str]:
@@ -116,9 +149,9 @@ def _log_run_ons(spoken: str) -> None:
 def spoken_answer(text: str) -> str:
     """What the developer hears for a model answer or question. The log keeps the original."""
     spoken = for_speech(text, stops=True)
-    spoken = " ".join(w if "://" in w else _PATH.sub(_file_name, w) for w in spoken.split(" "))
+    spoken = " ".join(_shorten_path(w) for w in spoken.split(" "))
     spoken = _CALL.sub(r"\1", spoken)
-    spoken = _SYMBOLS.sub(" ", spoken)
+    spoken = _SYMBOLS.sub(_symbol, spoken)
     _log_run_ons(spoken)
     spoken = re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"\s+", " ", spoken)).strip()
     sentences = _sentences(spoken)
