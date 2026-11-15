@@ -549,6 +549,94 @@ async def test_accidental_tap_is_quiet(client, core, voice):
     assert not session.tasks
 
 
+NO_SPEECH_LINE = "I didn't hear anything. Check the microphone."
+
+
+def releases(voice, *heard):
+    """stop_listening returns these in turn: a release, then the client's stop barrier, and so on."""
+    queue = list(heard)
+
+    async def stop_listening(client_request_id):
+        voice.calls.append("stop")
+        return queue.pop(0) if queue else ""
+
+    voice.stop_listening = stop_listening
+
+
+async def test_a_silent_hold_says_check_the_microphone_once(client, core, voice, monkeypatch):
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    sid, session = await start(client, core)
+    releases(voice, Heard("", "silent"), "")  # the release, then the stop barrier's plain ""
+    before = len(session.bus.history)
+    for _ in range(2):
+        await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "error" for e in s.bus.history[before:]))
+    await asyncio.sleep(0.1)
+    new = session.bus.history[before:]
+    assert [e.type for e in new] == ["transcript.final", "error"]
+    final, error = new
+    assert final.announce is None and final.data["text"] == ""
+    assert error.task_id is None and error.session_id == sid
+    assert error.data == {"code": "no_speech", "message": "I didn't hear anything.", "recovery": "Check the microphone."}
+    assert error.announce.model_dump() == {"text": NO_SPEECH_LINE, "priority": "normal"}
+    assert voice.spoken.count(("normal", NO_SPEECH_LINE)) == 1
+    assert not session.tasks
+
+
+@pytest.mark.parametrize("dropped", ["short", "empty", None])
+async def test_a_tap_or_an_empty_transcript_stays_quiet(client, core, voice, monkeypatch, dropped):
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    _, session = await start(client, core)
+    releases(voice, Heard("", dropped) if dropped else "", "")
+    before = len(session.bus.history)
+    for _ in range(2):
+        await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: len(s.bus.history) > before)
+    await asyncio.sleep(0.1)
+    new = session.bus.history[before:]
+    assert [e.type for e in new] == ["transcript.final"] and new[0].announce is None
+    assert NO_SPEECH_LINE not in [text for _, text in voice.spoken]
+
+
+async def test_speech_is_a_transcript_and_no_error(client, core, voice):
+    _, session = await start(client, core)
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: s.tasks)
+    assert not [e for e in session.bus.history if e.type == "error"]
+    assert [e.data["text"] for e in session.bus.history if e.type == "transcript.final"] == [voice.transcript]
+
+
+async def test_a_silent_hold_with_the_conversation_on_still_says_it_once(client, core, voice, monkeypatch):
+    from artemis.voice.text import Heard
+
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    _, session = await start(client, core)
+    releases(voice, Heard("", "silent"))
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "error" for e in s.bus.history))
+    await asyncio.sleep(0.1)
+    errors = [e for e in session.bus.history if e.type == "error"]
+    assert [(e.data["code"], e.announce.priority) for e in errors] == [("no_speech", "normal")]
+    assert not session.tasks
+
+
+async def test_the_wake_word_never_says_check_the_microphone(client, core, voice, monkeypatch):
+    # Hands-free requests come through wake_request, not a push-to-talk release: no reason is read there.
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    _, session = await start(client, core)
+    core.wake_request("")
+    core.wake_request(Heard("", "silent"))
+    await asyncio.sleep(0.2)
+    assert not [e for e in session.bus.history if e.type == "error"]
+    assert NO_SPEECH_LINE not in [text for _, text in voice.spoken]
+
+
 # ----- interpreter pre-check (risk 7) -----
 
 
@@ -930,6 +1018,7 @@ def core_main(monkeypatch, tmp_path):
     monkeypatch.setenv("ARTEMIS_RUNNER", "fake")
     monkeypatch.setenv("ARTEMIS_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("ARTEMIS_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("ARTEMIS_PREFS_FILE", str(tmp_path / "prefs" / "preferences.json"))  # never the home folder
     monkeypatch.delitem(sys.modules, "artemis.core.main", raising=False)
     module = importlib.import_module("artemis.core.main")
     monkeypatch.setitem(sys.modules, "artemis.core.main", module)  # removed again after the test
@@ -952,6 +1041,49 @@ def test_installed_scanner_is_used_quietly(core_main, monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="artemis.core.main"):
         assert core_main.make_scan() is scan.scan
     assert "not installed" not in caplog.text
+
+
+# ----- remembered answer style (§5.4, conversation mode only) -----
+
+
+async def say(client, session, voice, transcript):
+    before = len(session.bus.history)
+    voice.transcript = transcript
+    await client.post("/voice/listen", headers=AUTH, json={"action": "start"})
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "transcript.final" for e in s.bus.history[before:]))
+
+
+async def test_keep_it_brief_is_remembered_in_the_next_session(client, core, voice, monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    core.prefs_path = tmp_path / "prefs" / "preferences.json"
+    _, first = await start(client, core)
+    await say(client, first, voice, "keep it brief")
+    assert first.conversation.style.verbosity == "brief"
+
+    _, second = await start(client, core)  # the next launch
+    assert second.conversation.style.verbosity == "brief"
+    saved = json.loads(core.prefs_path.read_text(encoding="utf-8"))
+    assert saved == {"version": 1, "style": {"verbosity": "brief", "focus": "none"}}  # nothing else
+
+
+async def test_with_conversation_off_no_style_file_is_written(client, core, voice, monkeypatch, tmp_path, core_main):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "off")
+    assert core_main.prefs_path(tmp_path / "projects") is None  # main.py passes no path at all
+    core.prefs_path = tmp_path / "prefs" / "preferences.json"  # and a path given anyway is not used
+    _, session = await start(client, core)
+    await say(client, session, voice, "keep it brief")
+    assert session.conversation is None
+    assert not (tmp_path / "prefs").exists()
+
+
+def test_style_file_never_in_the_projects_folder_or_the_repo(core_main, monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    projects = tmp_path / "projects"
+    assert core_main.prefs_path(projects) == tmp_path / "prefs" / "preferences.json"
+    for bad in [projects / "calc" / "p.json", core_main.REPO / "server" / "p.json", "p.json"]:
+        monkeypatch.setenv("ARTEMIS_PREFS_FILE", str(bad))
+        assert core_main.prefs_path(projects) is None
 
 
 # ----- result earcons (ARTEMIS_RESULT_EARCONS, contracts.md 5.5) -----

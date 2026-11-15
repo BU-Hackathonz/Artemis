@@ -8,18 +8,21 @@
     calc         fixture\injected-readme  (prompt injection in a README)
     old-app      fixture\risky-run        (shell=True already on disk: the run is blocked)
     signup-page  fixture\echo-page\before.html as index.html (Echo Check; after.html stays out)
-  and, after asking, removes an earlier hello-world project so the Hello World demo starts clean.
+  and, after asking, removes an earlier hello-world project so the Hello World demo starts clean,
+  and forgets the answer style conversation mode remembers between launches ("keep it brief" said
+  in a rehearsal must not carry into the stage run).
 
   Safe to run again: a project that already matches the fixture is left alone. A project that
   differs (for example signup-page after the agent fixed it) is reset only after you answer y.
-  Nothing outside the projects folder is ever deleted, and links inside it are removed without
-  following them.
+  Outside the projects folder only the remembered answer style file is deleted, and only when it
+  looks like one. Links inside the projects folder are removed without following them.
 
   The projects folder is ARTEMIS_PROJECTS_DIR if set (the core reads the same variable),
-  otherwise %USERPROFILE%\ArtemisProjects.
+  otherwise %USERPROFILE%\ArtemisProjects. The answer style file is ARTEMIS_PREFS_FILE if set,
+  otherwise %USERPROFILE%\.artemis\preferences.json.
 
 .PARAMETER Force
-  Reset the demo projects and remove hello-world without asking.
+  Reset the demo projects, remove hello-world and forget the remembered answer style without asking.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1
@@ -131,6 +134,20 @@ function Test-ProjectMatches([string]$Path, $Files) {
     return $true
 }
 
+function Test-IsPrefsFile([string]$Path) {
+    # Only a small JSON file shaped like the one server\artemis\conversation\prefs.py writes, so a
+    # mistyped ARTEMIS_PREFS_FILE can never delete anything else.
+    if ((Get-Item -LiteralPath $Path -Force).Length -gt 4096) { return $false }
+    try {
+        $data = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    if ($null -eq $data) { return $false }
+    $names = @($data.PSObject.Properties.Name)
+    return (($names -contains "version") -and ($names -contains "style"))
+}
+
 function Copy-Project([string]$Path, $Files) {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
     foreach ($relative in $Files.Keys) {
@@ -211,6 +228,35 @@ $known = @($Projects.Keys) + @($CleanStart)
 $others = @(Get-ChildItem -LiteralPath $Root -Force | Where-Object { $_.PSIsContainer -and ($known -notcontains $_.Name) } | ForEach-Object { $_.Name })
 if ($others.Count -gt 0) {
     Write-Host "  Other projects, left alone: $($others -join ', ')"
+}
+
+# ----- remembered answer style (conversation mode, contracts.md 5.4) -----
+
+if ($env:ARTEMIS_PREFS_FILE) {
+    $PrefsFile = $env:ARTEMIS_PREFS_FILE
+    if ($PrefsFile -match '^~[\\/]') { $PrefsFile = Join-Path $env:USERPROFILE $PrefsFile.Substring(2) }
+} else {
+    $PrefsFile = Join-Path $env:USERPROFILE ".artemis\preferences.json"
+}
+if (-not [System.IO.Path]::IsPathRooted($PrefsFile)) {
+    # The core ignores a relative ARTEMIS_PREFS_FILE too, so nothing is remembered there.
+    Write-Host "  ARTEMIS_PREFS_FILE is not a full path, so no answer style is remembered." -ForegroundColor Yellow
+} elseif (Test-Path -LiteralPath $PrefsFile -PathType Leaf) {
+    if (-not (Test-IsPrefsFile $PrefsFile)) {
+        Write-Host "  $PrefsFile doesn't look like an Artemis preferences file. Left it alone." -ForegroundColor Yellow
+    } elseif (Confirm-Step "  Forget the remembered answer style (for example `"keep it brief`" from a rehearsal)? This deletes $PrefsFile") {
+        try {
+            [System.IO.File]::Delete($PrefsFile)
+        } catch {
+            Fail "could not delete $PrefsFile. Close Artemis and run this again."
+        }
+        Write-Host "  Remembered answer style forgotten: answers start at normal." -ForegroundColor Green
+    } else {
+        Write-Host "  Kept the remembered answer style. Saying `"reset my preferences`" also clears it." -ForegroundColor Yellow
+        $skipped += "the remembered answer style"
+    }
+} else {
+    Write-Host "  No remembered answer style, so answers start at normal."
 }
 
 Write-Host ""

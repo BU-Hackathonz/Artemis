@@ -3,7 +3,9 @@
 Opt-in with ARTEMIS_LISTEN_MODE=wake (push-to-talk stays the default and keeps working alongside).
 Ported from tools/wake_prototype (Yaovi's prototype, 14d7728); the pure parts are unchanged:
 
-- `Segmenter` cuts the microphone stream into utterances by loudness.
+- `Segmenter` cuts the microphone stream into utterances: by voice when a `VoiceDetector` (Silero VAD from
+  faster-whisper) scores each frame, so fans, hiss and music don't hold the mic open; by loudness otherwise.
+- `denoise` cleans each utterance before Whisper (the room's steady noise, rumble and hum removed).
 - `wake_request` decides from a transcript whether it began with "Hey Artemis".
 - `WakeLoop` joins them: frames in, events out.
 - `WakeListener` runs that on the live microphone with the same Whisper model as push-to-talk and
@@ -91,10 +93,18 @@ class Segmenter:
         self._chunks, self._voiced, self._quiet = [], 0, 0
         self._pre.clear()
 
-    def feed(self, frame: np.ndarray) -> np.ndarray | None:
-        """Give it one 100 ms frame. Returns a finished utterance, or None."""
+    def feed(self, frame: np.ndarray, voice: float | None = None) -> np.ndarray | None:
+        """Give it one 100 ms frame. Returns a finished utterance, or None.
+
+        `voice` is a voice detector's speech probability for the frame (VoiceDetector). With it, speech
+        is what sounds like a voice, not whatever is loud: a fan, hiss or music no longer holds the
+        utterance open. Starting needs a clear voice and staying in speech needs less (hysteresis), so
+        soft word endings are not chopped. Without it, loudness decides, as before."""
         level = rms(frame)
-        loud = level >= self.threshold
+        if voice is None:
+            loud = level >= self.threshold
+        else:
+            loud = voice > (VOICE_STAY if self._chunks else VOICE_START) and level >= self.min_rms * 0.5
         if not self._chunks:
             if not loud:
                 # Quiet and not in speech: this is what the room sounds like.
@@ -142,6 +152,77 @@ def wake_request(transcript: str) -> str | None:
     return transcript[found.end():].strip()
 
 
+# ----- hearing the speaker, not the room -----
+
+VOICE_START = 0.55  # speech probability that starts an utterance
+VOICE_STAY = 0.35   # and that keeps it going
+
+# Short stock phrases a small Whisper model produces from noise or silence. Never a request.
+HALLUCINATIONS = {"you", "thank you", "thanks for watching", "thank you for watching", "bye", "so"}
+
+
+class VoiceDetector:
+    """Speech probability per 100 ms frame from Silero VAD, which ships with faster-whisper (no new
+    dependency). The model keeps no state between calls, so each frame is scored with the last second of
+    audio around it; that costs about 2 ms a frame on a laptop CPU."""
+
+    WINDOW = 512 * 31  # Silero scores 512-sample chunks; about a second of them
+
+    def __init__(self, model) -> None:
+        self.model = model
+        self._ring = np.zeros(self.WINDOW, np.float32)
+
+    @classmethod
+    def load(cls) -> VoiceDetector | None:
+        try:
+            from faster_whisper.vad import get_vad_model
+            return cls(get_vad_model())
+        except Exception:
+            return None  # no voice group installed: loudness endpointing, as before
+
+    def __call__(self, frame: np.ndarray) -> float:
+        frame = np.asarray(frame, np.float32)
+        self._ring = np.concatenate([self._ring[len(frame):], frame])
+        return float(np.ravel(self.model(self._ring))[-3:].max())
+
+
+def denoise(audio: np.ndarray, noise: np.ndarray) -> np.ndarray:
+    """Clean an utterance before Whisper hears it, with numpy only: the room's steady noise (measured from
+    `noise`, recent audio with nobody talking) is subtracted spectrally, everything under 80 Hz (rumble,
+    desk thumps, mains hum) is removed, and the level is evened out so a quiet speaker reads normally."""
+    n, hop = 512, 128
+    audio = np.asarray(audio, np.float32)
+    if len(audio) < n or len(noise) < n:
+        return audio
+    # high-pass on the whole utterance (precise at 60 Hz, where 512-sample frames are too coarse): 0 below
+    # 80 Hz, a short ramp to 120 Hz, the voice untouched
+    whole = np.fft.rfft(audio)
+    f = np.fft.rfftfreq(len(audio), 1 / RATE)
+    whole *= np.clip((f - 80) / 40, 0.0, 1.0)
+    audio = np.fft.irfft(whole, n=len(audio)).astype(np.float32)
+    win = np.hanning(n).astype(np.float32)
+
+    def frames(x):
+        count = 1 + (len(x) - n) // hop
+        return np.stack([x[i * hop:i * hop + n] * win for i in range(count)])
+
+    spec = np.fft.rfft(frames(audio), axis=1)
+    floor = np.abs(np.fft.rfft(frames(np.asarray(noise, np.float32)), axis=1)).mean(axis=0)
+    mag = np.abs(spec)
+    gain = np.clip(1.0 - 1.5 * floor / np.maximum(mag, 1e-9), 0.1, 1.0)  # keep a little: no "musical noise"
+    out_frames = np.fft.irfft(spec * gain, n=n, axis=1) * win
+    out = np.zeros(len(audio), np.float32)
+    norm = np.zeros(len(audio), np.float32)
+    for i, f in enumerate(out_frames):
+        out[i * hop:i * hop + n] += f
+        norm[i * hop:i * hop + n] += win * win
+    out = out / np.maximum(norm, 1e-6)
+    tail = (len(out_frames) - 1) * hop + n
+    out[tail:] = audio[tail:]
+    peak = float(np.max(np.abs(out))) or 1.0
+    return (out / peak * 0.9).astype(np.float32)
+
+
 # ----- the loop -----
 
 
@@ -182,8 +263,13 @@ class WakeLoop:
         segmenter: Segmenter | None = None,
         window_s: float = 8.0,
         tail_s: float = 0.4,  # keep ignoring this long after Artemis stops speaking (room echo)
+        vad: Callable[[np.ndarray], float | None] | None = None,  # VoiceDetector: endpoint on voice, not loudness
+        clean: bool = True,  # denoise each utterance with the room's own noise before transcribing it
     ) -> None:
         self.transcribe = transcribe
+        self.vad = vad
+        self.clean = clean
+        self._room: deque[np.ndarray] = deque(maxlen=15)  # the last 1.5 s of nobody talking
         self.speaking = speaking
         self.segmenter = segmenter or Segmenter()
         self.window_frames = round(window_s * RATE / FRAME)
@@ -213,22 +299,30 @@ class WakeLoop:
             if self._armed == 0:
                 return self._emit(Event("timeout"))
 
-        audio = self.segmenter.feed(frame)
+        voice = self.vad(frame) if self.vad is not None else None
+        if not self.segmenter.in_speech and (voice is None or voice < 0.2):
+            self._room.append(frame)  # what the room sounds like with nobody talking: the noise to remove
+        audio = self.segmenter.feed(frame, voice)
         if audio is None:
             return None
         self.stats.utterances += 1
         if self.segmenter.capped:
             self.stats.capped += 1
         seconds = len(audio) / RATE
+        if self.clean and len(self._room) >= 5:
+            audio = denoise(audio, np.concatenate(self._room))
         text = self.transcribe(audio).strip()
         del audio  # nothing is kept once it has been transcribed
         if not text:
             return None
+        phantom = text.lower().strip(" .,!?") in HALLUCINATIONS  # noise Whisper read as a stock phrase
 
         request = wake_request(text)
         if request is not None:
             self.stats.wakes += 1
         elif was_armed:
+            if phantom:
+                return None  # after "Hey Artemis", a stock phrase from noise must not become a request
             request = text  # inside the window after "Hey Artemis": no phrase needed
         else:
             self.stats.ignored += 1
@@ -286,7 +380,13 @@ class WakeListener:
         self._stream = None
         self._loop: asyncio.AbstractEventLoop | None = None
         make = loop_factory or WakeLoop
-        self.wake = make(self._transcribe, speaking=self._muted)
+        if loop_factory is None and stream_factory is None:
+            # the voice detector is for the real microphone (tests feed synthetic tones, which are not a voice)
+            vad = VoiceDetector.load()
+            self.wake = make(self._transcribe, speaking=self._muted, vad=vad,
+                             segmenter=Segmenter(pre_roll_s=0.5) if vad is not None else None)
+        else:
+            self.wake = make(self._transcribe, speaking=self._muted)
         # Health counters for the periodic core.log line (numbers only: no audio, no words).
         self._health = {"frames": 0, "peak": 0.0, "muted": {}}
         self._health_at = time.monotonic()
@@ -380,9 +480,10 @@ class WakeListener:
         stats = getattr(self.wake, "stats", None)
         muted = ", ".join(f"{k} {v}" for k, v in sorted(h["muted"].items())) or "none"
         log.warning("Wake word: %d frames in %.0f s, loudest %.4f (speech needs about %.4f), muted: %s; "
-                    "utterances %d, wakes %d, ignored %d",
+                    "utterances %d, wakes %d, ignored %d; voice detector %s",
                     h["frames"], now - self._health_at, h["peak"], getattr(getattr(self.wake, "segmenter", None), "threshold", 0.0),
-                    muted, getattr(stats, "utterances", 0), getattr(stats, "wakes", 0), getattr(stats, "ignored", 0))
+                    muted, getattr(stats, "utterances", 0), getattr(stats, "wakes", 0), getattr(stats, "ignored", 0),
+                    "on" if getattr(self.wake, "vad", None) is not None else "off")
         self._health = {"frames": 0, "peak": 0.0, "muted": {}}
         self._health_at = now
 
