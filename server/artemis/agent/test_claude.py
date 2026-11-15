@@ -494,10 +494,21 @@ def test_system_prompt_is_frozen_and_covers_the_rules():
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
-# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last for how code is
-# explained aloud) as it is on Windows: with ARTEMIS_CONVERSATION off the
-# agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "e3e412c80c62ed76cc5cb9f10c671485ed7127939332b50ba6e2bd14d9978dbe"
+# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when a rejected or
+# scan-blocked change or run stopped being proposed again for the rest of the conversation) as it
+# is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
+MAIN_SYSTEM_PROMPT_SHA256 = "9f2b7c6b97d60b529c45317129405d2dbe83c35a50f55486c856d225e255c2c3"
+
+
+def test_a_rejected_change_is_not_proposed_again_unless_asked():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    # The original rule stays; the new one covers runs and blocked scans, lasts the whole
+    # conversation, names what counts as new, and is the one place to ask before a tool call.
+    assert "do not try the same thing again or look for another way to do it" in flat
+    assert "said no to a change or a run" in flat
+    assert "Both hold for the rest of the conversation" in flat
+    assert "unless the developer asks for it in words" in flat
+    assert "this is the one case where you ask before calling a tool" in flat
 
 
 def test_flag_off_system_prompt_is_mains():

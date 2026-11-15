@@ -89,5 +89,10 @@
       <summary>Highlights</summary>
       <description>Brightness of the thin glossy lines on the ripples.</description>
     </key>
+    <key name="push-to-talk" type="as">
+      <default>['&lt;Control&gt;&lt;Shift&gt;space']</default>
+      <summary>Push-to-talk shortcut</summary>
+      <description>Hold to speak to Artemis, release Control and Shift to send.</description>
+    </key>
   </schema>
 </schemalist>

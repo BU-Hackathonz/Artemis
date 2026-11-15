@@ -20,7 +20,10 @@ if [[ "${1:-}" == "--remove" ]]; then
 fi
 
 mkdir -p "$dest/schemas"
-cp "$src"/metadata.json "$src"/extension.js "$src"/waterEffect.js "$src"/lensEffect.js "$src"/orbEffect.js "$src"/ringEffect.js "$src"/island.js "$src"/caret.js "$src"/stylesheet.css "$src"/presets.js "$src"/prefs.js "$dest/"
+# Every module of the extension. The connected build has no scripted presets or virtual keyboard,
+# so an older install's presets.js and caret.js are removed.
+rm -f "$dest/presets.js" "$dest/caret.js"
+cp "$src"/metadata.json "$src"/*.js "$src"/stylesheet.css "$dest/"
 cp "$src"/schemas/*.gschema.xml "$dest/schemas/"
 glib-compile-schemas "$dest/schemas"
 echo "Installed to $dest"

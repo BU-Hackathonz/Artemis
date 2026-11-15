@@ -220,6 +220,11 @@ ELEVEN_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
 ELEVEN_PCM_RATE = 22_050  # output_format=pcm_22050: 16-bit mono, playable as each chunk arrives
 SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
 FAILURES_BEFORE_SAPI = 3
+PERMANENT_FAILURES = {"HTTP 401", "HTTP 402", "HTTP 403"}  # retrying can't help: give up at once
+def _local_voice_name() -> str:
+    return "NVDA or the Windows voice" if sys.platform == "win32" else "the offline voice"
+
+
 def fallback_notice() -> str:
     """The give-up line. On Linux it never names Windows, SAPI or NVDA."""
     local = "the Windows voice" if sys.platform == "win32" else "the offline voice"
@@ -335,9 +340,9 @@ class ElevenLabsSpeaker:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._worker: threading.Thread | None = None
         if not self._key:
-            log.warning("ElevenLabs voice: ELEVENLABS_API_KEY is not set; using NVDA or the Windows voice")
+            log.warning("ElevenLabs voice: ELEVENLABS_API_KEY is not set; using %s", _local_voice_name())
         elif self.voice_id == PLACEHOLDER_VOICE:
-            log.warning("ElevenLabs voice: ARTEMIS_ELEVEN_VOICE_ID is not set; using NVDA or the Windows voice")
+            log.warning("ElevenLabs voice: ARTEMIS_ELEVEN_VOICE_ID is not set; using %s", _local_voice_name())
 
     # Speaker protocol
 
@@ -528,6 +533,10 @@ class ElevenLabsSpeaker:
         if not self._current(gen):
             return  # canceled meanwhile: say nothing
         self._failures += 1
+        if reason in PERMANENT_FAILURES:
+            # A bad key, a plan without API access to this voice (402, e.g. a free key with a library voice),
+            # or forbidden: no later line can succeed, so give up now instead of trying every line.
+            self._failures = FAILURES_BEFORE_SAPI
         log.warning("ElevenLabs failed (%s); this line uses the local voice", reason)
         if self._failures >= FAILURES_BEFORE_SAPI and not self.gave_up:
             self.gave_up = True
@@ -585,7 +594,6 @@ def orca_running(proc: Path = Path("/proc")) -> bool:
     return False
 
 
-
 # Artemis's priorities as speech-dispatcher levels (approved by Avery). high speaks over Orca and Orca can't
 # cut it; normal shares Orca's level, so each cuts the other; low never interrupts Orca and is dropped if
 # anything else speaks.
@@ -612,7 +620,8 @@ class SpeechDispatcherSpeaker:
         self._sock = None
         self._failed_at: float | None = None
         self._send_lock = threading.Lock()
-        self._replies: queue.Queue = queue.Queue()
+        self._connect_lock = threading.Lock()  # one connection at a time, even if available() and speak() race
+        self._replies: queue.Queue = queue.Queue()  # replaced with every connection (see _ensure)
         self._queued: set[str] = set()  # message ids speech-dispatcher still has for us
         self._playing = threading.Event()
         self._state = threading.Lock()
@@ -623,12 +632,22 @@ class SpeechDispatcherSpeaker:
     def _ensure(self):
         if self._sock is not None:
             return self._sock
+        with self._connect_lock:
+            if self._sock is not None:  # another thread connected while we waited
+                return self._sock
+            return self._open()
+
+    def _open(self):
         if self._failed_at is not None and self._clock() - self._failed_at < self.RETRY_S:
             return None
         try:
             sock = self._connect()
+            # Each connection gets its own reply queue: a reply that arrives after a command timed out
+            # stays with the dead connection instead of answering the next connection's command.
+            replies: queue.Queue = queue.Queue()
+            self._replies = replies
             self._sock = sock
-            threading.Thread(target=self._read, args=(sock,), name="artemis-speechd", daemon=True).start()
+            threading.Thread(target=self._read, args=(sock, replies), name="artemis-speechd", daemon=True).start()
             self._command("SET self CLIENT_NAME user:artemis:voice")
             self._command("SET self NOTIFICATION all on")
             self._failed_at = None
@@ -665,7 +684,7 @@ class SpeechDispatcherSpeaker:
             self._send(line)
             return self._reply()
 
-    def _read(self, sock) -> None:
+    def _read(self, sock, replies: queue.Queue) -> None:
         """Reader thread: split replies (to the waiting command) from events (7xx, which update state)."""
         buffer, block = b"", []
         try:
@@ -681,9 +700,10 @@ class SpeechDispatcherSpeaker:
                     if len(line) >= 4 and line[3] == "-":
                         continue  # more lines of this block follow
                     if line.startswith("7"):
-                        self._event(block)
+                        if self._sock is sock:  # a dead connection's events never touch the new one's state
+                            self._event(block)
                     else:
-                        self._replies.put(block)
+                        replies.put(block)
                     block = []
         except OSError:
             pass

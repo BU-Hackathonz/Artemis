@@ -20,15 +20,15 @@ Errors outside the table: a missing or wrong token is `401 {error: "unauthorized
 
 | Method | Path | Body → Response | Notes |
 |---|---|---|---|
-| GET | `/health` | → `{ok, version, voice_ready, screen_reader}` | `screen_reader`: `"nvda"` or `null` |
+| GET | `/health` | → `{ok, version, voice_ready, screen_reader}` | `screen_reader`: `"nvda"`, `"orca"` or `null`. **Proposed (Avery)**, §5.3: `"orca"` means Orca runs on Linux |
 | POST | `/sessions` | `{}` → `{session_id}` | One session per app launch |
 | GET | `/sessions/{sid}/events` | SSE stream of `Event` (§2) | Replays every kept event after `Last-Event-ID` (the last 5000; none or not a number replays from the start), then live |
 | POST | `/sessions/{sid}/tasks` | `{client_request_id, source: "voice"\|"keyboard", text}` → `{task_id}`, or `409 {error: "task_active", task_id}` | Idempotent per `client_request_id` (a repeat gets the same `task_id`, even while that task is active); one active task per session (§5.2) |
 | POST | `/tasks/{tid}/reply` | `{text, source}` → `501 {error: "not_supported"}` for a known task (the body is not read) | **Reserved, unused in the MVP.** The agent asks a question by ending its turn; the user's next request is the answer |
 | POST | `/approvals/{aid}` | `{decision: "approve"\|"reject", approval_hash}` → `204`, or `409 {error: "stale"}` | The hash must match the one that was offered. Stale: a different hash (the approval stays open), or one already decided, canceled or invalidated |
 | POST | `/tasks/{tid}/cancel` | `{}` → `204`, also for a task that already ended | Stops active work, including a running program (its whole process tree is killed). An `agent.message` at high says what was already applied ("Canceled. Already written: main.py."), then `task.state` `canceled` |
-| POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events. Always the newest session (one per app launch): `409 {detail: {error: "no_session"}}` before there is one, `422 {detail: {error: "bad_action"}}` for any other action. A microphone failure is an `error` event with code `mic_error` |
-| POST | `/speech` | `{action: "stop"\|"repeat"}` → `204` | Stop speaking / repeat the last announcement (the last one at `normal` or `high`). Any other action: `422 {detail: {error: "bad_action"}}` |
+| POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events. Always the newest session (one per app launch): `409 {detail: {error: "no_session"}}` before there is one, `422 {detail: {error: "bad_action"}}` for any other action. A microphone failure is an `error` event with code `mic_error`; a silent hold, `no_speech` (§5.1, **Proposed (Avery)**) |
+| POST | `/speech` | `{action: "stop"\|"repeat"\|"sample"}` → `204` | Stop speaking / repeat the last announcement (the last one at `normal` or `high`). **Proposed (Avery):** `sample` speaks the fixed line "This is how I sound." at `normal` in the current voice, for the voice picker's Test voice button; it is never free text and does not change what `repeat` says. A voice with no announcer stays silent. Any other action: `422 {detail: {error: "bad_action"}}` |
 | POST | `/sessions/{sid}/diagnostics` | `{code: "shortcut_registration_failed", shortcut?: "Control+Alt+Space"}` → `204` | A problem only the client can see. The core speaks a **fixed** sentence per code (`error` event, priority high), once per code and shortcut per session (the client announces an exact repeat itself); `shortcut` allows letters, digits and `+` only, 1 to 40 characters, and other fields are rejected (`422`). No free text is ever spoken. While `voice_ready` is true the client doesn't also announce it (§5.3) |
 | POST | `/sessions/{sid}/ready` | `{shortcut?: "Control+Shift+Space"}` → `204` | The native app finished setting up for this session (after its push-to-talk shortcut registered, or failed); the browser build does not call it. The core speaks one **fixed** line, once per session, as `agent.message` (`kind: "answer"`) with no `task_id` at priority normal: "Artemis is ready. Hold Control Shift Space and speak, or type a request." Without `shortcut` it names the Start listening button instead: "Artemis is ready. Use the Start listening button and speak, or type a request." `shortcut` allows letters, digits and `+` only, 1 to 40 characters, and other fields are rejected (`422`); no free text is ever spoken |
 | GET | `/settings/voice` | → `VoiceSettings` (§7) | **Proposed (Avery).** The effective voice settings: the saved file, with the environment on top, plus `active_engine` |
@@ -59,7 +59,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 
 | `type` | `data` |
 |---|---|
-| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal (an empty one is silent). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
+| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal (an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
 | `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
 | `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`) is `progress` at `low` |
 | `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval` |
@@ -67,8 +67,8 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 | `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}`, announced "Created main.py, 1 line." at normal. No tool deletes, so `deleted` is never sent today |
 | `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}`, announced at high by the gateway (§4 samples 4 and 5). `exit_code` is null when the run timed out |
 | `security.findings` | `{op_id, tool: "bandit"\|"semgrep", findings: [{rule, severity, path, line, message}]}`, not announced: the findings are spoken in the approval summary that follows, or in `scan_project`'s own line. Sent only when there are findings. `tool` is always `"bandit"` today (Semgrep is not implemented) |
-| `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on. Announced at high as "message recovery", except a failed task's, which says "The task failed. <reason> You can try again." |
-| `voice.status` | `{voice_ready, screen_reader, engine}`, emitted at session start and whenever either value changes (§5.3). `engine` (**Proposed (Avery)**, §7) is the speaker that would say the next line: `elevenlabs`, `nvda`, `sapi` or `none`; a settings change that alters it is also emitted |
+| `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on. Announced at high as "message recovery", except a failed task's, which says "The task failed. <reason> You can try again.", and `no_speech` (**Proposed (Avery)**, §5.1), which is at normal |
+| `voice.status` | `{voice_ready, screen_reader, engine}`, emitted at session start and whenever either value changes (§5.3). `screen_reader` is `"nvda"`, `"orca"` (**Proposed (Avery)**, §5.3) or `null`. `engine` (**Proposed (Avery)**, §7) is the speaker that would say the next line: `elevenlabs`, `nvda`, `sapi` or `none`; a settings change that alters it is also emitted |
 | `voice.activity` | `{state: "idle"\|"listening"\|"transcribing"\|"speaking", engine}` (approved by Avery, §8), not announced. Sent to every session when the voice's real state changes, never from timers: `listening` from the push-to-talk press until the mic closes (the listening earcon and any post-roll included), `transcribing` while Whisper turns the recording into text, `speaking` while Artemis's line is audible (`engine` says who: `elevenlabs` while its audio plays, `sapi` while SpVoice speaks, `nvda` for Artemis's own estimate, since NVDA can't report playback), `idle` otherwise. A session starts idle; one created while the voice is busy gets the current state once. State and engine only: no text, transcript or audio |
 
 ```jsonc
@@ -173,7 +173,7 @@ Paths are rejected unless `Path(root / p).resolve()` stays under `root`.
 ```python
 class Voice(Protocol):
     async def start_listening(self) -> None: ...
-    async def stop_listening(self, client_request_id: str) -> str: ...   # final transcript, wake word stripped; no partials
+    async def stop_listening(self, client_request_id: str) -> str: ...   # final transcript, wake word stripped; no partials; an empty one may say why (§5.1)
     def set_vocabulary(self, words: list[str]) -> None: ...               # file names and symbols for the prompt
     async def announce(self, text: str, priority: Priority) -> None: ...  # ElevenLabs if configured (even with NVDA), else NVDA if running, else SAPI
     async def stop_speech(self) -> None: ...
@@ -254,6 +254,19 @@ The core doesn't call `stop_speech()` itself here. Artemis's own voice (SAPI thr
 must never be recorded and transcribed as a request. The client's own "Stop speech" control is
 unchanged. Cutting off speech never hides an open approval: see §5.4.
 
+**Proposed (Avery): why a release gave no request.** `stop_listening()` still returns a `str`; when it
+is empty it may be an `artemis.voice.text.Heard`, whose `dropped` says why: `"short"` (a tap: under
+0.3 s of audio, or let go during the listening earcon), `"silent"` (held long enough, but even the
+loudest 100 ms stayed under the silence threshold, so Whisper never ran) or `"empty"` (there was sound,
+but no words came back, or only the wake word). A repeated stop that ends no hold gives a plain `""`.
+The thresholds are the voice's existing ones. The core handles every empty release as before
+(`transcript.final` with empty text, silent), and only for `"silent"` it then emits, on the newest
+session and once per release, a fixed `error` with no `task_id` at priority **normal**:
+`{code: "no_speech", message: "I didn't hear anything.", recovery: "Check the microphone."}`, spoken
+"I didn't hear anything. Check the microphone." A tap, an empty transcript, a voice that returns a
+plain `str`, and the wake word (§5.6, where room silence is never an utterance) say nothing. No free
+text is ever spoken.
+
 ### 5.2 One active task per session
 A task is active from `queued` until `succeeded`, `failed` or `canceled`. The spoken rules below
 are the default; `ARTEMIS_CONVERSATION=on` replaces them with §5.4 (bare "stop" then stops speech,
@@ -261,7 +274,8 @@ not the task, and a spoken request during a task waits its turn).
 - **Typed request while a task is active:** `POST /sessions/{sid}/tasks` returns
   `409 {error: "task_active", task_id}`. No second task starts.
 - **Spoken request while a task is active:** the core still emits `transcript.final` (so the text
-  stays in the editable field) but doesn't create a task. It emits `error`
+  stays in the log; since #151 the client no longer copies it into the request field, where a stray
+  Enter could resend it) but doesn't create a task. It emits `error`
   `{code: "task_active", message, recovery}` with `announce` at `high`:
   "Still working on the last request. Say cancel to stop it, or wait."
 - **Spoken control words.** The core checks the final transcript (the voice has already stripped a
@@ -282,6 +296,12 @@ running but its controller DLL is missing, which makes the core silent. The core
 `voice.status` at session start and on every change. The client turns its log's live region on
 (`aria-live="polite"`) whenever `voice_ready` is false and off when it's true, instead of deciding
 once from `/health` at connect.
+
+**Proposed (Avery):** on Linux, `screen_reader` is `"orca"` while the Orca screen reader runs
+(detected from the process list, so it is reported even though Artemis's own Linux voice does not
+speak through Orca). The client's live region keeps the rule above: it follows `voice_ready` only,
+so Orca does not switch it on or off. The core polls this value every 2 s and emits `voice.status`
+when Orca starts or stops. Orca's own speech is never reported.
 
 What the developer can change by voice depends on who is speaking. With SAPI, "stop talking" stops
 only Artemis. With NVDA, Artemis speaks through NVDA's controller, so stopping also cuts whatever
@@ -318,14 +338,14 @@ transcript.
   | `stop`, `stop talking`, `be quiet` | Stops speech only; the task keeps going. With a task active and no approval open, the core adds "Say cancel to stop the task." unless speech was cut off |
   | `cancel`, `cancel the task`, `never mind` | Drops the waiting follow-up if there is one ("Dropped: …"); otherwise cancels the active task; otherwise "Nothing to cancel." |
   | `repeat`, `say that again` | With an approval open, its summary again at `high`; otherwise the last announcement |
-  | `what are you doing`, `status`, `are you done` | A fixed sentence from task state. No task is created. The "Still working." heartbeat is never reported as the last step |
+  | `what are you doing`, `status`, `are you done` | A fixed sentence from task state, plus what was actually observed: the files changed so far, the last run's exit code (or that it timed out), and the security scan result, each only if its event arrived. A check that never reported is not mentioned, and a failed run is never called a success. While a decision is open, the decision is said alone. No task is created. The "Still working." heartbeat is never reported as the last step |
   | `which file did you change`, `what changed` | The files changed by the current or last task |
   | `keep it brief`, `deep dive`, `normal mode`, `visual mode`, `code mode` | Sets `TaskContext.style` for the following tasks and confirms it |
   | `reset my preferences`, `forget my answer style` | Sets the answer style back to the defaults (brief/normal/detailed and visual/code both cleared) and confirms it. Also clears the remembered style (below) |
   | `slower`, `faster` | See §5.3 |
   | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | Never applied: "Use the keyboard to decide…" as in §5.2 |
   | `approve`, `yes`, `reject`, `no` with no approval open | If no task is active and the agent's last answer was a question: the answer to it, sent as the next request (design A4; anything it leads to is still approved on the keyboard). Otherwise "There's nothing to approve right now.", never a task or a follow-up |
-  | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high`. The voice already strips "Artemis" and "Hey/OK Artemis", so those arrive empty (`intent` null); `wake_word` is the intent for a form only the controller strips, such as "Hi Artemis" |
+  | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high`. A silent hold then also gets §5.1's `no_speech` line (**Proposed (Avery)**). The voice already strips "Artemis" and "Hey/OK Artemis", so those arrive empty (`intent` null); `wake_word` is the intent for a form only the controller strips, such as "Hi Artemis" |
 
   No phrase can approve a write or a run, hide a warning, or run code.
 - **A spoken request while a task is active** is kept as the one waiting follow-up ("I'll do that
@@ -500,14 +520,13 @@ task contract is needed: `voice.activity` (§2) adds the voice's own states.
 | thinking | `voice.activity` `transcribing`, or `task.state` `queued` or `working` with no `file.changed` yet in this task | the next row's event |
 | editing | `approval.requested` of kind `write_files` (waiting), then `file.changed` after it is approved | `task.state` `running`, `succeeded`, `failed` or `canceled` |
 | running | `task.state` `running` | `run.result` |
-| speaking | `voice.activity` `speaking`, on top of whichever task state holds | `voice.activity` leaves `speaking` |
+| speaking | `voice.activity` `speaking` while no task state holds (idle). **Proposed (Avery):** over a task, the task's state stays shown and named, and the island only marks that Artemis is talking | `voice.activity` leaves `speaking` |
 | done | `task.state` `succeeded` (the `run.result` exit code is 0 or there was no run) | the next request or about 3 s, client's choice |
 | error | `task.state` `failed`, an `error` event, or `run.result` with a non-zero exit code or `timed_out` | the next request |
 
 - `awaiting_approval` is not a separate island state: the approval dialog is focused (Enter guard,
   §5) while the island keeps the state it had, marked as waiting.
 - `canceled` returns to idle after the spoken "Canceled.".
-- Speaking overlays the task states because Artemis talks while it works. Listening and
-  transcribing take priority over speaking, since push-to-talk stops speech (§5.1).
+- **Proposed (Avery), from David's run with real speech:** Artemis talks through most of a task, so an overlay hid Editing, Running and Done for the whole task. Speaking now shows on its own only when idle. Listening and transcribing still take priority over everything, since push-to-talk stops speech (§5.1).
 - On Linux there is no NVDA estimate: `speaking` comes from the engine that plays the audio.
   Orca's own speech is the screen reader's and is never reported.

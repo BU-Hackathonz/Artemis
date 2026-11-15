@@ -13,6 +13,7 @@ ARTEMIS_WHISPER_MODEL   small.en (default) | medium.en (more accurate, slower); 
 ARTEMIS_WHISPER_BEAM    1 (default) | 2 to 10, e.g. 5: opt-in
 ARTEMIS_PTT_POST_ROLL   0 (default, off) | seconds up to 1.0, e.g. 0.35: opt-in
 ARTEMIS_WHISPER_PROMPT  word list (default) | natural (spoken-style lead): opt-in
+ARTEMIS_WHISPER_HOTWORDS  off (default) | on (the prompt's demo words also as hotwords): opt-in
   Opt-in speech settings go on stage only after docs/demo.md row 3 passes with them on, on the demo laptop.
 ARTEMIS_PROJECTS_DIR    ~/ArtemisProjects (default); where projects are created and opened
 ARTEMIS_LOG_DIR         ~/.artemis/logs (default); one <session_id>.jsonl event log per session

@@ -1,0 +1,150 @@
+[
+ {
+  "task_id": null,
+  "type": "voice.status",
+  "announce": null,
+  "data": {
+   "voice_ready": false,
+   "screen_reader": null,
+   "engine": "none"
+  },
+  "seq": 1,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:08.600884Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "task.state",
+  "announce": {
+   "text": "Working on: create a Python program that prints Hello World",
+   "priority": "normal"
+  },
+  "data": {
+   "state": "queued",
+   "reason": null
+  },
+  "seq": 2,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.606764Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "working",
+   "reason": null
+  },
+  "seq": 3,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.607133Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "agent.message",
+  "announce": {
+   "text": "Starting project hello-world-2.",
+   "priority": "low"
+  },
+  "data": {
+   "text": "Starting project hello-world-2.",
+   "kind": "progress"
+  },
+  "seq": 4,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.607893Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "awaiting_approval",
+   "reason": null
+  },
+  "seq": 5,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.727557Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "approval.requested",
+  "announce": {
+   "text": "Create project hello-world-2 with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject.",
+   "priority": "high"
+  },
+  "data": {
+   "approval_id": "apr_758d255c94ce",
+   "kind": "write_files",
+   "approval_hash": "sha256:60a9e45fb9878dc6a3bab97137b8d28bb270a20353519da1873bd897d919075a",
+   "summary": "Create project hello-world-2 with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject.",
+   "files": [
+    {
+     "path": "main.py",
+     "action": "created",
+     "lines_added": 1,
+     "lines_removed": 0
+    }
+   ],
+   "diff": "--- /dev/null\n+++ main.py\n@@ -0,0 +1 @@\n+print(\"Hello, World!\")\n",
+   "run": null,
+   "findings": [],
+   "blocking": false
+  },
+  "seq": 6,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.729194Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "approval.resolved",
+  "announce": null,
+  "data": {
+   "approval_id": "apr_758d255c94ce",
+   "decision": "reject",
+   "by": "user"
+  },
+  "seq": 7,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.813404Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "working",
+   "reason": null
+  },
+  "seq": 8,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.813749Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "agent.message",
+  "announce": {
+   "text": "Okay, I didn't create anything.",
+   "priority": "normal"
+  },
+  "data": {
+   "text": "Okay, I didn't create anything.",
+   "kind": "answer"
+  },
+  "seq": 9,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.814043Z"
+ },
+ {
+  "task_id": "tsk_c1f57c426013",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "succeeded",
+   "reason": null
+  },
+  "seq": 10,
+  "session_id": "ses_44ee1c1dd581",
+  "at": "2026-11-15T02:04:09.814113Z"
+ }
+]

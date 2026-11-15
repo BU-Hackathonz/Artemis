@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -18,10 +19,12 @@ from artemis.contracts import (
     RunResult,
     TaskRequest,
 )
+import artemis.core.app as app_module
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
 from artemis.core.session import Session, normalize, spoken_error
+from artemis.voice import Announcer
 from artemis.voice.stub import StubVoice
 from artemis.policy.testing import FakeRunner
 
@@ -32,6 +35,7 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 class FakeAnnouncer:
     def __init__(self):
         self.state = (True, "nvda")
+        self.last = None
 
     def status(self):
         return self.state
@@ -379,6 +383,73 @@ async def test_speech_controls(client, voice):
     assert voice.calls == ["stop_speech", "repeat"]
 
 
+async def test_sample_speaks_the_fixed_line_at_normal_priority(client, voice):
+    assert (await client.post("/speech", headers=AUTH, json={"action": "sample"})).status_code == 204
+    assert voice.spoken == [("normal", "This is how I sound.")]
+
+
+async def test_sample_without_an_announcer_is_silent(client, voice):
+    voice.announcer = None
+    assert (await client.post("/speech", headers=AUTH, json={"action": "sample"})).status_code == 204
+    assert voice.spoken == []
+
+
+async def test_bad_speech_actions_are_422(client, voice):
+    r = await client.post("/speech", headers=AUTH, json={"action": "play"})
+    assert r.status_code == 422 and r.json()["detail"] == {"error": "bad_action"}
+    assert voice.spoken == [] and voice.calls == []
+
+
+class SpeakerLog:
+    name = "sapi"
+
+    def __init__(self):
+        self.said: list[tuple[str, bool]] = []
+
+    def available(self):
+        return True
+
+    def busy(self):
+        return False
+
+    def speak(self, text, interrupt):
+        self.said.append((text, interrupt))
+
+    def cancel(self):
+        pass
+
+
+class SpeakingVoice(FakeVoice):
+    """A voice with a real Announcer over a recording speaker, so `last` and repeat behave as in the core."""
+
+    def __init__(self, speaker):
+        super().__init__()
+        self.announcer = Announcer(nvda=SpeakerLog(), sapi=speaker, is_nvda_running=lambda: False, eleven=None)
+
+    async def announce(self, text, priority):
+        await self.announcer.announce(text, priority)
+
+    async def repeat_last(self):
+        await self.announcer.repeat_last()
+
+
+async def test_sample_does_not_change_what_repeat_says(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARTEMIS_VOICE_ENGINE", "sapi")
+    speaker = SpeakerLog()
+    voice = SpeakingVoice(speaker)
+    core = Core(voice=voice, make_runner=FakeRunner, make_agent=StubAgent,
+                projects_dir=tmp_path / "projects", log_dir=tmp_path / "logs")
+    app = create_app(core, TOKEN, warm_voice=False)
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
+            await voice.announce("Build finished.", "normal")
+            assert (await c.post("/speech", headers=AUTH, json={"action": "sample"})).status_code == 204
+            assert speaker.said[-1] == ("This is how I sound.", False)
+            assert (await c.post("/speech", headers=AUTH, json={"action": "repeat"})).status_code == 204
+            assert speaker.said[-1] == ("Build finished.", True)
+
+
 def test_normalize():
     assert normalize("Cancel that!") == "cancel that"
     assert normalize("  NEVER   mind. ") == "never mind"
@@ -476,6 +547,94 @@ async def test_accidental_tap_is_quiet(client, core, voice):
     new = session.bus.history[before:]
     assert [e.type for e in new] == ["transcript.final"] and new[0].announce is None
     assert not session.tasks
+
+
+NO_SPEECH_LINE = "I didn't hear anything. Check the microphone."
+
+
+def releases(voice, *heard):
+    """stop_listening returns these in turn: a release, then the client's stop barrier, and so on."""
+    queue = list(heard)
+
+    async def stop_listening(client_request_id):
+        voice.calls.append("stop")
+        return queue.pop(0) if queue else ""
+
+    voice.stop_listening = stop_listening
+
+
+async def test_a_silent_hold_says_check_the_microphone_once(client, core, voice, monkeypatch):
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    sid, session = await start(client, core)
+    releases(voice, Heard("", "silent"), "")  # the release, then the stop barrier's plain ""
+    before = len(session.bus.history)
+    for _ in range(2):
+        await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "error" for e in s.bus.history[before:]))
+    await asyncio.sleep(0.1)
+    new = session.bus.history[before:]
+    assert [e.type for e in new] == ["transcript.final", "error"]
+    final, error = new
+    assert final.announce is None and final.data["text"] == ""
+    assert error.task_id is None and error.session_id == sid
+    assert error.data == {"code": "no_speech", "message": "I didn't hear anything.", "recovery": "Check the microphone."}
+    assert error.announce.model_dump() == {"text": NO_SPEECH_LINE, "priority": "normal"}
+    assert voice.spoken.count(("normal", NO_SPEECH_LINE)) == 1
+    assert not session.tasks
+
+
+@pytest.mark.parametrize("dropped", ["short", "empty", None])
+async def test_a_tap_or_an_empty_transcript_stays_quiet(client, core, voice, monkeypatch, dropped):
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    _, session = await start(client, core)
+    releases(voice, Heard("", dropped) if dropped else "", "")
+    before = len(session.bus.history)
+    for _ in range(2):
+        await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: len(s.bus.history) > before)
+    await asyncio.sleep(0.1)
+    new = session.bus.history[before:]
+    assert [e.type for e in new] == ["transcript.final"] and new[0].announce is None
+    assert NO_SPEECH_LINE not in [text for _, text in voice.spoken]
+
+
+async def test_speech_is_a_transcript_and_no_error(client, core, voice):
+    _, session = await start(client, core)
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: s.tasks)
+    assert not [e for e in session.bus.history if e.type == "error"]
+    assert [e.data["text"] for e in session.bus.history if e.type == "transcript.final"] == [voice.transcript]
+
+
+async def test_a_silent_hold_with_the_conversation_on_still_says_it_once(client, core, voice, monkeypatch):
+    from artemis.voice.text import Heard
+
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    _, session = await start(client, core)
+    releases(voice, Heard("", "silent"))
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "error" for e in s.bus.history))
+    await asyncio.sleep(0.1)
+    errors = [e for e in session.bus.history if e.type == "error"]
+    assert [(e.data["code"], e.announce.priority) for e in errors] == [("no_speech", "normal")]
+    assert not session.tasks
+
+
+async def test_the_wake_word_never_says_check_the_microphone(client, core, voice, monkeypatch):
+    # Hands-free requests come through wake_request, not a push-to-talk release: no reason is read there.
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    _, session = await start(client, core)
+    core.wake_request("")
+    core.wake_request(Heard("", "silent"))
+    await asyncio.sleep(0.2)
+    assert not [e for e in session.bus.history if e.type == "error"]
+    assert NO_SPEECH_LINE not in [text for _, text in voice.spoken]
 
 
 # ----- interpreter pre-check (risk 7) -----
@@ -1080,3 +1239,53 @@ async def test_stub_voice_with_result_earcons_on_does_not_fail(tmp_path):
                       result_earcons=True)
     await session.emit(run_draft(0))
     await session.emit(approval_draft())
+
+
+# ----- Orca on Linux (contracts.md §5.3): health and voice.status -----
+
+
+@pytest.fixture
+def platform(monkeypatch, voice):
+    """Set the platform the core sees (app.py reads sys.platform) and whether Orca runs."""
+    def set_(name, orca, screen_reader=None):
+        monkeypatch.setattr(app_module, "sys", SimpleNamespace(platform=name))
+        monkeypatch.setattr(app_module, "orca_running", lambda: orca)
+        voice.announcer.state = (True, screen_reader)
+    return set_
+
+
+@pytest.mark.parametrize("name,orca,announcer_reader,expected", [
+    ("linux", True, None, "orca"),
+    ("linux", False, None, None),
+    ("win32", True, "nvda", "nvda"),  # Windows is unchanged: Orca is never looked for
+    ("win32", True, None, None),
+])
+async def test_health_reports_orca_only_on_linux(client, platform, name, orca, announcer_reader, expected):
+    platform(name, orca, announcer_reader)
+    r = await client.get("/health", headers=AUTH)
+    assert r.json()["screen_reader"] == expected
+    assert r.json()["voice_ready"] is True
+
+
+async def test_voice_status_at_session_start_reports_orca(client, core, platform):
+    platform("linux", True)
+    sid, session = await start(client, core)
+    first = session.bus.history[0]
+    assert first.type == "voice.status"
+    assert first.data == {"voice_ready": True, "screen_reader": "orca", "engine": "none"}
+
+
+async def test_orca_starting_and_stopping_emits_voice_status(client, core, platform):
+    def last_reader(session):
+        return [e.data["screen_reader"] for e in session.bus.history if e.type == "voice.status"][-1]
+
+    platform("linux", False)
+    sid, session = await start(client, core)
+    watcher = asyncio.create_task(core.watch_voice_status(interval_s=0.01))
+    try:
+        platform("linux", True)  # Orca starts
+        await wait_for(session, lambda s: last_reader(s) == "orca")
+        platform("linux", False)  # and stops
+        await wait_for(session, lambda s: last_reader(s) is None)
+    finally:
+        watcher.cancel()

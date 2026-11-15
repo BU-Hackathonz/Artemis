@@ -1,0 +1,267 @@
+[
+ {
+  "task_id": null,
+  "type": "voice.status",
+  "announce": null,
+  "data": {
+   "voice_ready": false,
+   "screen_reader": null,
+   "engine": "none"
+  },
+  "seq": 1,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:06.398584Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "task.state",
+  "announce": {
+   "text": "Working on: create a Python program that prints Hello World",
+   "priority": "normal"
+  },
+  "data": {
+   "state": "queued",
+   "reason": null
+  },
+  "seq": 2,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.407261Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "working",
+   "reason": null
+  },
+  "seq": 3,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.408143Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "agent.message",
+  "announce": {
+   "text": "Starting project hello-world.",
+   "priority": "low"
+  },
+  "data": {
+   "text": "Starting project hello-world.",
+   "kind": "progress"
+  },
+  "seq": 4,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.409452Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "awaiting_approval",
+   "reason": null
+  },
+  "seq": 5,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.610327Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "approval.requested",
+  "announce": {
+   "text": "Create project hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject.",
+   "priority": "high"
+  },
+  "data": {
+   "approval_id": "apr_9c83917a9f88",
+   "kind": "write_files",
+   "approval_hash": "sha256:da2e56b06ef2fd115b480893659c4eadee99e7dfd35bf095581a0b860ab2a49b",
+   "summary": "Create project hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject.",
+   "files": [
+    {
+     "path": "main.py",
+     "action": "created",
+     "lines_added": 1,
+     "lines_removed": 0
+    }
+   ],
+   "diff": "--- /dev/null\n+++ main.py\n@@ -0,0 +1 @@\n+print(\"Hello, World!\")\n",
+   "run": null,
+   "findings": [],
+   "blocking": false
+  },
+  "seq": 6,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.613344Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "approval.resolved",
+  "announce": null,
+  "data": {
+   "approval_id": "apr_9c83917a9f88",
+   "decision": "approve",
+   "by": "user"
+  },
+  "seq": 7,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.717447Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "file.changed",
+  "announce": {
+   "text": "Created main.py, 1 line.",
+   "priority": "normal"
+  },
+  "data": {
+   "op_id": "op_d2619674db82",
+   "path": "main.py",
+   "action": "created",
+   "lines_added": 1,
+   "lines_removed": 0
+  },
+  "seq": 8,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.726915Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "working",
+   "reason": null
+  },
+  "seq": 9,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.727391Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "awaiting_approval",
+   "reason": null
+  },
+  "seq": 10,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.888429Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "approval.requested",
+  "announce": {
+   "text": "Run main.py with Python. No security findings. Enter to run, Escape to reject.",
+   "priority": "high"
+  },
+  "data": {
+   "approval_id": "apr_d1c30906a987",
+   "kind": "run_program",
+   "approval_hash": "sha256:34d909b8ced22aafa8903cbe6dba4d47ddc34178ba045ebc4332550298d997f6",
+   "summary": "Run main.py with Python. No security findings. Enter to run, Escape to reject.",
+   "files": [],
+   "diff": null,
+   "run": {
+    "preset": "python",
+    "entry": "main.py",
+    "timeout_s": 10
+   },
+   "findings": [],
+   "blocking": false
+  },
+  "seq": 11,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.889883Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "approval.resolved",
+  "announce": null,
+  "data": {
+   "approval_id": "apr_d1c30906a987",
+   "decision": "approve",
+   "by": "user"
+  },
+  "seq": 12,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.933987Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "task.state",
+  "announce": {
+   "text": "Running main.py.",
+   "priority": "low"
+  },
+  "data": {
+   "state": "running",
+   "reason": null
+  },
+  "seq": 13,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.934499Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "run.result",
+  "announce": {
+   "text": "main.py ran successfully. It printed: Hello, World!",
+   "priority": "high"
+  },
+  "data": {
+   "op_id": "op_23aabe2f7dae",
+   "preset": "python",
+   "exit_code": 0,
+   "timed_out": false,
+   "duration_ms": 16,
+   "stdout_tail": "Hello, World!\n",
+   "stderr_tail": "",
+   "truncated": false
+  },
+  "seq": 14,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.954294Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "working",
+   "reason": null
+  },
+  "seq": 15,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.954642Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "agent.message",
+  "announce": {
+   "text": "I created hello-world with main.py and ran it. It printed Hello, World!",
+   "priority": "normal"
+  },
+  "data": {
+   "text": "I created hello-world with main.py and ran it. It printed Hello, World!",
+   "kind": "answer"
+  },
+  "seq": 16,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.955902Z"
+ },
+ {
+  "task_id": "tsk_35077d951600",
+  "type": "task.state",
+  "announce": null,
+  "data": {
+   "state": "succeeded",
+   "reason": null
+  },
+  "seq": 17,
+  "session_id": "ses_ab91aab1b052",
+  "at": "2026-11-15T02:04:07.956030Z"
+ }
+]
