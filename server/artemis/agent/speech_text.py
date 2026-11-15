@@ -219,3 +219,89 @@ def spoken_answer(text: str) -> str:
             return " ".join(sentences[: MAX_SENTENCES - 1] + [_REST_IN_LOG, questions[-1]])
         spoken = " ".join(kept + [_REST_IN_LOG])
     return spoken
+
+
+# ----- reading code aloud (read_file with aloud true) -----
+# A developer who asked to hear a file gets its code spoken on purpose: names as words, each symbol by
+# name, the indentation level announced when it changes, and only a few lines at a time. The text is
+# untrusted data and is redacted by the caller before it gets here; this only shapes it for the ear.
+
+CHUNK_LINES = 20  # lines spoken per call; "say continue" reads the next ones
+CHUNK_CHARS = 900  # a chunk ends early when its spoken text gets this long
+_SYMBOL_NAMES = {
+    "==": "equals equals", "!=": "not equals", "<=": "less than or equal", ">=": "greater than or equal",
+    "->": "arrow", "=>": "fat arrow", "&&": "and and", "||": "or or", "**": "double star", "//": "double slash",
+    "::": "double colon", "+=": "plus equals", "-=": "minus equals", "*=": "star equals", "/=": "slash equals",
+    "(": "open paren", ")": "close paren", "[": "open bracket", "]": "close bracket", "{": "open brace",
+    "}": "close brace", ":": "colon", ";": "semicolon", ",": "comma", ".": "dot", "=": "equals",
+    "<": "less than", ">": "greater than", "+": "plus", "-": "minus", "*": "star", "/": "slash",
+    "%": "percent", "&": "ampersand", "|": "pipe", "!": "bang", "\"": "quote", "'": "single quote",
+    "`": "backtick", "#": "hash", "@": "at", "$": "dollar", "~": "tilde", "^": "caret", "\\": "backslash",
+    "?": "question mark", "_": "underscore",
+}
+_CODE_TOKEN = re.compile(
+    r"==|!=|<=|>=|->|=>|&&|\|\||\*\*|//|::|\+=|-=|\*=|/="
+    r"|[A-Za-z]+(?=[0-9])|[A-Za-z]+|[0-9]+(?:\.[0-9]+)?|\s+|."
+)
+
+
+def code_line_to_speech(line: str) -> str:
+    """One line of code as words: names stay, camelCase is split, every symbol is named."""
+    out = []
+    for tok in _CODE_TOKEN.findall(line.strip()):
+        if tok.isspace():
+            continue
+        if tok in _SYMBOL_NAMES:
+            out.append(_SYMBOL_NAMES[tok])
+        elif tok[0].isalnum():
+            out.append(re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", tok))
+        else:
+            out.append("symbol")
+    return " ".join(out)
+
+
+def _indent_unit(lines: list[str]) -> int:
+    """The width of one indentation level: 2 when every indented line uses an even number of spaces
+    and some use exactly 2, else 4. A tab counts as one level on its own."""
+    widths = [len(s) - len(s.lstrip(" ")) for s in lines if s.strip() and not s.startswith("\t")]
+    widths = [w for w in widths if w]
+    return 2 if widths and all(w % 2 == 0 for w in widths) and 2 in widths else 4
+
+
+def _level(line: str, unit: int) -> int:
+    lead = line[: len(line) - len(line.lstrip(" \t"))]
+    return lead.count("\t") + len(lead.replace("\t", "")) // unit
+
+
+def speak_code(numbered: list[tuple[int, str]], numbers: bool = False, unit: int | None = None) -> str:
+    """Spoken text for lines of code: [(line number, text)]. Blank lines are said once, the indentation
+    level is announced when it changes, and with numbers=True each line starts with its number."""
+    unit = unit or _indent_unit([t for _, t in numbered])
+    parts: list[str] = []
+    level: int | None = None
+    blank = False
+    for n, text in numbered:
+        if not text.strip():
+            if not blank:
+                parts.append(f"Line {n}, blank." if numbers else "Blank line.")
+            blank = True
+            continue
+        blank = False
+        here = _level(text, unit)
+        head = f"Line {n}." if numbers else ""
+        if here != level:
+            head = f"{head} {'Indent level ' + str(here) if here else 'No indent'}.".strip()
+            level = here
+        parts.append(f"{head} {code_line_to_speech(text)}.".strip())
+    return " ".join(parts)
+
+
+def next_chunk_end(numbered: list[tuple[int, str]], limit_lines: int = CHUNK_LINES, limit_chars: int = CHUNK_CHARS) -> int:
+    """How many of these lines make one spoken chunk: at most limit_lines, ending early when the
+    spoken text passes limit_chars (a single long line is still a chunk of its own)."""
+    used = 0
+    for i, (_, text) in enumerate(numbered[:limit_lines], 1):
+        used += len(code_line_to_speech(text)) + 2
+        if used >= limit_chars:
+            return i
+    return min(limit_lines, len(numbered))

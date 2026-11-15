@@ -519,7 +519,7 @@ def test_system_prompt_is_frozen_and_covers_the_rules():
 # sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when code went into files
 # and VS Code was opened with open_path, not typed, on top of the plan and the desktop tools) as it
 # is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "ab7e5c13f676d7c2ce4937944d073af4344528b2aed9090bf61f258de58b9bd3"
+MAIN_SYSTEM_PROMPT_SHA256 = "2e888a97794e2527aaac7a84fde95cd928d34e8cfe3ca31a7180c9b47461757f"
 
 
 def test_spoken_answers_are_short_and_true_to_the_tool_results():
@@ -554,6 +554,13 @@ def test_prompt_tells_the_model_to_build_complete_multi_file_projects():
     assert "no TODO stubs" in flat and "index.html, style.css and script.js" in flat
     assert "under about three hundred lines" in flat and "inspect_page" in flat
     assert "what you built and how to use it" in flat
+
+
+def test_readback_and_feedback_rules():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "call read_file with aloud true" in flat and "from next_start_line" in flat
+    assert "what the run actually printed or failed with, then offer to read it or explain it" in flat
+    assert "inspect_page with describe true" in flat
 
 
 def test_flag_off_system_prompt_is_mains():
