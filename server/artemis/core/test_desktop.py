@@ -210,3 +210,56 @@ async def test_a_finished_action_is_stale_so_the_stream_never_sends_it_again(cor
     assert session.desktop.is_stale(event)  # answered: a reconnect replay must not type it twice
     other = event.model_copy(update={"type": "agent.message"})
     assert not session.desktop.is_stale(other)  # only desktop.action is ever skipped
+
+
+async def test_a_result_that_lands_as_the_timer_fires_is_not_lost(core, monkeypatch):
+    session = ready_session(core)
+    real = asyncio.wait_for
+
+    async def fires_after_the_answer(awaitable, timeout):
+        op_id = next(iter(session.desktop._pending))
+        session.desktop.resolve(op_id, DesktopResult(ok=True))  # the island answered...
+        raise asyncio.TimeoutError  # ...in the turn the timer fired
+
+    monkeypatch.setattr(desktop_module.asyncio, "wait_for", fires_after_the_answer)
+    result = await session.desktop.request("type", "a", None)
+    monkeypatch.setattr(desktop_module.asyncio, "wait_for", real)
+    assert result == DesktopResult(ok=True)
+
+
+async def test_closing_the_last_stream_ends_waiting_ops_at_once(core):
+    session = core.new_session()
+    session.desktop_ready = True
+    queue = session.bus.subscribe()
+    request = asyncio.create_task(session.desktop.request("type", "a", None))
+    await op_id_of(session)
+    session.desktop.subscribers_changed()
+    assert not request.done()  # a stream is still open
+    session.bus.unsubscribe(queue)
+    session.desktop.subscribers_changed()
+    assert await asyncio.wait_for(request, 1) == DesktopResult(ok=False, message="desktop_unavailable")
+
+
+async def test_typed_text_leaves_the_replay_history_once_the_op_is_over(core):
+    session = ready_session(core)
+    request = asyncio.create_task(session.desktop.request("type", SECRET, None))
+    op = await op_id_of(session)
+    assert SECRET in session.bus.history[-1].data["text"]  # pending: a reconnecting island needs it
+    session.desktop.resolve(op, DesktopResult(ok=True))
+    await request
+    assert all(SECRET not in e.model_dump_json() for e in session.bus.history)
+
+
+async def test_log_redacts_the_typing_approval(tmp_path):
+    from artemis.contracts import EventDraft
+
+    path = tmp_path / "log.jsonl"
+    bus = EventBus("ses_1", log_path=path)
+    from artemis.contracts import Announce
+
+    data = {"approval_id": "apr_1", "kind": "type", "approval_hash": "h", "summary": f"Type “{SECRET}” into Editor.",
+            "desktop": {"action": "type_text", "target": "w", "text": SECRET}}
+    await bus.emit(EventDraft(type="approval.requested", data=data,
+                              announce=Announce(text=f"Type “{SECRET}”", priority="high")))
+    assert SECRET not in path.read_text()
+    assert bus.history[-1].data["desktop"]["text"] == SECRET  # SSE and the approval dialog still carry it

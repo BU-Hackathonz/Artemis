@@ -28,10 +28,12 @@ class DesktopOps:
         *,
         ready: Callable[[], bool] = lambda: False,
         subscribers: Callable[[], int] = lambda: 0,
+        forget: Callable[[str], None] = lambda op_id: None,
     ) -> None:
         self._emit = emit
         self._ready = ready  # a client called /ready with desktop=True
         self._subscribers = subscribers  # SSE subscribers connected right now
+        self._forget = forget  # called with the op_id once the op is over, to drop its text from replay history
         self._pending: dict[str, asyncio.Future[DesktopResult]] = {}
 
     def available(self) -> bool:
@@ -71,9 +73,14 @@ class DesktopOps:
             )
             return await asyncio.wait_for(future, timeout=BASE_TIMEOUT_S + PER_CHAR_S * len(text))
         except asyncio.TimeoutError:
+            # resolve() may have answered in the same loop turn the timer fired: the island did act, so
+            # report its answer, not "unavailable" (the gate would otherwise treat typed text as untyped).
+            if future.done() and not future.cancelled():
+                return future.result()
             return UNAVAILABLE.model_copy()
         finally:
             self._pending.pop(op_id, None)  # decided, timed out or canceled: later results are ignored
+            self._forget(op_id)
 
     def resolve(self, op_id: str, result: DesktopResult) -> bool:
         """Single use: False for an unknown, finished or expired op."""
@@ -85,7 +92,16 @@ class DesktopOps:
 
     def cancel_all(self) -> None:
         """Task canceled or session over: every waiting request returns ok=False, "canceled"."""
+        self._finish_all(DesktopResult(ok=False, message="canceled"))
+
+    def subscribers_changed(self) -> None:
+        """An SSE stream closed. With nobody left to hear a desktop.action, the waiting requests end now
+        (desktop_unavailable) instead of holding the task for the whole timeout."""
+        if self._subscribers() <= 0:
+            self._finish_all(UNAVAILABLE.model_copy())
+
+    def _finish_all(self, result: DesktopResult) -> None:
         for future in list(self._pending.values()):
             if not future.done():
-                future.set_result(DesktopResult(ok=False, message="canceled"))
+                future.set_result(result.model_copy())
         self._pending.clear()

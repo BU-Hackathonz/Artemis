@@ -76,7 +76,24 @@ class EventBus:
         if event.type == "desktop.action":
             data = {**event.data, "text": f"<redacted {len(str(event.data.get('text', '')))} chars>"}
             event = event.model_copy(update={"data": data})
+        elif event.type in ("approval.requested", "approval.resolved"):
+            desktop = event.data.get("desktop")
+            if isinstance(desktop, dict) and desktop.get("action") == "type_text":
+                # the approval shows the text to type word for word: in the summary and the spoken line too
+                data = {**event.data, "desktop": {**desktop, "text": f"<redacted {len(str(desktop.get('text', '')))} chars>"}}
+                if "summary" in data:
+                    data["summary"] = "<redacted: typing approval>"
+                update: dict = {"data": data}
+                if event.announce is not None:
+                    update["announce"] = event.announce.model_copy(update={"text": "<redacted: typing approval>"})
+                event = event.model_copy(update=update)
         return event.model_dump_json()
+
+    def forget_desktop_text(self, op_id: str) -> None:
+        """The op is over: drop its typed text from the replay history (the SSE copy was already sent)."""
+        for i, e in enumerate(self.history):
+            if e.type == "desktop.action" and e.data.get("op_id") == op_id and e.data.get("text"):
+                self.history[i] = e.model_copy(update={"data": {**e.data, "text": ""}})
 
     def since(self, seq: int) -> list[Event]:
         return [e for e in self.history if e.seq > seq]

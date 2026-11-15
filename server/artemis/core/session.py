@@ -29,8 +29,6 @@ from artemis.contracts import (
     TaskStateData,
     TranscriptData,
     TurnSummary,
-    plan_draft,
-    ring_cue_draft,
 )
 from artemis.conversation import Controller
 from artemis.conversation.controller import NVDA_RATE_LINE
@@ -121,6 +119,12 @@ def _result_cue(draft: EventDraft) -> str | None:
     return None
 
 
+def _requires_plan(agent: object) -> bool:
+    """§10: the real agent must plan first. By class in the MRO, so a subclass or wrapper-subclass of
+    ClaudeAgent still counts (the SDK is not imported here: the stub runs without it)."""
+    return any(c.__name__ == "ClaudeAgent" for c in type(agent).__mro__)
+
+
 class TaskActive(Exception):
     def __init__(self, task_id: str):
         self.task_id = task_id
@@ -158,6 +162,7 @@ class Session:
         prefs_path: Path | None = None,
         result_earcons: bool | None = None,
         earcon: Callable[[str], float] | None = None,
+        require_plan: bool | None = None,  # None: only for a ClaudeAgent (or a subclass of it)
     ):
         self.session_id = session_id
         self.voice = voice
@@ -173,13 +178,14 @@ class Session:
         self.approvals = SessionApprovals()
         self.desktop_ready = False  # set by /ready when the island can type (contracts.md §9)
         self.desktop = DesktopOps(
-            self.emit, ready=lambda: self.desktop_ready, subscribers=lambda: self.bus.subscriber_count
+            self.emit, ready=lambda: self.desktop_ready, subscribers=lambda: self.bus.subscriber_count,
+            forget=self.bus.forget_desktop_text,
         )
         self.gateway = ToolGateway(
             runner, self.approvals, self.emit, projects_dir=projects_dir, scan=scan,
             desktop=self._desktop_bridge,
             # §10: the real agent plans before it acts; scripted agents (stub, tests) may skip it
-            require_plan=type(agent).__name__ == "ClaudeAgent",
+            require_plan=_requires_plan(agent) if require_plan is None else require_plan,
         )
         self.agent = agent
         self.tasks: dict[str, Task] = {}
@@ -250,14 +256,6 @@ class Session:
         op_id (random, single-use), so the gate's is not used."""
         result = await self.desktop.request(kind, text, task_id, window=window)
         return result.ok, result.message, result.window
-
-    async def plan(self, task_id: str, goal: str, steps: list) -> None:
-        """Emit agent.plan (silent). The gate can do the same with its emit and contracts.plan_draft."""
-        await self.emit(plan_draft(task_id, goal, steps))
-
-    async def ring_cue(self, task_id: str, action: str, step: int | None = None, target: str | None = None) -> None:
-        """Emit ring.cue (silent). The gate can do the same with its emit and contracts.ring_cue_draft."""
-        await self.emit(ring_cue_draft(task_id, action, step, target))
 
     @property
     def active_task(self) -> Task | None:

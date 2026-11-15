@@ -135,18 +135,6 @@ class RingCueData(BaseModel):
     target: str | None = None  # "editor", "terminal", "file", "browser", an app name, or a path's name
 
 
-def plan_draft(task_id: str, goal: str, steps: list) -> "EventDraft":
-    """An agent.plan event, validated. For the gate: await emit(plan_draft(...)); no announce."""
-    data = AgentPlanData(goal=goal, steps=[PlanStepData.model_validate(s) for s in steps])
-    return EventDraft(task_id=task_id, type="agent.plan", data=data.model_dump())
-
-
-def ring_cue_draft(task_id: str, action: str, step: int | None = None, target: str | None = None) -> "EventDraft":
-    """A ring.cue event, validated. For the gate: await emit(ring_cue_draft(...)); no announce."""
-    data = RingCueData(step=step, action=action, target=target)
-    return EventDraft(task_id=task_id, type="ring.cue", data=data.model_dump())
-
-
 class DesktopActionData(BaseModel):
     """An approved desktop action the island performs (only the shell can type on Wayland; §9).
     The island answers with POST /desktop/{op_id}/result."""

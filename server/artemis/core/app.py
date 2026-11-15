@@ -397,6 +397,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
                     yield {"id": str(event.seq), "data": event.model_dump_json()}
             finally:
                 session.bus.unsubscribe(queue)
+                session.desktop.subscribers_changed()  # an op waiting on a vanished island ends now
 
         return EventSourceResponse(stream(), ping=PING_S)
 

@@ -3,13 +3,9 @@
 import asyncio
 
 import pytest
-from pydantic import ValidationError
 
 from artemis.contracts import Answered, Canceled, EventDraft, Failed, TaskRequest
 from artemis.core.session import Session
-
-STEPS = [{"say": "Read the file", "action": "read", "target": "main.py"}, {"say": "Run it", "action": "run"}]
-
 
 def make(tmp_path, agent=None):
     return Session("ses_t", voice=None, runner=None, agent=agent, projects_dir=tmp_path)
@@ -41,40 +37,6 @@ async def run_task(session, cid="c1"):
         except asyncio.CancelledError:
             pass
     return task
-
-
-async def test_plan_event_shape_and_is_silent(tmp_path):
-    s = make(tmp_path)
-    await s.plan("tsk_1", "Fix it", STEPS)
-    (e,) = of(s, "agent.plan")
-    assert e.task_id == "tsk_1" and e.announce is None
-    assert e.data == {
-        "goal": "Fix it",
-        "steps": [
-            {"say": "Read the file", "action": "read", "target": "main.py"},
-            {"say": "Run it", "action": "run", "target": None},
-        ],
-    }
-
-
-async def test_ring_cue_event_shape_and_is_silent(tmp_path):
-    s = make(tmp_path)
-    await s.ring_cue("tsk_1", "write", step=1, target="editor")
-    await s.ring_cue("tsk_1", "think")
-    a, b = of(s, "ring.cue")
-    assert a.data == {"step": 1, "action": "write", "target": "editor"} and a.announce is None
-    assert b.data == {"step": None, "action": "think", "target": None}
-
-
-async def test_bad_values_are_rejected_and_nothing_is_emitted(tmp_path):
-    s = make(tmp_path)
-    with pytest.raises(ValidationError):
-        await s.ring_cue("tsk_1", "dance")
-    with pytest.raises(ValidationError):
-        await s.plan("tsk_1", "g", [{"say": "x", "action": "fly"}])
-    with pytest.raises(ValidationError):
-        await s.plan("tsk_1", "g", [{"action": "read"}])  # no say
-    assert of(s, "ring.cue") == [] and of(s, "agent.plan") == []
 
 
 @pytest.mark.parametrize(
