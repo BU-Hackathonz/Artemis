@@ -62,7 +62,7 @@ a CLI or a VS Code extension later.
    "Artemis, create a Python program that prints Hello World". The client calls `POST /voice/listen`
    with `start` on key down and `stop` on key up; the core records and transcribes. The leading "Artemis" is stripped. No wake-word
    engine is needed.
-2. The core announces "Heard: create a Python program that prints Hello World" and starts a task.
+2. The core starts a task and announces "Working on: create a Python program that prints Hello World" (the transcript is spoken once, there).
 3. The agent (Claude) plans the work and calls `create_project` and `write_files`. Writes need
    approval, so the policy gate pauses the task and emits `approval.requested`: "Create project
    hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to
