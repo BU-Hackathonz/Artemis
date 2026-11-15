@@ -332,6 +332,7 @@ export default class ArtemisWaterExtension extends Extension {
                 onMoved: () => this._afterLayout(() => { if (!this._agent?.awake && !this._homeTimer) this._agentGoHome(true); }),
             });
             this._agentGoHome(true);
+            this._watchRest();
         } else {
             this._addSphereButton();
         }
@@ -339,6 +340,25 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     // Fly back to the corner (not cancellable by commands), then rest.
+    // While the ring rests in the notch, keep it on its slot. At login the island is placed before the top
+    // bar has its height (David's laptop: panel 0, the pill at y -4, the ring 32 px above the notch once
+    // the bar appeared), and not every later layout change is announced. Once a second, cheap: it only
+    // compares two points, and moves the ring only when it is off by more than a pixel.
+    _watchRest() {
+        if (this._restTimer) GLib.source_remove(this._restTimer);
+        this._restTimer = GLib.timeout_add(GLib.PRIORITY_LOW, 1000, () => {
+            if (!this._island || !this._agent) { this._restTimer = 0; return GLib.SOURCE_REMOVE; }
+            if (!this._agent.awake && !this._homeTimer && !this._cue && !this._launch) {
+                const home = this._homePos();
+                if (Math.hypot(home.x - this._agent.x, home.y - this._agent.y) > 1) {
+                    this._agentGoHome(true);
+                    this._logRing('re-seated');
+                }
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
     // Diagnostic (David's laptop: the ring rests above the notch): where the ring is, where its slot is
     // and the pill's box, in stage px, to the journal. Numbers only, at most once a second.
     _logRing(why) {
@@ -618,6 +638,8 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     _teardownAgentUI() {
+        if (this._restTimer) GLib.source_remove(this._restTimer);
+        this._restTimer = 0;
         this._island?.destroy();
         this._island = null;
         this._sphereMenu?.destroy();
