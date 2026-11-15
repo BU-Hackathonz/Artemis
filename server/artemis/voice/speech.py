@@ -375,6 +375,7 @@ class ElevenLabsSpeaker:
         self._handed: threading.Event | None = None  # set when a line went to the local voice
         self._handed_at: float | None = None  # when the last line went to the local voice
         self._handed_s = 0.0  # about how long the local voice takes to say it
+        self._handed_event: threading.Event | None = None  # set once the local voice was given the line
         self.gave_up = False
         self._cache: dict[tuple, bytes] = {}
         self.last_first_audio_s: float | None = None
@@ -456,6 +457,9 @@ class ElevenLabsSpeaker:
         if time.monotonic() - handed_at > FALLBACK_TALK_MAX_S:
             self._handed_at = None
             return False
+        handed = self._handed_event
+        if handed is not None and not handed.is_set():
+            return True  # handed over, but speak() hasn't run on the loop yet
         try:
             on_loop = asyncio.get_running_loop() is self._loop
         except RuntimeError:
@@ -720,6 +724,7 @@ class ElevenLabsSpeaker:
                 handed.set()
 
         self._handed = handed
+        self._handed_event = handed  # until the loop has called speak(), the local voice can't say it's busy
         self._handed_at = time.monotonic()  # busy() asks the local voice from now on (_fallback_talking)
         self._handed_s = speech_seconds(text, LOCAL_WORDS_PER_SECOND) + 1.0  # SAPI off the loop: an estimate
         self._on_loop(speak)
