@@ -94,6 +94,7 @@ class Core:
         self.listen_lock = asyncio.Lock()
         self.watch_task: asyncio.Task | None = None
         self.activity_task: asyncio.Task | None = None
+        self.wake = None  # the "Hey Artemis" listener, when ARTEMIS_LISTEN_MODE=wake
         self.activity: tuple[str, str | None] = ("idle", None)  # the last voice.activity sent
         self.heartbeat_s = heartbeat_s
         # Interpreter pre-check: probed once per process, then reused by every session.
@@ -189,6 +190,8 @@ class Core:
         voice = self.voice
         if getattr(voice, "busy_listening", getattr(voice, "listening", False)):
             return "listening", None
+        if self.wake is not None and self.wake.armed:  # heard "Hey Artemis": waiting for the request
+            return "listening", None
         if getattr(voice, "transcribing", False):
             return "transcribing", None
         announcer = getattr(voice, "announcer", None)
@@ -208,6 +211,29 @@ class Core:
             except Exception:  # a voice that can't be asked must not end the updates
                 log.exception("voice activity check failed")
             await asyncio.sleep(interval_s)
+
+    def wake_request(self, text: str) -> None:
+        """A request heard after "Hey Artemis": handled exactly like a push-to-talk transcript."""
+        session = self.current()
+        if session is None:
+            log.warning("Wake word: a request was heard before any session; ignoring it")
+            return
+        self.spawn(session.spoken(text, new_id("cr")))
+
+    def start_wake(self) -> None:
+        """Start hands-free listening if ARTEMIS_LISTEN_MODE=wake and the voice can transcribe."""
+        if not hasattr(self.voice, "_transcribe"):
+            log.warning("ARTEMIS_LISTEN_MODE=wake needs the Whisper voice; push-to-talk only")
+            return
+        from artemis.voice.wake import WakeListener  # numpy and the mic only when asked for
+
+        listener = WakeListener(self.voice, self.wake_request)
+        try:
+            listener.start()
+        except Exception as e:  # no device, busy, permission: push-to-talk still works
+            log.warning("Wake word could not start the microphone (%s); push-to-talk only", type(e).__name__)
+            return
+        self.wake = listener
 
     def wire_voice(self) -> None:
         """Say the ElevenLabs fallback notice through the bus when that voice gives up. Called at
@@ -258,7 +284,11 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         if announcer is not None and hasattr(announcer, "watch"):
             core.watch_task = asyncio.create_task(announcer.watch(core.broadcast_voice_status))
         core.activity_task = asyncio.create_task(core.watch_activity())
+        if os.environ.get("ARTEMIS_LISTEN_MODE", "").strip().lower() == "wake":
+            core.start_wake()
         yield
+        if core.wake is not None:
+            core.wake.stop()
         if core.watch_task:
             core.watch_task.cancel()
         if core.activity_task:
