@@ -20,7 +20,7 @@ from artemis.agent import claude as claude_module  # noqa: E402
 from artemis.agent.claude import ClaudeAgent  # noqa: E402
 from artemis.agent.config import Config  # noqa: E402
 from artemis.agent.context import task_message, vocabulary  # noqa: E402
-from artemis.agent.prompts import SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
+from artemis.agent.prompts import DESKTOP, SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
 from artemis.agent.stub import StubAgent  # noqa: E402
 from artemis.contracts import TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
 from artemis.policy.gateway import ToolGateway  # noqa: E402
@@ -488,22 +488,35 @@ def test_strict_schema_keeps_a_property_named_like_a_keyword():
 
 
 def test_system_prompt_is_frozen_and_covers_the_rules():
-    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network"]:
+    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network",
+                   "what it does as a whole", "never speak symbols", "in the log"]:
         assert phrase in SYSTEM_PROMPT
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
-# sha256 of main's SYSTEM_PROMPT before contracts.md §5.4: with ARTEMIS_CONVERSATION off the
+# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last for how code is
+# explained aloud) as it is on Windows: with ARTEMIS_CONVERSATION off the
 # agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "fc08c24151eb7ce889b6459025678a8e90ae5494258f2bb2c3ee839a874664a5"
+MAIN_SYSTEM_PROMPT_SHA256 = "e3e412c80c62ed76cc5cb9f10c671485ed7127939332b50ba6e2bd14d9978dbe"
 
 
 def test_flag_off_system_prompt_is_mains():
     import hashlib
 
     assert system_prompt() == system_prompt(False) == SYSTEM_PROMPT
-    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == MAIN_SYSTEM_PROMPT_SHA256
+    # Off Windows only the desktop's name differs from main's prompt.
+    as_on_windows = SYSTEM_PROMPT.replace(f"developer on {DESKTOP}.", "developer on Windows.", 1)
+    assert hashlib.sha256(as_on_windows.encode()).hexdigest() == MAIN_SYSTEM_PROMPT_SHA256
     assert "How to read a spoken request" not in SYSTEM_PROMPT
+
+
+def test_system_prompt_names_the_desktop_it_runs_on():
+    import sys
+
+    expected = {"win32": "Windows", "darwin": "macOS"}.get(sys.platform, "Linux")
+    assert DESKTOP == expected
+    assert f"blind software developer on {expected}." in SYSTEM_PROMPT
+    assert ("Windows" in SYSTEM_PROMPT) == (sys.platform == "win32")
 
 
 def test_flag_on_system_prompt_adds_the_spoken_request_paragraph():

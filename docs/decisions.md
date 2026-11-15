@@ -3,6 +3,9 @@
 Goal for every choice: a blind developer completes the demo on Windows with a screen reader,
 keyboard and voice, with no sighted help, in one weekend.
 
+**Update, 2026-11-14:** the live demo runs on Ubuntu (§16). Everything below about Windows
+still holds for the Windows build, which comes later.
+
 **Decided by the team:** Windows-first native desktop app on a headless core. Desktop is Tauri 2 +
 React + TypeScript + Tailwind. Core is Python + FastAPI on a local API. No visual IDE.
 Everything below works inside that frame. Items marked **Proposed** become decided once the owner
@@ -27,6 +30,7 @@ agrees on the board; record any change here.
 | 13 | UI components | Semantic HTML first; React Aria for dialogs/listboxes; Tailwind for styling only | Proposed | Jun |
 | 14 | Security scanning | Bandit (pure Python), run before every write and run approval. Semgrep: not implemented; revisit after the MVP | Proposed | David |
 | 15 | Windows UI Automation | Not needed for the MVP (WebView2 already exposes UIA to NVDA); revisit for inspecting native apps | Deferred | Jun |
+| 16 | Ubuntu demo (2026-11-14) | Demo on Ubuntu 24.04 + GNOME 46 (Wayland): Jun's GNOME Shell island, wake word, Orca, ElevenLabs speech; Windows code kept for later | Decided | David |
 
 The confirmed MVP is "create a Python program that prints Hello World, run it, hear the result".
 The architecture, risks and build order are in [`architecture.md`](architecture.md); the API is in
@@ -146,7 +150,7 @@ an empty placeholder).
 |---|---|---|
 | `ARTEMIS_VOICE_ENGINE` | `elevenlabs` | Artemis's voice: `elevenlabs`, `nvda` or `sapi` (the last two keep NVDA first) |
 | `ELEVENLABS_API_KEY` | unset | The API key. Without it, NVDA or SAPI is used |
-| `ARTEMIS_ELEVEN_VOICE_ID` | `fPIfC3elMLbN9tNwMXkw` | The voice. Defaults to Artemis's own voice (chosen by Avery); set it to use another |
+| `ARTEMIS_ELEVEN_VOICE_ID` | `SAxJUlDKRc79XAyeWyMu` | The voice. Defaults to Artemis's own voice, Morgan (Deep, Powerful, and Confident), chosen by Yaovi; set it to use another |
 | `ARTEMIS_ELEVEN_MODEL` | `eleven_flash_v2_5` | The model |
 | `ARTEMIS_ELEVEN_SPEED` | `1.0` | Starting speed, clamped to 0.7..1.2 |
 | `ARTEMIS_ELEVEN_STABILITY` | `0.5` | Voice stability, 0..1 |
@@ -268,3 +272,36 @@ finding blocks the run until the user explicitly approves it.
   arrives.
 - No network tool, no install tool. The model never sees `.env`. The core binds to loopback only
   and requires the per-launch token.
+
+## 16. Ubuntu demo (decided by David, 2026-11-14)
+
+The live demo moved from Windows to Ubuntu: it runs on David's laptop. **Avery leads the transition**
+(David, 2026-11-14). Avery sets its order and priorities, assigns its tasks and OKs file handoffs
+inside it. David still merges to `main` and runs the Ubuntu hardware QA on his laptop. This adds an Ubuntu target
+and replaces none of the sections above. The Windows code (Tauri client, NVDA and SAPI speech,
+PowerShell launchers) stays in the repo for the Windows build that comes later.
+
+| Item | Ubuntu pick | Windows (unchanged) |
+|---|---|---|
+| Demo machine | Ubuntu 24.04, GNOME Shell 46, Wayland (David's laptop) | Windows 11 |
+| UI | Jun's GNOME Shell extension at `686f157` (`client/prototypes/water-desktop` on `client/desktop-island`): a small notch at the top edge, where only Settings expands. The typed-request panel stays as the fallback | Tauri 2 app (§1) |
+| Starting a request | Wake word, hands-free ("Hey Artemis"); push-to-talk stays | Global push-to-talk (§6) |
+| Spoken output | ElevenLabs (#129; David confirmed 2026-11-14, replacing the earlier "Firefly" placeholder). When ElevenLabs is unreachable or has no key, an offline Linux voice speaks instead. Spoken text goes to ElevenLabs; #129 redacts it before sending. Yaovi builds the Linux side | NVDA controller, SAPI fallback (§5) |
+| Screen reader | Orca | NVDA (§2) |
+| Launcher | `infra/start.sh` + `infra/setup-ubuntu.sh` (Avery) | `infra/start.ps1` (§3) |
+
+**Runtime shape on Ubuntu.** The core is the same process on `127.0.0.1` with a per-launch token
+(contracts.md §6). The launcher writes the core's address and token to a file under
+`$XDG_RUNTIME_DIR` with mode `0600`, and the extension reads it from there. `$XDG_RUNTIME_DIR`
+belongs to the logged-in user and is cleared at logout, so the token never goes on a command line
+or into a file other users can read. The extension talks to the core with the same HTTP `POST`
+commands and SSE event stream as the Tauri client (§12). Approvals open in a GNOME Shell modal
+dialog that keeps the Tauri dialog's Enter guard (`client/src/ApprovalDialog.tsx`): Escape
+rejects; on a scan-blocked action focus starts on Reject, plain Enter can't approve, and only
+Shift+Enter on the focused Approve button overrides (a held, repeating key doesn't count). A
+voice "yes" still approves nothing.
+
+**What the core already does on Linux** (David's lane, checked on the laptop): the agent's system
+prompt names the desktop it runs on; the path policy reads a backslash as a separator and refuses
+names Windows can't hold, so a project stays portable; a symlinked `~/ArtemisProjects` works, and
+links inside a project are still never followed. Open items for other owners are on the board.

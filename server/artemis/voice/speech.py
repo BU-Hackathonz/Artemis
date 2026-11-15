@@ -246,7 +246,7 @@ CACHED_LINES = frozenset({
     "Still working.",
 })
 PLACEHOLDER_VOICE = "<PASTE_VOICE_ID>"  # what the setup docs show; treated as unset
-DEFAULT_VOICE_ID = "fPIfC3elMLbN9tNwMXkw"  # Artemis's voice, chosen by Avery; ARTEMIS_ELEVEN_VOICE_ID overrides it
+DEFAULT_VOICE_ID = "SAxJUlDKRc79XAyeWyMu"  # Morgan (Deep, Powerful, and Confident), chosen by Yaovi; ARTEMIS_ELEVEN_VOICE_ID overrides it
 
 
 def _env_float(name: str, default: float, low: float | None = None, high: float | None = None) -> float:

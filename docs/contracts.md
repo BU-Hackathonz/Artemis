@@ -354,6 +354,20 @@ No earcon plays while the voice reports `listening`, and the flag is read once a
 flag off, nothing plays. The voice `stub` never fails on these cues: `earcons.play` returns 0 when
 there is no output device, and the run goes on.
 
+### 5.6 Wake word (opt-in: `ARTEMIS_LISTEN_MODE=wake`)
+
+"Hey Artemis, <request>" in one breath, or "Hey Artemis", a beep, then the request within 8 s.
+The request is handled exactly like a push-to-talk transcript: `transcript.final`, then a task.
+It starts nothing that typing couldn't, and every write and run still needs a keyboard approval.
+- Artemis doesn't hear itself: microphone audio is dropped unheard while any of its speakers is
+  busy (ElevenLabs downloading or playing, SAPI speaking, Artemis's NVDA estimate), for 0.4 s
+  after, and while push-to-talk owns the microphone. NVDA reading the screen is invisible to
+  Artemis, so use a headset when NVDA speaks through the laptop speakers.
+- Speech that doesn't start with the wake phrase is never kept or logged; only its word count is.
+- `voice.activity` is `listening` from a bare "Hey Artemis" until the request or the window's end,
+  never while it is only waiting for the phrase.
+- Push-to-talk keeps working alongside. Without the variable nothing changes.
+
 ## 6. Launcher and launch token (decided 2026-11-14)
 
 **`infra/start.ps1` (Avery)**

@@ -118,3 +118,35 @@ async def test_a_new_session_hears_the_current_state_only_when_busy(tmp_path):
         sid = r.json()["session_id"]
         events = [e for e in core.sessions[sid].bus.history if e.type == "voice.activity"]
         assert [(e.data["state"], e.data["engine"]) for e in events][:1] == [("speaking", "sapi")]
+
+
+class ArmedWake:
+    def __init__(self):
+        self.armed = False
+
+    def stop(self):
+        pass
+
+
+async def test_wake_armed_is_listening_and_a_wake_request_becomes_a_task(tmp_path):
+    announcer = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False, eleven=Eleven())
+    core = make_core(Voice(announcer), tmp_path)
+    async with serve(core) as client:
+        sid = (await client.post("/sessions", headers={"Authorization": f"Bearer {TOKEN}"})).json()["session_id"]
+        core.wake = ArmedWake()
+        core.wake.armed = True  # "Hey Artemis" was heard on its own
+        await wait_until(lambda: core.activity == ("listening", None))
+        core.wake.armed = False
+        await wait_until(lambda: core.activity == ("idle", None))
+        core.wake_request("create a Python program that prints Hello World")
+        session = core.sessions[sid]
+        await wait_until(lambda: any(e.type == "transcript.final" for e in session.bus.history))
+        heard = [e for e in session.bus.history if e.type == "transcript.final"][0]
+        assert heard.data["text"] == "create a Python program that prints Hello World"
+        await wait_until(lambda: any(e.type == "task.state" for e in session.bus.history))
+
+
+def test_start_wake_without_whisper_keeps_push_to_talk(tmp_path, caplog):
+    core = make_core(Voice(Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False)), tmp_path)
+    core.start_wake()  # the fake voice has no _transcribe, like the stub voice
+    assert core.wake is None and "needs the Whisper voice" in caplog.text
