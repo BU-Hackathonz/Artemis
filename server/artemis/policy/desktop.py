@@ -715,7 +715,7 @@ class DesktopTools:
         return any(real.is_relative_to(p.resolve()) for p in places)
 
     async def _open_app(self, task_id: str, a: OpenAppArgs) -> dict:
-        found = _find_app_file(a.app)
+        found = _lookup(a.app)
         if found is None:
             raise self._tool_error("not_found", f"I couldn't find an app called {a.app}.")
         app_id, name = found[0].name, found[1]
@@ -737,7 +737,7 @@ class DesktopTools:
         return {"opened": name, "app_id": app_id}
 
     async def _open_path(self, task_id: str, a: OpenPathArgs) -> dict:
-        found = _find_app_file(a.with_app) if a.with_app else None
+        found = _lookup(a.with_app) if a.with_app else None
         if a.with_app and found is None:
             self._openable(a.path)  # a program is refused whichever app was named, before the app's absence
             raise self._tool_error("not_found", f"I couldn't find an app called {a.with_app}.")

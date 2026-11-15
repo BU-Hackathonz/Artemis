@@ -127,13 +127,14 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "open_app": (
         "Open an installed app on the developer's desktop, by name (\"VS Code\", \"Terminal\", "
-        "\"Files\") or desktop id. The developer approves it first."
+        "\"Files\") or desktop id. It opens right away; only a terminal or a script runner asks the developer first."
     ),
     "open_path": (
         "Open a file or folder in the developer's home folder, in its default app or in the app "
         "you name in with_app (null for the default). A relative path is in the current project. "
-        "Script files such as .py are refused, so this does not open Python files in an editor. "
-        "The developer approves it first."
+        "To show code you wrote, pass with_app \"VS Code\" (or \"Text Editor\"): code files open in an editor, "
+        "while with no app named, programs and scripts are refused. It opens right away inside the developer's "
+        "usual folders and the projects folder; elsewhere the developer approves it first."
     ),
     "read_path": (
         "Read a text file anywhere in the developer's home folder, after their approval. Returns "
