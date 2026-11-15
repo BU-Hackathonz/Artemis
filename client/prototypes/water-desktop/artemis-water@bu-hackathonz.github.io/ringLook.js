@@ -6,9 +6,9 @@ const LOOKS = {
     idle: {tint: [1, 1, 1, 0], spin: 1, glow: 0},
     listening: {tint: [0.35, 0.85, 1.0, 0.35], spin: 1.5, glow: 0.3},
     thinking: {tint: [0.85, 0.6, 1.0, 0.3], spin: 3, glow: 0.45},
-    editing: {tint: [0.55, 1.0, 0.6, 0.35], spin: 2.2, glow: 0.4},
-    running: {tint: [1.0, 0.8, 0.35, 0.35], spin: 2.6, glow: 0.42},
-    speaking: {tint: [0.5, 0.75, 1.0, 0.3], spin: 1.8, glow: 0.38},
+    editing: {tint: [1.0, 0.78, 0.25, 0.35], spin: 2.2, glow: 0.4},
+    running: {tint: [0.2, 0.9, 0.8, 0.35], spin: 2.6, glow: 0.42},
+    speaking: {tint: [1.0, 0.5, 0.75, 0.3], spin: 1.8, glow: 0.38},
     done: {tint: [0.4, 1.0, 0.55, 0.4], spin: 1.0, glow: 0.5},
     error: {tint: [1.0, 0.35, 0.35, 0.4], spin: 0.8, glow: 0.5},
 };
