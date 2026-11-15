@@ -33,7 +33,7 @@
     <div class="page-head">
       <p class="eyebrow">How it works</p>
       <h1>How a request flows</h1>
-      <p class="lede">From the moment you say &ldquo;Hey Artemis&rdquo; to the moment you hear the result, every step is spoken, and nothing changes on disk without your keypress.</p>
+      <p class="lede">From the moment you say &ldquo;Hey Artemis&rdquo; to the moment you hear the result, every step is spoken, and nothing changes on disk without your approval.</p>
     </div>
 
     <section class="block" aria-labelledby="flow-title">
@@ -42,7 +42,7 @@
         <li class="step"><div><span class="k">Speak or type</span><h3>You say &ldquo;Hey Artemis&rdquo; and talk.</h3><p>Artemis hears its name, plays a short tone and the notch at the top of the screen shows it is listening. Say the request in the same breath or right after. Prefer keys? Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app, talk, and release. Either way, speech is transcribed on your own computer.</p></div></li>
         <li class="step"><div><span class="k">Read back</span><h3>Artemis says what it heard.</h3><p>"Heard: create a Python program that prints Hello World." The text also lands in the editable request field, so you can cancel, fix a misheard word and send it again.</p></div></li>
         <li class="step"><div><span class="k">Plan</span><h3>The agent plans the work.</h3><p>The coding agent decides which files to create or edit. It can only ask for actions through a fixed set of tools. It has no shell and no tool for installing packages.</p></div></li>
-        <li class="step"><div><span class="k">Review</span><h3>You review the exact change.</h3><p>Writes pause for approval. Artemis speaks a summary built from the real edit, such as "1 file, main.py, 1 line", and the full diff is there to step through. Enter approves, Escape rejects.</p></div></li>
+        <li class="step"><div><span class="k">Review</span><h3>You review the exact change.</h3><p>Writes pause for approval. Artemis speaks a summary built from the real edit, such as "1 file, main.py, 1 line", and the full diff is there to step through. Enter approves, Escape rejects. With conversation mode on, you can say &ldquo;approve&rdquo; once it has been read to you.</p></div></li>
         <li class="step"><div><span class="k">Scan</span><h3>The Python code is scanned.</h3><p>Python files are checked for security problems before each write or run (the launcher installs the scanner). A serious finding blocks it, and Artemis says what it found and where.</p></div></li>
         <li class="step"><div><span class="k">Run</span><h3>You approve the run.</h3><p>Runs need their own approval. The program starts with a fixed command, a time limit and none of Artemis's secrets.</p></div></li>
         <li class="step"><div><span class="k">Hear</span><h3>You hear the result.</h3><p>Success says what the program printed. Failure says the exit code and the final error line, word for word, then an explanation and a proposed fix.</p></div></li>
