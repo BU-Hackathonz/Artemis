@@ -22,6 +22,7 @@ visible to Artemis, so with NVDA through the laptop speakers use a headset (READ
 from __future__ import annotations
 
 import re
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable
@@ -286,6 +287,9 @@ class WakeListener:
         self._loop: asyncio.AbstractEventLoop | None = None
         make = loop_factory or WakeLoop
         self.wake = make(self._transcribe, speaking=self._muted)
+        # Health counters for the periodic core.log line (numbers only: no audio, no words).
+        self._health = {"frames": 0, "peak": 0.0, "muted": {}}
+        self._health_at = time.monotonic()
 
     @property
     def armed(self) -> bool:
@@ -293,18 +297,29 @@ class WakeListener:
 
     def _muted(self) -> bool:
         """Drop the microphone's audio: Artemis is talking, or push-to-talk owns the mic."""
+        reason = self._mute_reason()
+        if reason is not None:
+            counts = self._health["muted"]
+            counts[reason] = counts.get(reason, 0) + 1
+        return reason is not None
+
+    def _mute_reason(self) -> str | None:
         voice = self.voice
-        if getattr(voice, "busy_listening", getattr(voice, "listening", False)) or getattr(voice, "transcribing", False):
-            return True
+        if getattr(voice, "busy_listening", getattr(voice, "listening", False)):
+            return "push-to-talk"
+        if getattr(voice, "transcribing", False):
+            return "transcribing"
         announcer = getattr(voice, "announcer", None)
         if announcer is None:
-            return False
+            return None
         try:
             if announcer.speaking_engine() is not None:
-                return True
-            return bool(announcer.current().busy())  # a queued or downloading line is about to be heard
+                return "speaking"
+            if announcer.current().busy():
+                return "speech queued"  # a queued or downloading line is about to be heard
+            return None
         except Exception:
-            return True  # can't tell: safer not to listen than to hear ourselves
+            return "speech unknown"  # can't tell: safer not to listen than to hear ourselves
 
     def _transcribe(self, audio):
         return self.voice._transcribe(audio)
@@ -341,6 +356,7 @@ class WakeListener:
                 frame = self._frames.get(timeout=0.2)
             except queue.Empty:
                 continue
+            self._note(frame)
             try:
                 event = self.wake.feed(frame)
             except Exception as e:  # one bad utterance must not end hands-free listening
@@ -349,6 +365,26 @@ class WakeListener:
             if event is None:
                 continue
             self._handle(event)
+
+    HEALTH_S = 30.0  # how often core.log gets the wake word's health line
+
+    def _note(self, frame) -> None:
+        """Count the frame, and every HEALTH_S log one line saying whether the wake word can hear: the mic's
+        loudest level, how many frames were muted and why, and the loop's counts. Numbers only."""
+        h = self._health
+        h["frames"] += 1
+        h["peak"] = max(h["peak"], rms(frame))
+        now = time.monotonic()
+        if now - self._health_at < self.HEALTH_S:
+            return
+        stats = getattr(self.wake, "stats", None)
+        muted = ", ".join(f"{k} {v}" for k, v in sorted(h["muted"].items())) or "none"
+        log.warning("Wake word: %d frames in %.0f s, loudest %.4f (speech needs about %.4f), muted: %s; "
+                    "utterances %d, wakes %d, ignored %d",
+                    h["frames"], now - self._health_at, h["peak"], getattr(getattr(self.wake, "segmenter", None), "threshold", 0.0),
+                    muted, getattr(stats, "utterances", 0), getattr(stats, "wakes", 0), getattr(stats, "ignored", 0))
+        self._health = {"frames": 0, "peak": 0.0, "muted": {}}
+        self._health_at = now
 
     def _handle(self, event: Event) -> None:
         if event.kind == "wake":
