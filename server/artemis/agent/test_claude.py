@@ -503,7 +503,7 @@ def test_tool_schemas_are_strict(tmp_path):
         assert definition["strict"] is True and definition["description"]
         check(definition["input_schema"])
     names = [t["name"] for t in tools]
-    desktop = ["open_app", "open_path", "read_path", "run_command", "type_text", "press_keys"]
+    desktop = ["open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "publish_github"]
     assert names == [
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
         "inspect_page", "scan_project",

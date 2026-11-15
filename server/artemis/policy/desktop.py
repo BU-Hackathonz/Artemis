@@ -74,7 +74,7 @@ TOOL_ACTIONS = {
     "create_project": "think", "open_project": "think", "list_files": "read", "read_file": "read",
     "read_path": "read", "inspect_page": "read", "scan_project": "read", "write_files": "write",
     "edit_file": "write", "run_program": "run", "run_command": "run", "open_app": "open",
-    "open_path": "open", "type_text": "type", "press_keys": "type",
+    "open_path": "open", "type_text": "type", "press_keys": "type", "publish_github": "run",
 }
 # Where the ring flies for each acting tool, when the call itself names no more (the app, the window):
 # the editor, the terminal, the browser or the file. Every acting tool cues, with or without a plan.
@@ -86,7 +86,8 @@ TOOL_TARGETS = {
 # Tools that change something or reach outside the project: the plan comes first (§10).
 # Opening an app or one of the developer's own files is not here: "open VS Code" must just open it
 # (it asks nothing and changes nothing), not bounce off plan_required first.
-NEEDS_PLAN = {"write_files", "edit_file", "run_program", "run_command", "read_path", "type_text", "press_keys"}
+NEEDS_PLAN = {"write_files", "edit_file", "run_program", "run_command", "read_path", "type_text", "press_keys",
+              "publish_github"}
 
 # Opening one of these would run it, not open it.
 _RUNNABLE_SUFFIXES = {".desktop", ".sh", ".bash", ".zsh", ".appimage", ".run", ".jar", ".bin",
@@ -1111,3 +1112,112 @@ class DesktopTools:
             raise PathRejected(f"{a.keys} opens a launcher or a shell, so I don't press it.")
         paste = " (this pastes the clipboard, which I can't show)" if _pastes(a.keys) else ""
         return await self._type_into(task_id, "keys", a.keys, f"Press {a.keys.replace('+', ' ')}{paste}")
+
+
+# ----- publishing to GitHub (contracts.md §9, Proposed) -----
+
+PUBLISH_TIMEOUT_S = 60
+MAX_PUBLISH_FILES = 200
+
+
+def _publish_env() -> dict[str, str]:
+    """gh keeps its login in the GNOME keyring, so it needs the session bus; nothing else of ours."""
+    return desktop_env(for_command=False)
+
+
+async def _git(args: list[str], cwd: Path, env: dict[str, str], timeout: int = PUBLISH_TIMEOUT_S) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *args, cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT, env=env, start_new_session=True)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return 124, "timed out"
+    return proc.returncode, out.decode(errors="replace")[-2000:]
+
+
+def _publishable(root: Path) -> list[Path]:
+    """The project's files that would be pushed: what project_files lists (never .env or .git)."""
+    from .paths import project_files
+    return [root / rel for rel in project_files(root)][: MAX_PUBLISH_FILES + 1]
+
+
+def _secret_findings(files: list[Path], root: Path) -> list[str]:
+    """Files that look like they hold a secret: they never leave the laptop."""
+    from .redact import redact
+    bad = []
+    for f in files:
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if redact(text) != text or f.name.lower() in {"id_rsa", "id_ed25519", "credentials", "secrets.json"}:
+            bad.append(f.relative_to(root).as_posix())
+    return bad
+
+
+class GithubTools:
+    """publish_github, as a ToolGateway method (mixed in next to DesktopTools)."""
+
+    async def _publish_github(self, task_id: str, a) -> dict:
+        project = self._require_project()
+        root = Path(project.root)
+        if not root.is_dir():
+            raise self._tool_error("not_found", "The project has no files yet. Write them first, then publish.")
+        files = _publishable(root)
+        if not files:
+            raise self._tool_error("not_found", "The project has no files to publish yet.")
+        if len(files) > MAX_PUBLISH_FILES:
+            raise self._tool_error("invalid_args", f"The project has more than {MAX_PUBLISH_FILES} files, which is too many to publish this way.")
+        secrets = _secret_findings(files, root)
+        if secrets:
+            raise PathRejected("I won't publish this: " + ", ".join(secrets[:3]) + " looks like it holds a key or a password. Remove it first.")
+        env = _publish_env()
+        code, who = await _git(["gh", "api", "user", "--jq", ".login"], root, env, 20)
+        login = who.strip()
+        if code != 0 or not login or not all(c.isalnum() or c == "-" for c in login):
+            raise self._tool_error("tool_failed", "GitHub isn't signed in on this computer. Run gh auth login, then try again.")
+        full = f"{login}/{a.repo}"
+        names = [f.relative_to(root).as_posix() for f in files]
+
+        def spec() -> DesktopSpec:
+            now = _publishable(root)
+            digest = hashlib.sha256()
+            for f in now:
+                digest.update(f.relative_to(root).as_posix().encode() + b"\0" + f.read_bytes() + b"\0")
+            return DesktopSpec(action="publish_github", target=full, text="public" if a.public else "private",
+                               sha256=digest.hexdigest())
+
+        shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+        findings = []
+        if a.public:
+            findings.append(Finding(rule="publish-public", severity="high", path="repository", line=1,
+                                    message="This makes the code public: anyone on the internet can see it."))
+        await self._approve_desktop(
+            task_id, "publish", spec(),
+            f"Publish {project.slug} to GitHub as {'a public' if a.public else 'a private'} repository, {full}, "
+            f"with {len(names)} file{'s' if len(names) != 1 else ''}: {shown}.",
+            "Nothing was published.", findings=findings, still=spec)
+        await self._cue(task_id, "publish_github", "browser")
+        await self._state(task_id, "running", "Publishing to GitHub.")
+        try:
+            steps = []
+            if not (root / ".git").exists():
+                steps.append(["git", "init", "-q", "-b", "main"])
+            steps += [["git", "add", "--", *names], ["git", "commit", "-q", "-m", "First version"]]
+            for step in steps:
+                code, out = await _git(step, root, env)
+                if code != 0 and not (step[1] == "commit" and "nothing to commit" in out):
+                    raise self._tool_error("tool_failed", f"git {step[1]} failed: {out.strip().splitlines()[-1] if out.strip() else code}.")
+            create = ["gh", "repo", "create", full, "--public" if a.public else "--private", "--source", ".", "--remote", "origin", "--push"]
+            if a.description:
+                create += ["--description", a.description]
+            code, out = await _git(create, root, env)
+            if code != 0:
+                raise self._tool_error("tool_failed", f"GitHub said: {out.strip().splitlines()[-1] if out.strip() else code}.")
+        finally:
+            await self._state(task_id, "working")
+        url = f"https://github.com/{full}"
+        await self._say(task_id, f"Published to GitHub as {full}, {'public' if a.public else 'private'}.", "normal")
+        return {"repository": full, "url": url, "visibility": "public" if a.public else "private", "files": len(names)}

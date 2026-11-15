@@ -330,13 +330,13 @@ def test_no_destructive_tool_exists():
     assert set(RULES) == {
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
         "inspect_page", "scan_project", "plan",
-        "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys",
+        "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "publish_github",
     }
     # Everything that changes the disk, starts a process, reads outside the project or types needs
     # the developer's approval (contracts.md §9).
     assert {name for name, rule in RULES.items() if rule.needs_approval} == {
         "write_files", "run_program", "edit_file",
-        "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys",
+        "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "publish_github",
     }
 
 

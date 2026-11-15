@@ -615,6 +615,21 @@ The `op_id` rules (point 7):
 
 Opening apps and paths runs in the core (`gtk-launch`, `gio open`), with or without the island.
 
+### 9.1 Publishing to GitHub (Proposed (David))
+
+`publish_github {repo, public, description?}` publishes the current project as a new repository in
+the developer's own GitHub account (`gh api user`). Approval `kind` is `publish`, and it is decided
+on the keyboard only, never by voice (§5.4).
+- The dialog names the repository (`owner/repo`), private or public, and every file.
+- `public: true` is a high-severity finding, so it needs the override key.
+- Only `project_files` is committed, never `.env` or `.git`. A file that looks like it holds a key or
+  password stops the publish before anyone is asked.
+- The hash covers the repository, the visibility and every file's name and content. A change during
+  the decision invalidates the approval.
+- On approval the gate runs `git init` if needed, `git add` of those files, one commit ("First
+  version"), then `gh repo create owner/repo --private|--public --source . --remote origin --push`.
+  `gh` keeps its login in the keyring, so it gets the session environment, but no Artemis keys.
+
 ## 10. The plan and the ring (Proposed (David), for Avery to merge)
 
 - **The plan comes first.** For each request the agent calls `plan {goal, steps: [{say, action, target?}]}`

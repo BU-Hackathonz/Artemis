@@ -204,6 +204,19 @@ class RunCommandArgs(_Args):
     )
 
 
+class PublishGithubArgs(_Args):
+    """Publish the current project as a new GitHub repository (contracts.md §9, Proposed): git init,
+    one commit, gh repo create --push. Keyboard approval only; public needs the override key."""
+
+    repo: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$",
+                      description="The new repository's name only, for example tip-calculator. It is always created in "
+                                  "the developer's own GitHub account.")
+    public: bool = Field(default=False, description="true only when the developer asked for a public repository. "
+                                                    "Private otherwise.")
+    description: str | None = Field(default=None, max_length=200,
+                                    description="One short sentence for the repository's description, or null.")
+
+
 class TypeTextArgs(_Args):
     text: str = Field(
         min_length=1,
@@ -264,6 +277,7 @@ DESKTOP_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "run_command": RunCommandArgs,
     "type_text": TypeTextArgs,
     "press_keys": PressKeysArgs,
+    "publish_github": PublishGithubArgs,
 }
 
 PLAN_ARGS: dict[str, type[BaseModel]] = {"plan": PlanArgs}
