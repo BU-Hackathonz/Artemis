@@ -136,7 +136,48 @@ def test_speechlint_runs_on_every_answer():
     # for_speech turns a markdown heading into a run-on; the answer check puts the full stop back.
     assert for_speech("## Result\nIt worked.") == "Result It worked."
     assert spoken_answer("## Result\nIt worked.") == "Result. It worked."
-    assert run_ons(spoken_answer("No input device Check the microphone.")) == []
+    assert run_ons(spoken_answer("## No input device\nCheck the microphone.")) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Should I answer Yes or No?",
+        "Press Escape to stop.",
+        "Hold Shift Enter to add a line.",
+        "Hold Ctrl Enter to send.",
+        "The status is Done.",
+        "No input device Check the microphone.",  # a real run-on, but not from markdown: only logged
+    ],
+)
+def test_run_ons_not_made_by_markdown_get_no_stop(answer, caplog):
+    with caplog.at_level("INFO", logger="artemis.agent.speech_text"):
+        assert spoken_answer(answer) == answer
+    assert answer not in caplog.text  # counts and word positions only, never the text
+
+
+def test_a_logged_run_on_gives_its_word_position_only(caplog):
+    with caplog.at_level("INFO", logger="artemis.agent.speech_text"):
+        spoken_answer("The status is Done.")
+    assert "1 possible run-on(s)" in caplog.text and "[3]" in caplog.text
+    assert "status" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "markdown, spoken",
+    [
+        ("## Result\nIt worked.", "Result. It worked."),
+        ("# No input device\nCheck the microphone.", "No input device. Check the microphone."),
+        ("Done:\n- Try again\n- Use the mic", "Done: Try again. Use the mic."),
+        ("1. Press Escape\n2. Say Done", "Press Escape. Say Done."),
+        ("**Result**\n\nIt worked.", "Result. It worked."),
+        ("Heard nothing\n\nTry again.", "Heard nothing. Try again."),
+        ("## Result.\nIt worked.", "Result. It worked."),  # already punctuated: no double stop
+        ("This line wraps\nonto the next. Done.", "This line wraps onto the next. Done."),
+    ],
+)
+def test_stops_where_markdown_stripping_made_the_boundary(markdown, spoken):
+    assert spoken_answer(markdown) == spoken
 
 
 def test_say_shapes_answers_and_questions_but_keeps_the_log_whole():

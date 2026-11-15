@@ -38,7 +38,26 @@ def _inline(match: re.Match) -> str:
     return "a snippet"
 
 
-def for_speech(text: str) -> str:
+_MARK = "\x01"  # private: put in front of a line whose markdown marker for_speech removed
+_ENDS_SENTENCE = re.compile(r"[.!?\u2026:;,][\"')\]]*$")
+
+
+def _stops(text: str) -> str:
+    """Give a full stop to each line that stripping made the end of a sentence: a heading, a list item
+    or the last line of a paragraph with no punctuation of its own. A line that merely wraps is left."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        marked = line.startswith(_MARK)
+        line = line.removeprefix(_MARK).rstrip()
+        ends_paragraph = i + 1 < len(lines) and not lines[i + 1].strip()
+        if line and (marked or ends_paragraph) and not _ENDS_SENTENCE.search(line):
+            line += "."
+        lines[i] = line
+    return "\n".join(lines)
+
+
+def for_speech(text: str, stops: bool = False) -> str:
+    """Plain text for the ear. With stops=True a heading, a list item and a paragraph end get a full stop."""
     text = _BLOCK.sub(f" {_IN_LOG} ", text)
     # One pointer is enough when several blocks follow each other.
     text = re.sub(rf"(?:{re.escape(_IN_LOG)}\s*){{2,}}", f"{_IN_LOG} ", text)
@@ -46,13 +65,15 @@ def for_speech(text: str) -> str:
     text = _IMAGE.sub(r"\1", text)
     text = _LINK.sub(r"\1", text)
     text = _RULE.sub("", text)
-    text = _HEADING.sub("", text)
+    text = _HEADING.sub(_MARK if stops else "", text)
     text = _QUOTE.sub("", text)
-    text = _BULLET.sub("", text)
+    text = _BULLET.sub(_MARK if stops else "", text)
     for _ in range(3):  # nested emphasis such as **bold with *italic* inside**
         text = _EMPHASIS.sub(r"\2", text)
     text = _UNDERSCORE.sub(r"\2", text)
     text = text.replace("`", "")
+    if stops:
+        text = _stops(text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -79,15 +100,26 @@ def _sentences(text: str) -> list[str]:
     return [s for s in _SENTENCE.split(text) if s]
 
 
+def _log_run_ons(spoken: str) -> None:
+    """speechlint hits that stripping did not cause are only counted: "Yes or No" and "press Escape" are
+    fine, so no stop is added. Log the word positions, never the text (it may hold the developer's code)."""
+    positions, cursor = [], 0
+    for hit in run_ons(spoken):
+        found = spoken.find(hit, cursor)
+        if found >= 0:
+            positions.append(len(spoken[:found].split()) + 1)
+            cursor = found + len(hit)
+    if positions:
+        log.info("Spoken answer has %d possible run-on(s), left as is, at word(s) %s", len(positions), positions)
+
+
 def spoken_answer(text: str) -> str:
     """What the developer hears for a model answer or question. The log keeps the original."""
-    spoken = for_speech(text)
+    spoken = for_speech(text, stops=True)
     spoken = " ".join(w if "://" in w else _PATH.sub(_file_name, w) for w in spoken.split(" "))
     spoken = _CALL.sub(r"\1", spoken)
     spoken = _SYMBOLS.sub(" ", spoken)
-    for hit in run_ons(spoken):  # speechlint: a missing full stop reads as one run-on sentence
-        word, starter = hit.split(" ")
-        spoken = re.sub(rf"\b{re.escape(word)} {starter}\b", f"{word}. {starter}", spoken, count=1)
+    _log_run_ons(spoken)
     spoken = re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"\s+", " ", spoken)).strip()
     sentences = _sentences(spoken)
     if len(sentences) > MAX_SENTENCES:
