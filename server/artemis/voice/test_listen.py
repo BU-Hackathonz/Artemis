@@ -436,3 +436,77 @@ def test_missing_microphone_raises_voice_error():
         with pytest.raises(VoiceError, match="Microphone not available"):
             asyncio.run(v.start_listening())
     assert not v.listening
+
+
+# ----- working cue (ARTEMIS_WORKING_CUE=earcon; the core's "Still working." heartbeat) -----
+
+
+class Speaking:
+    name = "sapi"
+
+    def __init__(self, busy=False):
+        self.is_busy, self.said = busy, []
+
+    def available(self):
+        return True
+
+    def speak(self, text, interrupt):
+        self.said.append(text)
+
+    def cancel(self):
+        pass
+
+    def busy(self):
+        return self.is_busy
+
+
+def working_voice(on=True, busy=False, sapi_up=True):
+    from artemis.voice.speech import Announcer
+
+    sapi = Speaking(busy)
+    sapi.available = lambda: sapi_up
+    played = []
+    v = WhisperVoice(announcer=Announcer(nvda=Speaking(), sapi=sapi, is_nvda_running=lambda: False),
+                     model=FakeModel("x"), stream_factory=lambda cb: FakeStream(cb, speech_like(1)),
+                     earcon=lambda name: (played.append(name), 0.0)[1], working_earcon=on)
+    return v, played, sapi
+
+
+def test_working_cue_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("ARTEMIS_WORKING_CUE", raising=False)
+    v, _, _ = working_voice(on=None)
+    assert v.working_cue is None  # the core keeps saying "Still working."
+    monkeypatch.setenv("ARTEMIS_WORKING_CUE", "earcon")
+    v, _, _ = working_voice(on=None)
+    assert callable(v.working_cue)
+
+
+def test_working_cue_ticks_but_never_over_speech_or_into_the_mic():
+    v, played, sapi = working_voice()
+    v.working_cue()
+    assert played == ["working"]
+    sapi.is_busy = True
+    v.working_cue()  # Artemis is talking: skip this beat
+    sapi.is_busy = False
+    asyncio.run(v.start_listening())
+    v.working_cue()  # the mic is open: a tick would be transcribed
+    asyncio.run(v.stop_listening("cr_1"))
+    assert played == ["working", "listening", "stopped"]  # one tick; only push-to-talk's own cues after it
+
+
+def test_no_working_tick_when_no_voice_can_speak():
+    v, _, _ = working_voice(sapi_up=False)
+    assert v.working_cue is None  # voice_ready is false: the live region needs the words
+
+
+def test_core_heartbeat_plays_the_tick_instead_of_the_line(tmp_path):
+    from artemis.core.session import STILL_WORKING, Session
+
+    for on in (False, True):
+        v, played, sapi = working_voice(on=on)
+        session = Session("ses_t", voice=v, runner=None, agent=None, projects_dir=tmp_path)
+        asyncio.run(session._still_working("tsk_1"))
+        if on:
+            assert played == ["working"] and STILL_WORKING not in sapi.said
+        else:
+            assert played == [] and sapi.said == [STILL_WORKING]
