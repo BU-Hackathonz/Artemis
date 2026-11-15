@@ -187,7 +187,8 @@ def unified_diff(path: str, old: str | None, new: str) -> tuple[str, int, int]:
 
 
 # Desktop tools send their ring cue themselves, after the approval, when the action really starts.
-_SELF_CUED = {"open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "plan"}
+_SELF_CUED = {"open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "plan",
+              "write_files", "edit_file", "run_program"}
 
 
 class ToolGateway(DesktopTools):
@@ -682,6 +683,7 @@ class ToolGateway(DesktopTools):
                 "The files changed twice while waiting for approval. Nothing was written.",
             )
 
+        await self._cue(task_id, "write_files", None)  # approved: the write really starts now
         # No await between the first and the last write, so a cancel can't split the batch.
         changes = []
         try:
@@ -809,6 +811,7 @@ class ToolGateway(DesktopTools):
                 "invalidated", f"{a.entry} changed twice while waiting for approval. {nothing}"
             )
 
+        await self._cue(task_id, "run_program", None)  # approved: the run really starts now
         await self._state(task_id, "running", f"Running {entry}.")
         try:
             result = await self._runner.run(project, entry, list(a.args), self._run_timeout_s)

@@ -228,9 +228,16 @@ def strict_schema(schema: Any) -> Any:
     return out
 
 
-def tool_definitions() -> list[dict]:
+# The core starts these with gtk-launch, gio and bash, which only a Linux desktop has: off Linux the
+# model is not offered them, so it never plans an action that can only fail.
+LINUX_ONLY_TOOLS = frozenset({"open_app", "open_path", "run_command"})
+
+
+def tool_definitions(platform: str | None = None) -> list[dict]:
     """One strict tool per entry in the policy table, generated from the same Pydantic models
-    the gateway validates against."""
+    the gateway validates against. Fixed per process (the platform does not change), so the
+    prompt cache still holds."""
+    on_linux = (platform or sys.platform).startswith("linux")
     return [
         {
             "name": name,
@@ -239,4 +246,5 @@ def tool_definitions() -> list[dict]:
             "input_schema": strict_schema(model.model_json_schema()),
         }
         for name, model in TOOL_ARGS.items()
+        if on_linux or name not in LINUX_ONLY_TOOLS
     ]

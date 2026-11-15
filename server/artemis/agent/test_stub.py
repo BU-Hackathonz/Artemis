@@ -28,16 +28,16 @@ def test_happy_path_event_order(tmp_path):
         "agent.plan",          # write main.py, then run it (contracts.md §10)
         "ring.cue",            # create_project: think
         "agent.message",       # Starting project hello-world.
-        "ring.cue",            # write_files: the plan's write step
         "task.state",          # awaiting_approval
         "approval.requested",  # write_files
         "approval.resolved",
+        "ring.cue",            # write_files: the plan's write step, once the developer approved
         "file.changed",
         "task.state",          # working
-        "ring.cue",            # run_program: the plan's run step
         "task.state",          # awaiting_approval
         "approval.requested",  # run_program
         "approval.resolved",
+        "ring.cue",            # run_program: the plan's run step, once approved
         "task.state",          # running
         "run.result",
         "task.state",          # working
