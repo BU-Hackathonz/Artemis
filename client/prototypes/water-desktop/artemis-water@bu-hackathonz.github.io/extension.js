@@ -332,6 +332,7 @@ export default class ArtemisWaterExtension extends Extension {
                 onMoved: () => this._afterLayout(() => { if (!this._agent?.awake && !this._homeTimer) this._agentGoHome(true); }),
             });
             this._agentGoHome(true);
+            this._watchRest();
         } else {
             this._addSphereButton();
         }
@@ -339,6 +340,45 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     // Fly back to the corner (not cancellable by commands), then rest.
+    // While the ring rests in the notch, keep it on its slot. At login the island is placed before the top
+    // bar has its height (David's laptop: panel 0, the pill at y -4, the ring 32 px above the notch once
+    // the bar appeared), and not every later layout change is announced. Once a second, cheap: it only
+    // compares two points, and moves the ring only when it is off by more than a pixel.
+    _watchRest() {
+        if (this._restTimer) GLib.source_remove(this._restTimer);
+        this._restTimer = GLib.timeout_add(GLib.PRIORITY_LOW, 1000, () => {
+            if (!this._island || !this._agent) { this._restTimer = 0; return GLib.SOURCE_REMOVE; }
+            if (!this._agent.awake && !this._homeTimer && !this._cue && !this._launch) {
+                const home = this._homePos();
+                if (Math.hypot(home.x - this._agent.x, home.y - this._agent.y) > 1) {
+                    this._agentGoHome(true);
+                    this._logRing('re-seated');
+                }
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    // Diagnostic (David's laptop: the ring rests above the notch): where the ring is, where its slot is
+    // and the pill's box, in stage px, to the journal. Numbers only, at most once a second.
+    _logRing(why) {
+        const now = GLib.get_monotonic_time();
+        if (!this._island || !this._agent || now - (this._ringLogAt ?? 0) < 1e6) return;
+        this._ringLogAt = now;
+        try {
+            const I = this._island, h = I.ringCenter();
+            const [tx, ty] = I._ring.get_transformed_position(), [tw, th] = I._ring.get_transformed_size();
+            const [px, py] = I._pill.get_position();
+            const b = I._ring.get_allocation_box();
+            console.log(`Artemis ring ${why}: agent ${Math.round(this._agent.x)},${Math.round(this._agent.y)} ` +
+                `slot ${Math.round(h.x)},${Math.round(h.y)} drawn ${Math.round(tx + tw / 2)},${Math.round(ty + th / 2)} ` +
+                `pill ${px},${py} ${I._pill.width}x${I._pill.height} ringbox ${b.x1},${b.y1} ${b.x2 - b.x1}x${b.y2 - b.y1} ` +
+                `panel ${Main.layoutManager.panelBox.height}`);
+        } catch (e) {
+            console.log(`Artemis ring ${why}: ${e.message}`);
+        }
+    }
+
     // Run fn once GNOME has laid the stage out again (Meta.later BEFORE_REDRAW), at most once per frame.
     _afterLayout(fn) {
         if (this._layoutLater) return;
@@ -355,7 +395,7 @@ export default class ArtemisWaterExtension extends Extension {
         if (!this._agent) return;
         const home = this._homePos();
         this._placeSphereButton(home);
-        if (snap) { Object.assign(this._agent, home); this._wake(); return; }
+        if (snap) { Object.assign(this._agent, home); this._wake(); this._logRing('snapped'); return; }
         if (this._homeTimer) GLib.source_remove(this._homeTimer);
         const from = {x: this._agent.x, y: this._agent.y};
         const dist = Math.hypot(home.x - from.x, home.y - from.y);
@@ -377,6 +417,7 @@ export default class ArtemisWaterExtension extends Extension {
                 this._homeTimer = 0;
                 this._agent.awake = false;
                 if (this._island) Object.assign(this._agent, this._homePos()); // the ring may have moved meanwhile
+                this._logRing('landed');
                 this._kick(0.5, -1.2); // lands with a squash and a wobble
                 return GLib.SOURCE_REMOVE;
             }
@@ -597,6 +638,8 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     _teardownAgentUI() {
+        if (this._restTimer) GLib.source_remove(this._restTimer);
+        this._restTimer = 0;
         this._island?.destroy();
         this._island = null;
         this._sphereMenu?.destroy();

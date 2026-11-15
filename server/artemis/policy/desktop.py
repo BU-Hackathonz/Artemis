@@ -1286,7 +1286,7 @@ class GithubTools:
         if not root.is_dir():
             raise self._tool_error("not_found", "The project has no files yet. Write them first, then publish.")
         env = _publish_env()
-        code, who = await _git(["gh", "api", "user", "--jq", '"\(.login) \(.id)"'], root, env, 20)
+        code, who = await _git(["gh", "api", "user", "--jq", r'"\(.login) \(.id)"'], root, env, 20)
         login, _, uid = who.strip().partition(" ")
         if code != 0 or not login or not all(c.isalnum() or c == "-" for c in login) or not uid.isdigit():
             raise self._tool_error("tool_failed", "GitHub isn't signed in on this computer. Run gh auth login, then try again.")
