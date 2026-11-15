@@ -817,3 +817,29 @@ def test_everyday_words_from_the_room_do_not_stop_artemis(said):
     from artemis.voice.wake import barge_request
     assert barge_request(said, "Created main.py, 1 line.") is None
     assert barge_request("Stop.", "Created main.py, 1 line.") == ""
+# ----- the phrase said again at the end of an utterance, inside the window -----
+
+
+def test_inside_the_window_speech_ending_in_the_phrase_re_arms_instead_of_becoming_a_task():
+    loop = WakeLoop(Script("Hey Artemis.", "No wait, I was talking to Sam. Hey Artemis.", "Open Google."))
+    events = feed(loop, quiet(1) + utterance(0.8) + utterance(2.5) + utterance())
+    assert [(e.kind, e.text) for e in events] == [("wake", ""), ("wake", ""), ("request", "Open Google.")]
+
+
+def test_inside_the_window_only_the_words_after_the_phrase_are_the_request():
+    loop = WakeLoop(Script("Hey Artemis.", "sorry about that, hey Artemis, open Google"))
+    events = feed(loop, quiet(1) + utterance(0.8) + utterance(2.5))
+    assert [(e.kind, e.text) for e in events] == [("wake", ""), ("request", "open Google")]
+
+
+def test_outside_the_window_the_phrase_at_the_end_still_wakes_nothing():
+    loop = WakeLoop(Script("I told Sam to say hey Artemis"))
+    events = feed(loop, quiet(1) + utterance(2.0))
+    assert [e.kind for e in events] == ["ignored"]
+
+
+def test_a_mid_sentence_a_is_not_a_greeting():
+    from artemis.voice.wake import wake_later
+    assert wake_later("we saw a Artemis demo") is None
+    assert wake_later("okay that's done. Hey Artemis.") == ""
+    assert wake_later("hey Artemis run it, hey Artemis open Google") == "open Google"
