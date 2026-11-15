@@ -83,3 +83,211 @@ def test_the_log_keeps_the_code(tmp_path):
     asyncio.run(say(emit, "tsk_1", JUN_SAMPLE))
     assert seen[0].data["text"] == JUN_SAMPLE  # the log, read with the screen reader
     assert "//" not in seen[0].announce.text  # what is spoken
+
+
+# ----- spoken_answer: what a model answer sounds like (measured on David's laptop, 2026-11-15) -----
+
+from artemis.agent.speech_text import MAX_SENTENCES, spoken_answer  # noqa: E402
+from artemis.voice.speechlint import run_ons  # noqa: E402
+
+# A real answer from the Celsius run: five sentences, 70 words, after the run had failed.
+CELSIUS_ANSWER = (
+    "I've made convert.py and it works. In my test run, 25 Celsius came out as 77 Fahrenheit and minus 40 "
+    "stayed minus 40. The program also skipped a word I put in on purpose, which is why it ended with exit "
+    "code 1. You give it one or more Celsius temperatures after the file name, and it prints one line for "
+    "each. With no temperatures, it shows a few examples."
+)
+
+
+def test_a_long_answer_is_cut_with_a_pointer_to_the_log():
+    spoken = spoken_answer(CELSIUS_ANSWER)
+    assert spoken.endswith("The rest is in the log.")
+    assert spoken.count(". ") + 1 == MAX_SENTENCES + 1  # four of its sentences, then the pointer
+    assert "With no temperatures" not in spoken
+
+
+def test_a_closing_question_is_never_cut():
+    spoken = spoken_answer("One. Two. Three. Four. Five. Should I fix it?")
+    assert spoken == "One. Two. Three. The rest is in the log. Should I fix it?"
+
+
+def test_a_short_answer_is_left_alone():
+    for text in ["main.py ran successfully. It printed: Hello, World!", "2 * 3 * 4 is 24.", "I made C++ notes."]:
+        assert spoken_answer(text) == text
+
+
+@pytest.mark.parametrize(
+    "answer, spoken",
+    [
+        ("The file is at ~/projects/hello-world/src/main.py now.", "The file is at main.py now."),
+        ("It opens src/ops.py and ./data/cfg.json.", "It opens ops.py and cfg.json."),
+        (r"Open C:\Users\me\a.py first.", "Open a.py first."),
+        ("25/40 passed and/or failed.", "25/40 passed and/or failed."),  # not paths
+        ("See https://example.com/a/b for more.", "See https://example.com/a/b for more."),
+        ("It checks if x == 5 && y -> z.", "It checks if x 5 y z."),
+        ("Call main() to run it.", "Call main to run it."),
+    ],
+)
+def test_paths_and_symbols_are_not_read_aloud(answer, spoken):
+    assert spoken_answer(answer) == spoken
+
+
+def test_speechlint_runs_on_every_answer():
+    # for_speech turns a markdown heading into a run-on; the answer check puts the full stop back.
+    assert for_speech("## Result\nIt worked.") == "Result It worked."
+    assert spoken_answer("## Result\nIt worked.") == "Result. It worked."
+    assert run_ons(spoken_answer("## No input device\nCheck the microphone.")) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Should I answer Yes or No?",
+        "Press Escape to stop.",
+        "Hold Shift Enter to add a line.",
+        "Hold Ctrl Enter to send.",
+        "The status is Done.",
+        "No input device Check the microphone.",  # a real run-on, but not from markdown: only logged
+    ],
+)
+def test_run_ons_not_made_by_markdown_get_no_stop(answer, caplog):
+    with caplog.at_level("INFO", logger="artemis.agent.speech_text"):
+        assert spoken_answer(answer) == answer
+    assert answer not in caplog.text  # counts and word positions only, never the text
+
+
+def test_a_logged_run_on_gives_its_word_position_only(caplog):
+    with caplog.at_level("INFO", logger="artemis.agent.speech_text"):
+        spoken_answer("The status is Done.")
+    assert "1 possible run-on(s)" in caplog.text and "[3]" in caplog.text
+    assert "status" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "markdown, spoken",
+    [
+        ("## Result\nIt worked.", "Result. It worked."),
+        ("# No input device\nCheck the microphone.", "No input device. Check the microphone."),
+        ("Done:\n- Try again\n- Use the mic", "Done: Try again. Use the mic."),
+        ("1. Press Escape\n2. Say Done", "Press Escape. Say Done."),
+        ("**Result**\n\nIt worked.", "Result. It worked."),
+        ("Heard nothing\n\nTry again.", "Heard nothing. Try again."),
+        ("## Result.\nIt worked.", "Result. It worked."),  # already punctuated: no double stop
+        ("This line wraps\nonto the next. Done.", "This line wraps onto the next. Done."),
+    ],
+)
+def test_stops_where_markdown_stripping_made_the_boundary(markdown, spoken):
+    assert spoken_answer(markdown) == spoken
+
+
+def test_say_shapes_answers_and_questions_but_keeps_the_log_whole():
+    import asyncio
+
+    from artemis.agent.base import say
+
+    seen = []
+
+    async def emit(draft):
+        seen.append(draft)
+
+    asyncio.run(say(emit, "tsk_1", CELSIUS_ANSWER))
+    asyncio.run(say(emit, "tsk_1", "## Note\nThe file is src/app.py. Should I run it?", "question"))
+    asyncio.run(say(emit, "tsk_1", "Reading src/app.py.", "progress"))
+    assert seen[0].data["text"] == CELSIUS_ANSWER and seen[0].announce.text.endswith("The rest is in the log.")
+    assert seen[1].announce.text == "Note. The file is app.py. Should I run it?"
+    assert seen[2].announce.text == "Reading src/app.py." and seen[2].announce.priority == "low"  # progress: markdown only
+
+
+@pytest.mark.parametrize(
+    "text,spoken",
+    [
+        # Symbols that carry meaning stay.
+        ("I wrote it in C# and F#.", "I wrote it in C# and F#."),
+        ("It costs $20 a month.", "It costs $20 a month."),
+        ("Mail user@example.com today.", "Mail user@example.com today."),
+        ("AT&T and R&D agree.", "AT&T and R&D agree."),
+        ("It takes ~5 minutes.", "It takes about 5 minutes."),
+        ("Read it; then run it.", "Read it. then run it."),
+        ("Done;", "Done."),
+        ("Done.;", "Done."),
+        # Noise symbols still go.
+        ("a == b and c -> d", "a b and c d"),
+        ("x && y", "x y"),
+        # Dates, lists and product names are not paths.
+        ("It is due 11/15/2026.", "It is due 11/15/2026."),
+        ("The date is 2026/11/15.", "The date is 2026/11/15."),
+        ("It uses HTML/CSS/JS.", "It uses HTML/CSS/JS."),
+        ("Permissions are read/write/execute.", "Permissions are read/write/execute."),
+        ("The stack is React/Next.js.", "The stack is React/Next.js."),
+        ("See github.com/BU-Hackathonz/Artemis now.", "See github.com/BU-Hackathonz/Artemis now."),
+        ("Score is 25/40 and/or more.", "Score is 25/40 and/or more."),
+        # Real paths still shorten.
+        ("Open ~/Artemis/server/main.py now.", "Open main.py now."),
+        ("Open ./src/app.tsx now.", "Open app.tsx now."),
+        ("Open ../lib/util.py now.", "Open util.py now."),
+        ("Open C:\\Users\\me\\notes.txt now.", "Open notes.txt now."),
+        ("Open /usr/local/bin now.", "Open bin now."),
+        ("Open src/app.tsx now.", "Open app.tsx now."),
+        ("Open server/artemis/agent/speech_text.py now.", "Open speech_text.py now."),
+    ],
+)
+def test_symbols_and_paths_keep_their_meaning(text, spoken):
+    from artemis.agent.speech_text import spoken_answer
+
+    assert spoken_answer(text) == spoken
+
+
+# ----- spoken answers: structure, tracebacks, emoji, abbreviations, questions -----
+
+from artemis.agent.speech_text import spoken_answer  # noqa: E402
+
+
+def test_headings_bullets_and_paragraphs_are_separate_sentences():
+    md = "## Summary\n\nHere is the fix:\n\n- Changed `add()` in `utils.py`\n- All tests pass\n\n1. First\n2. Second"
+    assert spoken_answer(md) == "Summary. Here is the fix: Changed add in utils.py. All tests pass. First. The rest is in the log."
+    # A hard-wrapped sentence is still one sentence.
+    assert spoken_answer("It reads the file\nand prints it.") == "It reads the file and prints it."
+
+
+def test_a_table_is_read_by_row_without_the_rule_line():
+    assert spoken_answer("| a | b |\n|---|---|\n| 1 | 2 |") == "a, b. 1, 2."
+
+
+def test_a_pasted_traceback_is_not_read_frame_by_frame():
+    text = 'It failed:\nTraceback (most recent call last):\n  File "main.py", line 3, in <module>\n    print(1/0)\nZeroDivisionError: division by zero\n\nGuard the divisor.'
+    spoken = spoken_answer(text)
+    assert "File" not in spoken and "module" not in spoken and "print" not in spoken
+    assert "ZeroDivisionError: division by zero." in spoken and spoken.endswith("Guard the divisor.")
+
+
+def test_emoji_are_not_spoken_and_an_answer_of_only_markers_is_not_empty():
+    assert spoken_answer("Great job! \U0001F389 All done ✅.") == "Great job! All done."
+    assert for_speech("\U0001F389") == ""
+
+
+def test_an_abbreviation_does_not_end_a_sentence_at_the_cut():
+    text = "One. Two. Three. See Dr. Smith about it. Then more. And more."
+    assert spoken_answer(text) == "One. Two. Three. See Dr. Smith about it. The rest is in the log."
+
+
+def test_a_question_before_a_closing_remark_survives_the_cut():
+    text = "One. Two. Three. Four. Should I run it? I will wait."
+    assert spoken_answer(text) == "One. Two. Three. The rest is in the log. Should I run it?"
+
+
+@pytest.mark.parametrize(
+    "text,spoken",
+    [
+        ("5 > 3 and x<=4.", "5 greater than 3 and x at most 4."),
+        ("Go to https://a.com/p?a=1&b=2#frag now.", "Go to https://a.com/p?a=1&b=2#frag now."),
+        ("Open a.com/x?a=1&b=2.", "Open a.com/x?a=1&b=2."),
+        ("Tom &amp; Jerry.", "Tom and Jerry."),
+        ("AT&amp;T agrees.", "AT&T agrees."),
+        ("Use *args and **kwargs here.", "Use *args and **kwargs here."),
+        ("Use **bold** and *italic* text.", "Use bold and italic text."),
+    ],
+)
+def test_comparisons_urls_entities_and_stars(text, spoken):
+    from artemis.agent.speech_text import spoken_answer
+
+    assert spoken_answer(text) == spoken
