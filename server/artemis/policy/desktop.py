@@ -378,11 +378,16 @@ def command_findings(command: str) -> list[Finding]:
 
 # ----- apps -----
 
+# The system's menu folders, searched even when XDG_DATA_DIRS leaves them out (snap and flatpak export
+# their launchers here). A module constant so tests can point it away from the machine they run on.
+SYSTEM_APP_DATA: tuple[str, ...] = ("/usr/local/share", "/usr/share", "/var/lib/snapd/desktop",
+                                    "/var/lib/flatpak/exports/share")
+
+
 def _app_dirs() -> list[Path]:
     data = [os.environ.get("XDG_DATA_HOME") or str(home() / ".local/share")]
     data += (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
-    data += ["/usr/local/share", "/usr/share", "/var/lib/snapd/desktop", "/var/lib/flatpak/exports/share",
-             str(home() / ".local/share/flatpak/exports/share")]
+    data += [*SYSTEM_APP_DATA, str(home() / ".local/share/flatpak/exports/share")]
     folders: list[Path] = []
     for d in data:
         if d and (path := Path(d) / "applications") not in folders:

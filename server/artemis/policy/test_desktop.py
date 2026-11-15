@@ -18,6 +18,15 @@ from artemis.policy.testing import EventLog, FakeApprovals, FakeRunner
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the desktop tools are for the GNOME island")
 
 
+@pytest.fixture(autouse=True)
+def no_machine_apps(tmp_path, monkeypatch):
+    """Keep every test off the real machine's menus: a laptop with snap VS Code, deb VS Code or GNOME
+    Terminal installed must give the same results as CI. Tests that need system folders make their own."""
+    nosys = str(tmp_path / "no-system-apps")
+    monkeypatch.setattr("artemis.policy.desktop.SYSTEM_APP_DATA", (nosys,))
+    monkeypatch.setenv("XDG_DATA_DIRS", nosys)
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     h = tmp_path / "home"
@@ -725,6 +734,8 @@ def _launches(monkeypatch):
 
 def test_the_app_folders_cover_snap_flatpak_and_the_deb_menu(monkeypatch):
     from artemis.policy.desktop import _app_dirs
+    monkeypatch.setattr("artemis.policy.desktop.SYSTEM_APP_DATA", ("/usr/local/share", "/usr/share",
+                        "/var/lib/snapd/desktop", "/var/lib/flatpak/exports/share"))
     monkeypatch.setenv("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
     folders = [str(p) for p in _app_dirs()]
     assert "/usr/share/applications" in folders
@@ -856,6 +867,7 @@ def test_the_flatpak_user_export_folder_is_searched(home, monkeypatch):
     stem, body = _VSCODE_INSTALLS["flatpak"]
     (folder / f"{stem}.desktop").write_text("[Desktop Entry]\nType=Application\n" + body)
     monkeypatch.setenv("XDG_DATA_HOME", str(home / "none"))
+    monkeypatch.setenv("XDG_DATA_DIRS", str(home / "nowhere"))  # a deb VS Code in /usr/share must not win
     assert find_app("vs code") == (f"{stem}.desktop", "Visual Studio Code")
 
 
