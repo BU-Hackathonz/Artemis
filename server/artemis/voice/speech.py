@@ -11,6 +11,7 @@ Setup (fetches the x64 DLL and the Whisper model): python -m artemis.voice.setup
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import ctypes
 import inspect
 import logging
@@ -225,6 +226,8 @@ PERMANENT_FAILURES = {"HTTP 401", "HTTP 402", "HTTP 403"}  # retrying can't help
 STREAM_TIMEOUT_S = 10.0  # one read after the first audio: a slow network stalls, it doesn't cut the line
 CHUNK_POLL_S = 0.05  # how often a waiting reader checks that its line is still wanted
 _GONE = object()  # _next_chunk: the line was abandoned or canceled while waiting
+FALLBACK_BUSY_TIMEOUT_S = 0.5  # one busy() question to the loop thread
+FALLBACK_UNSURE_WAIT_S = 2.0  # keep waiting this long when the local voice cannot be asked
 FALLBACK_WAIT_S = 30.0  # the longest a queued line waits for the local voice to finish a fallen-back line
 def _local_voice_name() -> str:
     return "NVDA or the Windows voice" if sys.platform == "win32" else "the offline voice"
@@ -694,13 +697,38 @@ class ElevenLabsSpeaker:
             return
         handed.wait(1.0)
         deadline = time.monotonic() + FALLBACK_WAIT_S
+        unsure_until: float | None = None
         while self._current(gen) and time.monotonic() < deadline:
-            try:
-                if not self.fallback.busy():
-                    return
-            except Exception:
+            busy = self._fallback_busy()
+            if busy is False:
                 return
+            if busy is None:  # could not ask: keep waiting a short bounded time, never talk over it
+                now = time.monotonic()
+                unsure_until = unsure_until if unsure_until is not None else now + FALLBACK_UNSURE_WAIT_S
+                if now >= unsure_until:
+                    return
             time.sleep(0.05)
+
+    def _fallback_busy(self) -> bool | None:
+        """fallback.busy() asked on the loop's thread when one is running (SAPI's COM object belongs to it).
+        True/False is the answer; None means it could not be asked (error or timeout)."""
+        loop = self._loop
+        try:
+            if loop is None or loop.is_closed() or not loop.is_running():
+                return bool(self.fallback.busy())
+            answer: concurrent.futures.Future = concurrent.futures.Future()
+
+            def ask() -> None:
+                try:
+                    answer.set_result(bool(self.fallback.busy()))
+                except BaseException as e:  # noqa: BLE001 - reported to the waiting worker
+                    answer.set_exception(e)
+
+            loop.call_soon_threadsafe(ask)
+            return answer.result(timeout=FALLBACK_BUSY_TIMEOUT_S)
+        except Exception as e:  # noqa: BLE001
+            log.debug("ElevenLabs voice: could not ask the local voice if it is busy (%s)", type(e).__name__)
+            return None
 
     def _on_loop(self, fn, *args) -> None:
         loop = self._loop

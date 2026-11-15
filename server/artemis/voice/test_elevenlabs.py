@@ -735,3 +735,66 @@ def test_a_fallback_line_canceled_before_the_loop_runs_it_is_not_spoken():
 
     handed = asyncio.run(run())
     assert local.said == [] and handed.is_set()
+def _hold_setup(busy_fn, monkeypatch=None):
+    local = FakeSpeaker("sapi")
+    local.busy = busy_fn
+    e = eleven(Opener(lambda: urllib.error.URLError("offline")), sapi=local)
+    return e
+
+
+def test_hold_for_fallback_asks_busy_on_the_loop_thread():
+    calls = []
+    until = [time.monotonic() + 0.2]
+
+    def busy():
+        calls.append(threading.current_thread() is threading.main_thread())
+        return time.monotonic() < until[0]
+
+    e = _hold_setup(busy)
+
+    async def run():
+        e._loop = asyncio.get_running_loop()
+        e._handed = threading.Event()
+        e._handed.set()
+        gen = e._gen
+        t0 = time.monotonic()
+        await asyncio.to_thread(e._hold_for_fallback, gen)
+        return time.monotonic() - t0
+
+    waited = asyncio.run(run())
+    assert calls and all(calls)  # COM-owning thread only
+    assert waited >= 0.15
+
+
+def test_hold_for_fallback_keeps_waiting_a_bounded_time_when_busy_raises(monkeypatch):
+    import artemis.voice.speech as sp
+
+    monkeypatch.setattr(sp, "FALLBACK_UNSURE_WAIT_S", 0.3)
+    n = []
+
+    def busy():
+        n.append(1)
+        raise OSError("com error")
+
+    e = _hold_setup(busy)
+
+    async def run():
+        e._loop = asyncio.get_running_loop()
+        e._handed = threading.Event()
+        e._handed.set()
+        t0 = time.monotonic()
+        await asyncio.to_thread(e._hold_for_fallback, e._gen)
+        return time.monotonic() - t0
+
+    waited = asyncio.run(run())
+    assert 0.25 <= waited < 2.0  # did not return at once, did not wait the full 30 s
+    assert len(n) > 1
+
+
+def test_hold_for_fallback_without_a_loop_asks_directly():
+    seen = []
+    e = _hold_setup(lambda: seen.append(1) or False)
+    e._handed = threading.Event()
+    e._handed.set()
+    e._hold_for_fallback(e._gen)
+    assert seen == [1]
