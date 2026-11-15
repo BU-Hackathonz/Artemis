@@ -1,7 +1,8 @@
 # Pitch script (presenter: Yaovi)
 
-About 4 minutes: 40 s of setup, 2:30 of live demo, 50 s on safety. David runs the demo at the laptop
-(the "developer"); Yaovi narrates **only while Artemis is silent**, never over it. Lines in quotes after
+About 4 minutes 20: 40 s of opening, 20 s for Avery, 2:30 of live demo, 50 s on safety and the
+close. Yaovi opens and hands to Avery for a few notes; Avery hands to David, who runs the demo at the
+laptop (the "developer"). Yaovi narrates **only while Artemis is silent**, never over it. Lines in quotes after
 "Artemis:" are the core's exact text; *(model)* lines are Claude's and vary. Setup and keys are in
 [demo.md](demo.md#the-closer-a-prototype-from-voice-alone-ubuntu-gnome-46).
 
@@ -11,23 +12,27 @@ About 4 minutes: 40 s of setup, 2:30 of live demo, 50 s on safety. David runs th
 
 ---
 
-## 1. The problem (0:00 to 0:40)
+## 1. The problem, then Avery (0:00 to 1:00)
 
-> **43 million people around the world are blind.** Many of them write code, with a screen reader.
-> But today's AI coding tools are built around the screen: a diff you have to look at, a button you
-> have to click, an error that scrolls past. Most of the time, someone sighted ends up checking the
-> result.
+> **43 million people around the world are blind.** Many of them write code by listening to a screen
+> reader. But today's AI coding tools are made for people who can see. The AI shows its changes on the
+> screen and expects you to read them before you say yes. If you can't see them, you either trust the
+> AI without checking, or you ask a sighted person to check for you.
 >
 > So we built Artemis, a voice-first development environment. You say what you want, you hear exactly
 > what will change, you approve it, and you hear the real result. Nothing in your project is written
 > or run without your approval.
 >
+> Now I'll hand it to Avery, our team lead.
+
+Pause after the number. Then Avery says a few notes in his own words (about 20 s) and ends with:
+
 > This is David. He's going to build a web page by voice, from an empty folder to GitHub. Watch the
 > small notch at the top of the screen: it shows when Artemis is listening, thinking or speaking.
 
-Pause after the number. Turn to David on "This is David"; he starts on your nod.
+David starts on Avery's nod.
 
-## 2. Live demo (0:40 to 3:10)
+## 2. Live demo (1:00 to 3:30)
 
 | David says | Artemis | Yaovi, in the silence after |
 |---|---|---|
@@ -49,7 +54,7 @@ Pause after the number. Turn to David on "This is David"; he starts on your nod.
 - A wrong step: "Reject", then say what you want instead.
 - Claude down: "The AI service is unreachable, and Artemis says so instead of guessing." Show typing.
 
-## 3. Safety, built in (3:10 to 4:00)
+## 3. Safety, built in (3:30 to 4:20)
 
 > Using Artemis means trusting an AI with your code, so we built it to be safe without making it harder
 > to use. Three things:
@@ -66,7 +71,11 @@ Pause after the number. Turn to David on "This is David"; he starts on your nod.
 > your request and the files it reads. The lines Artemis speaks go to ElevenLabs for the voice, with
 > secrets removed first. No Artemis account, no analytics.
 >
-> Artemis: hear every change, approve every run, prove every result.
+> For accessibility to reach everyone, technology has to be rebuilt so that anyone can use it,
+> whatever their abilities. Artemis is our part of that: a blind developer just built, checked and
+> published a web page without ever looking at the screen.
+>
+> Artemis: hear every change, approve every run, prove every result. Thank you.
 
 ---
 
