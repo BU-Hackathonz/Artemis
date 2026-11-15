@@ -26,7 +26,8 @@ import {WaterEffect, MAX_DROPS} from './waterEffect.js';
 import {LensEffect} from './lensEffect.js';
 import {OrbEffect} from './orbEffect.js';
 import {RingEffect} from './ringEffect.js';
-import {cueTargetRect, caretAnchor} from './ringTargets.js';
+import {cueTargetRect, cueWindow, caretAnchor} from './ringTargets.js';
+import {findApp, dockSpot, pressIcon, waitForWindow} from './launchFlight.js';
 import {CaretTracker} from './caret.js';
 import {Island} from './island.js';
 import {CoreClient} from './core.js';
@@ -96,6 +97,9 @@ const CUE_ARC = 0.12;           // how far it bows off the straight line on the 
 const RIDE_POLL_MS = 90;        // while Artemis types: how often the droplet checks where the caret is
 const RIDE_GLIDE_MS = 140;      // ... and how long it glides to the caret's new spot
 const CUE_RUN_PULSE_HZ = 1.2;   // a "run" cue pulses its glow this often
+const LAUNCH_DWELL_MS = 450;    // "open": the droplet rests on the dock icon at least this long ...
+const LAUNCH_WAIT_MS = 20000;   // ... and waits up to this long for the app's window
+const LAUNCH_FLY_MS = 750;      // ... then flies onto it, a little slower than a cue flight
 const TRAIL_HIGHLIGHTS = 1.6;   // agent trail: brighter glossy lines ...
 const TRAIL_DISPERSION = 2.0;   // ... stronger rainbow fringes ...
 const TRAIL_GLOW = 0.08;        // ... and a faint glow, so it's easy to follow
@@ -141,6 +145,7 @@ export default class ArtemisWaterExtension extends Extension {
         this._desktopJob = null;          // the last desktop action, so they run one at a time
         this._caret = null;               // AT-SPI caret tracker, made at the first ring.cue (caret.js)
         this._rideTimer = 0;              // the droplet follows the caret while Artemis types
+        this._launch = null;              // an "open" cue's visit to the dock (launchFlight.js)
 
         this._core = new CoreClient({
             onEvent: (event) => this._onEvent(event),
@@ -185,6 +190,7 @@ export default class ArtemisWaterExtension extends Extension {
         this._typist?.destroy();
         this._typist = null;
         this._stopRide();
+        this._endLaunch();
         this._caret?.destroy();
         this._caret = null;
         if (this._doneTimer) GLib.source_remove(this._doneTimer);
@@ -363,6 +369,7 @@ export default class ArtemisWaterExtension extends Extension {
     // the sphere stay put.
     _onRingCue(cue) {
         if (!this._agent || !this._isRing()) return;
+        this._endLaunch();
         if (cue.action === 'done') {
             this._cue = null;
             this._agentGoHome(false);
@@ -374,13 +381,62 @@ export default class ArtemisWaterExtension extends Extension {
             const at = this._caretTarget();
             if (at) { this._agentFlyTo(at); return; }
         }
+        const windows = this._cueWindows();
+        if (cue.action === 'open' && !cueWindow(cue, windows) && this._launchFromDock(cue.target)) return;
         const monitor = Main.layoutManager.primaryMonitor;
         const dest = cueTargetRect(cue, {
-            windows: this._cueWindows(),
+            windows,
             screen: {x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height},
             home: this._homePos(),
         });
         this._agentFlyTo({x: dest.x + dest.width / 2, y: dest.y + dest.height / 2});
+    }
+
+    // "Open <app>" with no window of it yet: fly to its dock icon, press it, wait there while it
+    // starts, then fly onto its new window. False when the app or the dock can't be found (the
+    // caller then flies as before). Reduce motion: the droplet jumps, and the icon's zoom is skipped.
+    _launchFromDock(target) {
+        const app = typeof target === 'string' ? findApp(target) : null;
+        const spot = app ? dockSpot(app) : null;
+        if (!spot) return false;
+        const launch = {arrived: false, win: undefined, timers: [], cancel: null};
+        this._launch = launch;
+        const after = (ms, fn) => {
+            const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+                launch.timers = launch.timers.filter((t) => t !== id);
+                if (this._launch === launch) fn();
+                return GLib.SOURCE_REMOVE;
+            });
+            launch.timers.push(id);
+        };
+        const onto = () => {
+            if (!launch.arrived || launch.win === undefined) return;
+            const win = launch.win;
+            this._endLaunch();
+            if (!win) return; // never came: the droplet stays at the dock until the next cue
+            const r = win.get_frame_rect();
+            this._agentFlyTo({x: r.x + r.width / 2, y: r.y + r.height / 2}, LAUNCH_FLY_MS);
+        };
+        this._agentFlyTo({x: spot.x, y: spot.y});
+        after(CUE_FLY_MS, () => {
+            this._clickPulse();
+            if (this._interface.enable_animations) pressIcon(spot);
+            after(LAUNCH_DWELL_MS, () => { launch.arrived = true; onto(); });
+        });
+        launch.cancel = waitForWindow(app, target, LAUNCH_WAIT_MS, (win) => {
+            if (this._launch !== launch) return;
+            launch.win = win;
+            onto();
+        });
+        return true;
+    }
+
+    _endLaunch() {
+        const launch = this._launch;
+        if (!launch) return;
+        this._launch = null;
+        for (const id of launch.timers) GLib.source_remove(id);
+        launch.cancel?.();
     }
 
     // The windows a cue can name, bottom to top (stacking order), minimized and dialogs left out.
@@ -695,6 +751,7 @@ export default class ArtemisWaterExtension extends Extension {
             this._sid = sid;
             this._closeApproval();
             this._cue = null;
+            this._endLaunch();
             this._state = initial(true);
             // the old session's tasks get no more events: end them in the panel instead of leaving them "working"
             this._island?.taskEndAll('Artemis restarted, so this request stopped.');
