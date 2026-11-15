@@ -61,6 +61,8 @@ HEARTBEAT_S = 3.0
 HEARTBEAT_STATES = {"working", "running"}  # never queued, awaiting_approval or a final state
 STILL_WORKING = "Still working."
 EMPTY_PAIR_S = 1.5  # a second empty transcript this soon after the first is the same tap
+# A push-to-talk hold that recorded no sound (contracts.md 3.3): fixed text, never free text.
+NO_SPEECH = ("I didn't hear anything.", "Check the microphone.")
 
 
 def spoken_error(message: str, recovery: str) -> str:
@@ -527,12 +529,16 @@ class Session:
             )
         )
 
-    async def error(self, code: str, message: str, recovery: str, task_id: str | None = None) -> None:
+    async def no_speech(self) -> None:
+        """A silent push-to-talk hold: the fixed line, once, at normal so it never cuts off a decision."""
+        await self.error("no_speech", *NO_SPEECH, priority="normal")
+
+    async def error(self, code: str, message: str, recovery: str, task_id: str | None = None, priority="high") -> None:
         await self.emit(
             EventDraft(
                 task_id=task_id,
                 type="error",
-                announce=Announce(text=spoken_error(message, recovery), priority="high"),
+                announce=Announce(text=spoken_error(message, recovery), priority=priority),
                 data=ErrorData(code=code, message=message, recovery=recovery).model_dump(),
             )
         )

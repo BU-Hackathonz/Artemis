@@ -27,7 +27,7 @@ Errors outside the table: a missing or wrong token is `401 {error: "unauthorized
 | POST | `/tasks/{tid}/reply` | `{text, source}` → `501 {error: "not_supported"}` for a known task (the body is not read) | **Reserved, unused in the MVP.** The agent asks a question by ending its turn; the user's next request is the answer |
 | POST | `/approvals/{aid}` | `{decision: "approve"\|"reject", approval_hash}` → `204`, or `409 {error: "stale"}` | The hash must match the one that was offered. Stale: a different hash (the approval stays open), or one already decided, canceled or invalidated |
 | POST | `/tasks/{tid}/cancel` | `{}` → `204`, also for a task that already ended | Stops active work, including a running program (its whole process tree is killed). An `agent.message` at high says what was already applied ("Canceled. Already written: main.py."), then `task.state` `canceled` |
-| POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events. Always the newest session (one per app launch): `409 {detail: {error: "no_session"}}` before there is one, `422 {detail: {error: "bad_action"}}` for any other action. A microphone failure is an `error` event with code `mic_error` |
+| POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events. Always the newest session (one per app launch): `409 {detail: {error: "no_session"}}` before there is one, `422 {detail: {error: "bad_action"}}` for any other action. A microphone failure is an `error` event with code `mic_error`; a silent hold, `no_speech` (§5.1, **Proposed (Avery)**) |
 | POST | `/speech` | `{action: "stop"\|"repeat"}` → `204` | Stop speaking / repeat the last announcement (the last one at `normal` or `high`). Any other action: `422 {detail: {error: "bad_action"}}` |
 | POST | `/sessions/{sid}/diagnostics` | `{code: "shortcut_registration_failed", shortcut?: "Control+Alt+Space"}` → `204` | A problem only the client can see. The core speaks a **fixed** sentence per code (`error` event, priority high), once per code and shortcut per session (the client announces an exact repeat itself); `shortcut` allows letters, digits and `+` only, 1 to 40 characters, and other fields are rejected (`422`). No free text is ever spoken. While `voice_ready` is true the client doesn't also announce it (§5.3) |
 | POST | `/sessions/{sid}/ready` | `{shortcut?: "Control+Shift+Space"}` → `204` | The native app finished setting up for this session (after its push-to-talk shortcut registered, or failed); the browser build does not call it. The core speaks one **fixed** line, once per session, as `agent.message` (`kind: "answer"`) with no `task_id` at priority normal: "Artemis is ready. Hold Control Shift Space and speak, or type a request." Without `shortcut` it names the Start listening button instead: "Artemis is ready. Use the Start listening button and speak, or type a request." `shortcut` allows letters, digits and `+` only, 1 to 40 characters, and other fields are rejected (`422`); no free text is ever spoken |
@@ -59,7 +59,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 
 | `type` | `data` |
 |---|---|
-| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal (an empty one is silent). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
+| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal (an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
 | `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
 | `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`) is `progress` at `low` |
 | `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval` |
@@ -67,7 +67,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 | `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}`, announced "Created main.py, 1 line." at normal. No tool deletes, so `deleted` is never sent today |
 | `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}`, announced at high by the gateway (§4 samples 4 and 5). `exit_code` is null when the run timed out |
 | `security.findings` | `{op_id, tool: "bandit"\|"semgrep", findings: [{rule, severity, path, line, message}]}`, not announced: the findings are spoken in the approval summary that follows, or in `scan_project`'s own line. Sent only when there are findings. `tool` is always `"bandit"` today (Semgrep is not implemented) |
-| `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on. Announced at high as "message recovery", except a failed task's, which says "The task failed. <reason> You can try again." |
+| `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on. Announced at high as "message recovery", except a failed task's, which says "The task failed. <reason> You can try again.", and `no_speech` (**Proposed (Avery)**, §5.1), which is at normal |
 | `voice.status` | `{voice_ready, screen_reader, engine}`, emitted at session start and whenever either value changes (§5.3). `engine` (**Proposed (Avery)**, §7) is the speaker that would say the next line: `elevenlabs`, `nvda`, `sapi` or `none`; a settings change that alters it is also emitted |
 | `voice.activity` | `{state: "idle"\|"listening"\|"transcribing"\|"speaking", engine}` (approved by Avery, §8), not announced. Sent to every session when the voice's real state changes, never from timers: `listening` from the push-to-talk press until the mic closes (the listening earcon and any post-roll included), `transcribing` while Whisper turns the recording into text, `speaking` while Artemis's line is audible (`engine` says who: `elevenlabs` while its audio plays, `sapi` while SpVoice speaks, `nvda` for Artemis's own estimate, since NVDA can't report playback), `idle` otherwise. A session starts idle; one created while the voice is busy gets the current state once. State and engine only: no text, transcript or audio |
 
@@ -173,7 +173,7 @@ Paths are rejected unless `Path(root / p).resolve()` stays under `root`.
 ```python
 class Voice(Protocol):
     async def start_listening(self) -> None: ...
-    async def stop_listening(self, client_request_id: str) -> str: ...   # final transcript, wake word stripped; no partials
+    async def stop_listening(self, client_request_id: str) -> str: ...   # final transcript, wake word stripped; no partials; an empty one may say why (§5.1)
     def set_vocabulary(self, words: list[str]) -> None: ...               # file names and symbols for the prompt
     async def announce(self, text: str, priority: Priority) -> None: ...  # ElevenLabs if configured (even with NVDA), else NVDA if running, else SAPI
     async def stop_speech(self) -> None: ...
@@ -254,6 +254,19 @@ The core doesn't call `stop_speech()` itself here. Artemis's own voice (SAPI thr
 must never be recorded and transcribed as a request. The client's own "Stop speech" control is
 unchanged. Cutting off speech never hides an open approval: see §5.4.
 
+**Proposed (Avery): why a release gave no request.** `stop_listening()` still returns a `str`; when it
+is empty it may be an `artemis.voice.text.Heard`, whose `dropped` says why: `"short"` (a tap: under
+0.3 s of audio, or let go during the listening earcon), `"silent"` (held long enough, but even the
+loudest 100 ms stayed under the silence threshold, so Whisper never ran) or `"empty"` (there was sound,
+but no words came back, or only the wake word). A repeated stop that ends no hold gives a plain `""`.
+The thresholds are the voice's existing ones. The core handles every empty release as before
+(`transcript.final` with empty text, silent), and only for `"silent"` it then emits, on the newest
+session and once per release, a fixed `error` with no `task_id` at priority **normal**:
+`{code: "no_speech", message: "I didn't hear anything.", recovery: "Check the microphone."}`, spoken
+"I didn't hear anything. Check the microphone." A tap, an empty transcript, a voice that returns a
+plain `str`, and the wake word (§5.6, where room silence is never an utterance) say nothing. No free
+text is ever spoken.
+
 ### 5.2 One active task per session
 A task is active from `queued` until `succeeded`, `failed` or `canceled`. The spoken rules below
 are the default; `ARTEMIS_CONVERSATION=on` replaces them with §5.4 (bare "stop" then stops speech,
@@ -324,7 +337,7 @@ transcript.
   | `slower`, `faster` | See §5.3 |
   | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | Never applied: "Use the keyboard to decide…" as in §5.2 |
   | `approve`, `yes`, `reject`, `no` with no approval open | If no task is active and the agent's last answer was a question: the answer to it, sent as the next request (design A4; anything it leads to is still approved on the keyboard). Otherwise "There's nothing to approve right now.", never a task or a follow-up |
-  | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high`. The voice already strips "Artemis" and "Hey/OK Artemis", so those arrive empty (`intent` null); `wake_word` is the intent for a form only the controller strips, such as "Hi Artemis" |
+  | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high`. A silent hold then also gets §5.1's `no_speech` line (**Proposed (Avery)**). The voice already strips "Artemis" and "Hey/OK Artemis", so those arrive empty (`intent` null); `wake_word` is the intent for a form only the controller strips, such as "Hi Artemis" |
 
   No phrase can approve a write or a run, hide a warning, or run code.
 - **A spoken request while a task is active** is kept as the one waiting follow-up ("I'll do that

@@ -23,6 +23,22 @@ NATURAL_LEAD = "Hey Artemis, create a Python program, print, run it, main.py."
 _NATURAL_WORDS = set(re.findall(r"\w+(?:\.\w+)*", NATURAL_LEAD.lower()))
 
 
+class Heard(str):
+    """What stop_listening returns: still a plain str, plus why a release gave no words (contracts.md 3.3).
+
+    `dropped` is "short" (a tap, or let go during the listening earcon), "silent" (a hold with no sound)
+    or "empty" (the recording had sound but no words came back); None when there is a transcript.
+    Callers that only read the text are unchanged.
+    """
+
+    dropped: str | None
+
+    def __new__(cls, text: str = "", dropped: str | None = None):
+        heard = super().__new__(cls, text)
+        heard.dropped = dropped
+        return heard
+
+
 def strip_wake_word(text: str) -> str:
     """Remove a leading "Artemis" (and "hey") from a transcript."""
     return _WAKE.sub("", text, count=1).strip()
