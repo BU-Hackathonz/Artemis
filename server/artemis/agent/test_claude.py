@@ -242,19 +242,37 @@ def test_refusal_after_tool_calls_keeps_the_answered_history(tmp_path):
     assert [m["role"] for m in w.agent.messages] == ["user", "assistant", "user"]
 
 
-def test_max_tokens(tmp_path):
-    cut_off = message(text("Here is a very long"), stop_reason="max_tokens")
-    w = World(tmp_path, [cut_off])
+def test_max_tokens_repeatedly_fails_out_loud(tmp_path):
+    cut = lambda: message(text("Here is a very long"), stop_reason="max_tokens")
+    w = World(tmp_path, [cut(), cut(), cut()])
     outcome = asyncio.run(w.run())
-    assert outcome == Failed(code="too_long", message="That got too long. Try a smaller request.")
-    assert w.log.spoken() == []
+    assert outcome.code == "too_long" and "too big" in outcome.message
+    assert len(w.client.calls) == 3
 
 
-def test_max_tokens_with_a_cut_off_tool_call_runs_nothing(tmp_path):
+def test_max_tokens_cut_off_tool_call_runs_nothing_and_asks_for_smaller_pieces(tmp_path):
     cut_off = message(tool("toolu_1", "create_project", name="x"), stop_reason="max_tokens")
-    w = World(tmp_path, [cut_off])
-    assert asyncio.run(w.run()).code == "too_long"
-    assert w.gateway.project is None and w.agent.messages == []
+    w = World(tmp_path, [cut_off, message(text("Split it."))])
+    outcome = asyncio.run(w.run())
+    assert outcome == Answered(text="Split it.")
+    assert w.gateway.project is None  # the cut-off call was not executed
+    result = w.agent.messages[2]["content"][0]
+    assert result["type"] == "tool_result" and result["tool_use_id"] == "toolu_1" and result["is_error"]
+    assert "cut off" in result["content"] and "did NOT run" in result["content"]
+    assert any("too big" in t for t in w.log.spoken())
+
+
+def test_max_tokens_text_only_reply_continues_in_smaller_pieces(tmp_path):
+    w = World(tmp_path, [message(text("long"), stop_reason="max_tokens"), message(text("ok"))])
+    assert asyncio.run(w.run()) == Answered(text="ok")
+    assert "cut off" in w.agent.messages[2]["content"]
+
+
+def test_a_slow_answer_is_a_timeout_not_no_internet(tmp_path):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    w = World(tmp_path, [anthropic.APITimeoutError(request=request)])
+    outcome = asyncio.run(w.run())
+    assert outcome.code == "timeout" and "internet" not in outcome.message
 
 
 def test_unknown_tool_is_an_error_result_and_the_loop_continues(tmp_path):
@@ -512,7 +530,7 @@ def test_system_prompt_is_frozen_and_covers_the_rules():
 # sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when code went into files
 # and VS Code was opened with open_path, not typed, on top of the plan and the desktop tools) as it
 # is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "b0525683752671a37a03bf80b27ab6cf95426b82ef87723790dc6ed98a0dcb84"
+MAIN_SYSTEM_PROMPT_SHA256 = "e80bca1bb40719fed230af34fd4e36e99b673c5983dbb5d769960b3e0b2a4489"
 
 
 def test_spoken_answers_are_short_and_true_to_the_tool_results():
@@ -540,6 +558,20 @@ def test_code_goes_into_files_and_vs_code_is_opened_not_typed():
     assert "Use type_text and press_keys only for text the developer asked you to type into another app" in flat
     assert "with open_path and with_app set to VS Code" in flat
     assert "Opening an app or a file in the usual folders happens right away" in flat
+
+
+def test_prompt_tells_the_model_to_build_complete_multi_file_projects():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "no TODO stubs" in flat and "index.html, style.css and script.js" in flat
+    assert "under about three hundred lines" in flat and "inspect_page" in flat
+    assert "what you built and how to use it" in flat
+
+
+def test_readback_and_feedback_rules():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "call read_file with aloud true" in flat and "from next_start_line" in flat
+    assert "what the run actually printed or failed with, then offer to read it or explain it" in flat
+    assert "inspect_page with describe true" in flat
 
 
 def test_flag_off_system_prompt_is_mains():

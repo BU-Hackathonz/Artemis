@@ -31,9 +31,13 @@ Use this tonight. Quotes are exact strings from the code or the demo runbook; an
    (demo runbook string). Expect a plan, then a create approval: "Enter to approve, Escape to reject."
    Press Enter for the write, then Enter for the run. The stub agent's scripted reply is
    "I created hello-world with main.py and ran it. It printed Hello, World!" The real agent's words vary.
-10. **Open in VS Code.** Say (brief): "Hey Artemis, open it in VS Code." The code maps "vs code" and "vscode"
-   to Visual Studio Code (`server/artemis/policy/desktop.py`, `_ALIASES`). The full phrase is not in the code,
-   so if the agent does not pick `open_app`, say "open VS Code" and note it. Approve the dialog if one appears.
+10. **Open in VS Code.** Say (brief): "Hey Artemis, open it in VS Code." "VS Code", "vscode", "code" and "Visual
+   Studio Code" all resolve (`server/artemis/policy/desktop.py`, `_FAMILIES`) to the deb (`code.desktop`), snap
+   (`code_code.desktop`) or flatpak (`com.visualstudio.code`) build, searched in every XDG data dir plus the snap
+   and flatpak export folders. Opening an installed app or a file in your own folders asks for NO approval; a
+   dialog appears only for a launcher that looks planted or a path outside your folders. If gtk-launch fails,
+   Artemis tries `gio launch`, the launcher's Exec line, then `code --new-window` on the PATH, and says why if
+   all fail. A following "type ..." waits (20 s) for that app's window to have the focus.
    Depends on: nothing new; the desktop tools are on main.
 11. **Type into the text editor.** Say (brief): "Hey Artemis, type hello into my editor." The test uses this
    wording (`server/artemis/core/test_desktop_e2e.py`), and `editor` maps to "text editor". Enter approves typing

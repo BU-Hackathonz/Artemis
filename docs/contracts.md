@@ -152,11 +152,11 @@ temp folder outside the workspace) and again before each run approval; its findi
 | `create_project` | `{name}` | no: it only reserves the name; the folder is created by the first approved `write_files` | yes |
 | `open_project` | `{name}` | no | yes |
 | `list_files` | `{dir?}` | no | yes |
-| `read_file` | `{path, start_line?, end_line?}` | no | yes |
+| `read_file` | `{path, start_line?, end_line?, aloud?, line_numbers?}`: with `aloud` the gateway speaks about 20 lines in words (symbols named, indent level announced, secrets redacted) and returns `next_start_line` | no | yes |
 | `write_files` | `{files: [{path, content}]}`: one approval for the whole batch. Overwrites only in a project created this session | yes, after a scan | yes |
 | `run_program` | `{entry, args?: [str]}`; the preset comes from the file type | yes, after a scan | yes |
 | `edit_file` | `{path, edits: [{old, new}]}`: each `old` must match exactly once; works in any project, not only one created this session. Approved as a `write_files` approval | yes, after a scan | after MVP (built) |
-| `inspect_page` | `{path}`: an `.html` or `.htm` file in the project | no: read-only | Echo Check |
+| `inspect_page` | `{path, describe?}`: with `describe` it also speaks the page structure (landmarks, headings, links, fields, images without alt). an `.html` or `.htm` file in the project | no: read-only | Echo Check |
 | `scan_project` | `{path?}`: a file or folder in the project; omitted scans all of it | no: read-only | after MVP (built) |
 
 There is no shell, delete, network or install tool, and the agent can't apply anything without

@@ -237,6 +237,19 @@ def test_write_extensions_allowed(root, rel):
     assert safe_resolve(root, rel, for_write=True).name == rel
 
 
+@pytest.mark.parametrize(
+    "rel", ["app.ts", "src/App.tsx", "src/App.jsx", "index.mjs", "logo.svg", "ci.yml", "a/b/c.yaml", "page.htm", ".gitignore", "LICENSE"]
+)
+def test_more_project_file_types_can_be_written(root, rel):
+    assert safe_resolve(root, rel, for_write=True).name == rel.rsplit("/", 1)[-1]
+
+
+@pytest.mark.parametrize("rel", ["run.sh", "x.bat", "Makefile", ".env.local", "x.exe"])
+def test_scripts_launchers_and_secrets_still_refused(root, rel):
+    with pytest.raises(PathRejected):
+        safe_resolve(root, rel, for_write=True)
+
+
 def test_read_size_limit(root):
     big = root / "big.txt"
     big.write_bytes(b"x" * (MAX_READ_BYTES + 1))

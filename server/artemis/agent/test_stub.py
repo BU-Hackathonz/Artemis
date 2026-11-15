@@ -141,7 +141,7 @@ def test_config_defaults_and_env(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     default = Config.from_env()
     assert (default.agent, default.model, default.effort, default.max_iterations) == (
-        "stub", "claude-opus-5-5", "medium", 25,
+        "stub", "claude-opus-5-5", "medium", 40,
     )
     assert default.projects_dir.name == "ArtemisProjects"
     assert not hasattr(default, "api_key")

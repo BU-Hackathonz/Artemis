@@ -19,6 +19,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
+from artemis.agent.speech_text import next_chunk_end, speak_code
 from artemis.agent.untrusted import wrap
 from artemis.contracts import (
     AgentMessageData,
@@ -364,11 +365,40 @@ class ToolGateway(DesktopTools):
         lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
         start = a.start_line or 1
         end = min(a.end_line or len(lines), len(lines))
+        if a.aloud:
+            return await self._read_aloud(task_id, a, lines, start, end)
         numbered = "\n".join(f"{n}\t{lines[n - 1]}" for n in range(start, end + 1))
         return {
             "path": a.path,
             "total_lines": len(lines),
             "content": wrap(f"file:{a.path}", numbered),
+        }
+
+    async def _read_aloud(self, task_id: str, a: ReadFileArgs, lines: list[str], start: int, end: int) -> dict:
+        """Speak a few lines of the file, in words, and say how to go on. The text is data: it is redacted
+        here, before it is shaped for the ear, and nothing in it is ever acted on."""
+        name = Path(a.path).name
+        if start > len(lines):
+            raise _ToolError("invalid_args", f"{name} has only {len(lines)} lines.")
+        # Redact with the line numbers in place, so a secret that spans lines is found and numbers hold.
+        text = redact("\n".join(f"{n}\t{lines[n - 1]}" for n in range(start, end + 1)))
+        pairs = []
+        for row in text.split("\n"):
+            num, _, body = row.partition("\t")
+            if num.isdigit():
+                pairs.append((int(num), body))
+        take = pairs[: next_chunk_end(pairs)]
+        last = take[-1][0] if take else end
+        more = last < end
+        spoken = f"{name}, lines {take[0][0] if take else start} to {last} of {len(lines)}. {speak_code(take, a.line_numbers)}"
+        spoken += " Say continue for the next lines." if more else f" That is the end of {'the lines you asked for' if end < len(lines) else name}."
+        await self._say(task_id, spoken, "normal")
+        return {
+            "path": a.path,
+            "total_lines": len(lines),
+            "read_aloud": [take[0][0] if take else start, last],
+            "next_start_line": last + 1 if more else None,
+            "content": wrap(f"file:{a.path}", "\n".join(f"{n}\t{t}" for n, t in take)),
         }
 
     async def _inspect_page(self, task_id: str, a: InspectPageArgs) -> dict:
@@ -401,6 +431,8 @@ class ToolGateway(DesktopTools):
             await self._error(task_id, "echo_unavailable", message.split(" Run: ")[0], "Nothing was checked.")
             raise _ToolError("echo_unavailable", message) from None
         spoken = echo.speak_report(report)
+        if a.describe:
+            await self._say(task_id, echo.describe_page(report), "normal")
         previous = self._echo_reports.get(a.path)
         if previous is not None:
             spoken = f"{echo.compare(previous, report)} {spoken}"
@@ -414,6 +446,7 @@ class ToolGateway(DesktopTools):
             "problems": len(report.findings),
             "findings": wrap(f"page:{a.path} axe findings", findings or "none"),
             "outline": wrap(f"page:{a.path} accessibility tree", "\n".join(report.outline)),
+            **({"description": wrap(f"page:{a.path} structure", echo.describe_page(report))} if a.describe else {}),
             # Checks axe couldn't decide (e.g. text over a gradient): a person has to look.
             "needs_review": wrap(
                 f"page:{a.path} needs manual review",
@@ -828,7 +861,14 @@ class ToolGateway(DesktopTools):
         await self._emit(task_id, "run.result", result, spoken, "high")
         await self._state(task_id, "working")
         if result.timed_out:
-            raise _ToolError("timeout", spoken)
+            # Keep what the program printed before it was stopped: it shows where it hung.
+            partial = (
+                f" Output before it was stopped: {wrap(f'program:{entry} stdout', result.stdout_tail)} "
+                f"Errors: {wrap(f'program:{entry} stderr', result.stderr_tail)}"
+                if result.stdout_tail or result.stderr_tail
+                else " It printed nothing before it was stopped."
+            )
+            raise _ToolError("timeout", spoken + partial)
         return {
             "entry": entry,
             "exit_code": result.exit_code,

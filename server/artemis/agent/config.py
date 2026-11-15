@@ -17,7 +17,7 @@ class Config:
     model: str = "claude-opus-5-5"
     effort: str = "medium"
     projects_dir: Path = Path.home() / "ArtemisProjects"
-    max_iterations: int = 25  # a plan, a project, a few writes and runs, an open and the answer fit with room to fix a failed run
+    max_iterations: int = 40  # a plan, a project, several writes (one per file), runs, a page check, an open and the answer, with room to fix failures
     # Only for an API key that isn't scoped to a workspace: sent as the anthropic-workspace-id
     # header. Never logged or spoken.
     workspace_id: str | None = None

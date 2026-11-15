@@ -64,12 +64,21 @@ class ReadFileArgs(_Args):
         ge=1,
         description="The last line to return, counted from 1 and included. Null means the end of the file.",
     )
+    aloud: bool = Field(
+        default=False,
+        description="True when the developer asked to hear the code read to them: the tool speaks a few lines "
+        "itself, in words, and returns next_start_line to continue from. False for reading to work on the file.",
+    )
+    line_numbers: bool = Field(
+        default=False,
+        description="With aloud true: True when the developer asked for line numbers to be spoken.",
+    )
 
 
 class FileWrite(_Args):
     path: str = Field(
         description="A file path relative to the project root, for example main.py or tests/test_main.py. "
-        "Missing folders are created. Only .py .txt .md .json .toml .csv .html .css .js are allowed.",
+        "Missing folders are created. Text and source files only: code, web, config and docs (.py .js .ts .jsx .tsx .html .css .scss .svg .json .yaml .toml .md .txt and similar). Shell scripts and .env files are refused.",
     )
     content: str = Field(
         description="The complete new text of the file, at most 256 kilobytes. Not a diff.",
@@ -114,6 +123,11 @@ class InspectPageArgs(_Args):
     path: str = Field(
         description="An .html or .htm file in the project, relative to the project root, for example index.html.",
     )  # an .html or .htm file in the current project
+    describe: bool = Field(
+        default=False,
+        description="True when the developer asked what the page looks like or contains: the tool also speaks its "
+        "structure (landmarks, headings, links, form fields, images without alt text).",
+    )
 
 
 class ScanProjectArgs(_Args):

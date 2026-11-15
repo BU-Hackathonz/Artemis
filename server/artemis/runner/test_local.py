@@ -63,7 +63,7 @@ async def test_no_secrets_no_stdin_no_stray_tilde(runner, monkeypatch):
         "import os, sys\n"
         "print('KEY' if 'ANTHROPIC_API_KEY' in os.environ else 'clean')\n"
         "print(input('x') if False else sys.stdin.read() == '')\n"
-        "print(sys.flags.isolated)\n"
+        "print(sys.flags.ignore_environment)\n"
     )
     ref = project(runner, {"main.py": code})
     result = await runner.run(ref, "main.py", [])
@@ -436,3 +436,25 @@ async def test_cancel_kills_with_the_timeout_helper_and_survives_its_failure(run
     monkeypatch.setattr(local, "_kill_tree", broken_kill_tree)
     await cancel_mid_run()
     assert procs[1].killed == 1
+
+
+async def test_program_can_import_its_sibling_modules(runner):
+    ref = project(
+        runner,
+        {
+            "main.py": "import util\nfrom pkg import greet\nprint(util.X, greet.hi())\n",
+            "util.py": "X = 41 + 1\n",
+            "pkg/__init__.py": "",
+            "pkg/greet.py": "def hi():\n    return 'hi'\n",
+        },
+    )
+    result = await runner.run(ref, "main.py", [])
+    assert result.exit_code == 0, result
+    assert result.stdout_tail.split() == ["42", "hi"]
+
+
+async def test_timeout_keeps_the_output_printed_so_far(runner):
+    ref = project(runner, {"main.py": "import time\nprint('started', end='')\ntime.sleep(30)\n"})
+    result = await runner.run(ref, "main.py", [], timeout_s=1)
+    assert result.timed_out and result.exit_code is None
+    assert result.stdout_tail == "started"
