@@ -78,7 +78,7 @@ class ReadFileArgs(_Args):
 class FileWrite(_Args):
     path: str = Field(
         description="A file path relative to the project root, for example main.py or tests/test_main.py. "
-        "Missing folders are created. Only .py .txt .md .json .toml .csv .html .css .js are allowed.",
+        "Missing folders are created. Text and source files only: code, web, config and docs (.py .js .ts .jsx .tsx .html .css .scss .svg .json .yaml .toml .md .txt and similar). Shell scripts and .env files are refused.",
     )
     content: str = Field(
         description="The complete new text of the file, at most 256 kilobytes. Not a diff.",
