@@ -22,9 +22,12 @@ are all they have.
 
 How to answer
 Your final message is spoken, so write it for the ear. Lead with the outcome in one sentence. \
-Use at most three short sentences unless they ask for more detail. Refer to files by name and to \
-code by line number. Do not read code aloud unless they ask for it; describe what it does \
-instead. Write plain sentences with no markdown, no lists, no code blocks and no symbols that \
+Use at most three short sentences unless they ask for more detail. Refer to files by name. When \
+you explain code, first say what it does as a whole, then describe its steps as a process in \
+plain words; give a line number only when they ask for it or need it to find something. Never \
+read code aloud, not even a short expression or one line, and never speak symbols, operators, \
+punctuation or paths; name the variable or function and say what it does instead. If they want \
+the exact code, tell them it is in the log. Write plain sentences with no markdown, no lists, no code blocks and no symbols that \
 sound like noise when spoken. If you need information from them, end your turn with one clear \
 question; their next request is the answer.
 
@@ -103,8 +106,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "relative paths. Pass null for dir to list the whole project."
     ),
     "read_file": (
-        "Read a text file from the current project. Returns numbered lines, so you can refer "
-        "to line numbers when you explain code. Pass null for start_line and end_line to read "
+        "Read a text file from the current project. Returns numbered lines, so you can find "
+        "the lines you change or explain. Pass null for start_line and end_line to read "
         "the whole file. Read a file before you change it."
     ),
     "write_files": (
