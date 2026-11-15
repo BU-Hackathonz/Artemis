@@ -608,3 +608,91 @@ def test_give_up_notice_is_logged_when_the_core_has_no_hook(caplog):
             e.speak(f"line {n}", interrupt=False)
             assert e.wait_idle(2)
     assert e.gave_up and FALLBACK_NOTICE in caplog.text
+
+
+# ----- a dropped (abandoned) line never plays -----
+
+
+def test_a_progress_line_dropped_while_the_local_voice_speaks_never_plays():
+    class Local(FakeSpeaker):
+        def __init__(self):
+            super().__init__("local")
+            self.release, self.polls = threading.Event(), 0
+
+        def busy(self):
+            self.polls += 1
+            return not self.release.is_set()
+
+    local, outputs = Local(), []
+    results = [urllib.error.URLError("offline"), b"b", b"c"]
+
+    def make():
+        r = results.pop(0)
+        return r if isinstance(r, Exception) else FakeResponse([r * 2])
+
+    e = eleven(Opener(make), outputs, sapi=local)
+    e.speak("A normal line.", interrupt=False)  # fails: the local voice is handed it
+    wait_for(lambda: local.said)
+    e.speak("A progress line.", interrupt=False, priority="low")  # downloaded, then held for the local voice
+    wait_for(lambda: local.polls > 0)
+    e.speak("A newer normal line.", interrupt=False)  # drops the progress line; no cancel, gen is unchanged
+    local.release.set()
+    assert e.wait_idle(5)
+    played = b"".join(b"".join(o.written) for o in outputs)
+    assert b"b" not in played and played == b"cc"
+
+
+def test_a_cached_line_dropped_while_the_local_voice_speaks_never_plays():
+    class Local(FakeSpeaker):
+        def __init__(self):
+            super().__init__("local")
+            self.release, self.polls = threading.Event(), 0
+
+        def busy(self):
+            self.polls += 1
+            return not self.release.is_set()
+
+    local, outputs = Local(), []
+    e = eleven(Opener(lambda: FakeResponse([b"zz"])), outputs, sapi=local)
+    e._cache[e._cache_key("A progress line.")] = b"bb"
+    e._handed = threading.Event()
+    e._handed.set()  # a line was handed to the local voice, which is still speaking
+    e.speak("A progress line.", interrupt=False, priority="low")
+    wait_for(lambda: local.polls > 0)
+    e.speak("A newer normal line.", interrupt=False)
+    local.release.set()
+    assert e.wait_idle(5)
+    assert [b"".join(o.written) for o in outputs] == [b"zz"]
+
+
+def test_play_stops_between_chunks_when_the_line_is_abandoned():
+    e = eleven(Opener(lambda: FakeResponse([])))
+    from artemis.voice.speech import _Line
+
+    line = _Line(0, "x", "low")
+
+    def chunks():
+        yield b"aa"
+        line.abandoned.set()
+        yield b"bb"
+
+    out = FakeOutput()
+    e._output = lambda: out
+    assert e._play(chunks(), 0, line) is None
+    assert out.written == [b"aa"] and not e.speaking()
+
+
+def test_a_fallback_line_canceled_before_the_loop_runs_it_is_not_spoken():
+    local = FakeSpeaker("local")
+    e = eleven(Opener(lambda: urllib.error.URLError("offline")), sapi=local)
+
+    async def run():
+        e.speak("A normal line.", interrupt=False)
+        wait_for(lambda: e._handed is not None)  # blocks the loop: the scheduled speak() has not run
+        handed = e._handed
+        e.cancel()
+        await asyncio.sleep(0.1)
+        return handed
+
+    handed = asyncio.run(run())
+    assert local.said == [] and handed.is_set()

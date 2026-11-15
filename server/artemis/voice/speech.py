@@ -536,7 +536,9 @@ class ElevenLabsSpeaker:
             self.last_first_audio_s = 0.0
             self._prefetch_next()
             self._hold_for_fallback(gen)
-            self._play(iter([cached]), gen)
+            if line.abandoned.is_set():
+                return  # dropped while the local voice was speaking
+            self._play(iter([cached]), gen, line)
             return
         started = time.monotonic()
         self._start(line)  # already running when it was prefetched
@@ -555,7 +557,9 @@ class ElevenLabsSpeaker:
         self._failures = 0
         self._prefetch_next()
         self._hold_for_fallback(gen)
-        played = self._play(self._chunks(line, first), gen)
+        if line.abandoned.is_set():
+            return  # dropped while the local voice was speaking
+        played = self._play(self._chunks(line, first), gen, line)
         if played is not None and text in CACHED_LINES:
             self._cache[key] = played
 
@@ -588,24 +592,33 @@ class ElevenLabsSpeaker:
         finally:
             line.close()
 
-    def _play(self, chunks, gen: int) -> bytes | None:
-        """Play PCM chunks as they come. Returns the whole audio if it played to the end, else None."""
+    def _play(self, chunks, gen: int, line: _Line | None = None) -> bytes | None:
+        """Play PCM chunks as they come. Returns the whole audio if it played to the end, else None.
+        A dropped (abandoned) line never plays: it is checked with gen, in the block that sets _playing."""
         stream = self._output()
         with self._lock:
-            if gen != self._gen:
-                return None
-            self._stream = stream
+            if gen != self._gen or (line is not None and line.abandoned.is_set()):
+                rejected = True
+            else:
+                rejected = False
+                self._stream = stream
+                self._playing.set()
+        if rejected:
+            try:
+                stream.close()
+            except Exception:
+                pass
+            return None
         kept = bytearray()
-        self._playing.set()
         try:
             stream.start()
             for chunk in chunks:
-                if not self._current(gen):
+                if not self._current(gen) or (line is not None and line.abandoned.is_set()):
                     return None
                 stream.write(chunk)
                 kept += chunk
             stream.stop()  # drains the buffer, so busy() stays true until the last word is heard
-            return bytes(kept) if self._current(gen) else None
+            return bytes(kept) if self._current(gen) and not (line is not None and line.abandoned.is_set()) else None
         except Exception as e:
             if self._current(gen):
                 log.warning("ElevenLabs playback stopped: %s", type(e).__name__)
@@ -653,7 +666,8 @@ class ElevenLabsSpeaker:
 
         def speak() -> None:
             try:
-                self.fallback.speak(text, False)
+                if self._current(gen):  # a cancel since the check above: say nothing
+                    self.fallback.speak(text, False)
             finally:
                 handed.set()
 
