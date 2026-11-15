@@ -101,3 +101,16 @@ def test_a_failing_hook_never_breaks_the_conversation():
     c = Controller(on_style=boom)
     d = c.decide("keep it brief")
     assert d.action == "say" and c.style.verbosity == "brief"
+
+
+def test_prefs_file_expands_home_and_ignores_a_relative_path(monkeypatch, tmp_path):
+    from artemis.conversation.prefs import default_path
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("ARTEMIS_PREFS_FILE", "~/prefs.json")
+    assert default_path() == tmp_path / "prefs.json"
+    monkeypatch.setenv("ARTEMIS_PREFS_FILE", "prefs.json")  # relative: would land in server/
+    assert default_path() == tmp_path / ".artemis" / "preferences.json"
+    monkeypatch.delenv("ARTEMIS_PREFS_FILE")
+    assert default_path() == tmp_path / ".artemis" / "preferences.json"
