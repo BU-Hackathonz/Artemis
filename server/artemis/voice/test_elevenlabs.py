@@ -11,6 +11,8 @@ from artemis.voice.speech import (
     FALLBACK_NOTICE,
     _Fallback,
     Announcer,
+    DEFAULT_VOICE_ID,
+    PLACEHOLDER_VOICE,
     ElevenLabsSpeaker,
     RateStatus,
 )
@@ -164,8 +166,23 @@ def test_missing_key_or_voice_falls_back_to_sapi_with_one_warning(monkeypatch, c
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
     e = ElevenLabsSpeaker(voice_id="voice_abc", fallback=FakeSpeaker("sapi"))
     assert not e.available() and "ELEVENLABS_API_KEY is not set" in caplog.text
-    e = ElevenLabsSpeaker(api_key=KEY, voice_id=None, fallback=FakeSpeaker("sapi"))
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id=PLACEHOLDER_VOICE, fallback=FakeSpeaker("sapi"))
     assert not e.available()
+
+
+def test_artemis_voice_is_the_default_and_the_env_overrides_it(monkeypatch):
+    assert ElevenLabsSpeaker(api_key=KEY, fallback=FakeSpeaker("sapi")).voice_id == DEFAULT_VOICE_ID
+    monkeypatch.setenv("ARTEMIS_ELEVEN_VOICE_ID", PLACEHOLDER_VOICE)  # the docs' placeholder means unset
+    assert ElevenLabsSpeaker(api_key=KEY, fallback=FakeSpeaker("sapi")).voice_id == DEFAULT_VOICE_ID
+    monkeypatch.setenv("ARTEMIS_ELEVEN_VOICE_ID", "voice_abc")
+    e = ElevenLabsSpeaker(api_key=KEY, fallback=FakeSpeaker("sapi"))
+    assert e.voice_id == "voice_abc" and e.available()
+
+
+def test_with_only_a_key_elevenlabs_speaks_in_artemiss_voice(monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", KEY)
+    a = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False)
+    assert a.current().name == "elevenlabs" and a.eleven.voice_id == DEFAULT_VOICE_ID
 
 
 # ----- the request -----

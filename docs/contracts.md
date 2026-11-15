@@ -290,7 +290,7 @@ pointer to NVDA's own rate setting. The controller knows which applies from `voi
 On SAPI the rate is the user's Windows setting unless `ARTEMIS_SAPI_RATE` replaces it, clamped to
 -3..6. Conversation's "faster" and "slower" change only the SAPI rate, one step at a time, and say
 so when a limit is reached. **Proposed (Yaovi, needs Avery; issue #134):** ElevenLabs is Artemis's
-voice by default when `ELEVENLABS_API_KEY` and `ARTEMIS_ELEVEN_VOICE_ID` are set, even while NVDA runs
+voice by default when `ELEVENLABS_API_KEY` is set (the voice is Artemis's own, `ARTEMIS_ELEVEN_VOICE_ID` overrides it), even while NVDA runs
 (`ARTEMIS_VOICE_ENGINE`, decisions.md §5a); NVDA then gets Artemis's lines on braille only and is
 never cancelled by Artemis, and `screen_reader` is "nvda" only when Artemis speaks through NVDA.
 Without a key, or with `ARTEMIS_VOICE_ENGINE=nvda` or `sapi`, the order above is unchanged. With
@@ -346,7 +346,15 @@ transcript.
 - **A clarifying question ends the task** (design A4 stands): the developer's next utterance is a
   new task in the same agent conversation. `/tasks/{tid}/reply` and `awaiting_reply` stay reserved.
 
-### 5.5 Wake word (opt-in: `ARTEMIS_LISTEN_MODE=wake`)
+### 5.5 Result earcons (behind `ARTEMIS_RESULT_EARCONS=on`, default off)
+With the flag on, the core plays one earcon just before the spoken line of: a `run.result` with exit
+code 0 (`"success"`), a `run.result` with a non-zero exit or a timeout (`"failure"`), and an
+`approval.requested` (`"approval"`). The line is still spoken in full; the tone is never a substitute.
+No earcon plays while the voice reports `listening`, and the flag is read once at startup. With the
+flag off, nothing plays. The voice `stub` never fails on these cues: `earcons.play` returns 0 when
+there is no output device, and the run goes on.
+
+### 5.6 Wake word (opt-in: `ARTEMIS_LISTEN_MODE=wake`)
 
 "Hey Artemis, <request>" in one breath, or "Hey Artemis", a beep, then the request within 8 s.
 The request is handled exactly like a push-to-talk transcript: `transcript.final`, then a task.
