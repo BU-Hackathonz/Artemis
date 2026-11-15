@@ -475,6 +475,7 @@ def test_tool_schemas_are_strict(tmp_path):
     assert names == [
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
         "inspect_page", "scan_project",
+        "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "plan",
     ]
     assert not {"shell", "delete_file", "ask_user", "scan", "install"} & set(names)
 
@@ -488,16 +489,16 @@ def test_strict_schema_keeps_a_property_named_like_a_keyword():
 
 
 def test_system_prompt_is_frozen_and_covers_the_rules():
-    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network",
+    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "Plan first", "waits for", "never touched",
                    "what it does as a whole", "never speak symbols", "in the log"]:
         assert phrase in SYSTEM_PROMPT
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
 # sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when a rejected or
-# scan-blocked change or run stopped being proposed again for the rest of the conversation) as it
+# the agent planned first and gained the desktop tools, contracts.md §9 and §10) as it
 # is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "9f2b7c6b97d60b529c45317129405d2dbe83c35a50f55486c856d225e255c2c3"
+MAIN_SYSTEM_PROMPT_SHA256 = "36f11aab0ba8171b526c0166d67e610f1cf83918678232d758b22aed2e01a147"
 
 
 def test_a_rejected_change_is_not_proposed_again_unless_asked():

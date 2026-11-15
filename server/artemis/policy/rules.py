@@ -1,6 +1,7 @@
 """The policy table: what each tool needs before it may run (design B3).
 
-There is no shell, delete, network or install tool. A tool that isn't in this table doesn't exist.
+There is no delete, network or install tool, and the one shell tool (run_command) runs a single approved line
+without the API keys. A tool that isn't in this table doesn't exist.
 """
 
 from dataclasses import dataclass
@@ -13,6 +14,13 @@ from artemis.contracts import (
     EditFileArgs,
     InspectPageArgs,
     ListFilesArgs,
+    OpenAppArgs,
+    OpenPathArgs,
+    PlanArgs,
+    PressKeysArgs,
+    ReadPathArgs,
+    RunCommandArgs,
+    TypeTextArgs,
     OpenProjectArgs,
     ReadFileArgs,
     RunProgramArgs,
@@ -46,4 +54,13 @@ RULES: dict[str, Rule] = {
     "inspect_page": Rule(InspectPageArgs),
     # The same Bandit scan, when the developer asks for it. Read-only, so no approval.
     "scan_project": Rule(ScanProjectArgs),
+    # The request's plan (contracts.md §10): no approval, it only says what will happen.
+    "plan": Rule(PlanArgs),
+    # The desktop (contracts.md §9): every one waits for the developer.
+    "open_app": Rule(OpenAppArgs, approval_kind="open"),
+    "open_path": Rule(OpenPathArgs, approval_kind="open"),
+    "read_path": Rule(ReadPathArgs, approval_kind="read_outside"),
+    "run_command": Rule(RunCommandArgs, approval_kind="run_command"),
+    "type_text": Rule(TypeTextArgs, approval_kind="type"),
+    "press_keys": Rule(PressKeysArgs, approval_kind="type"),
 }
