@@ -1018,6 +1018,7 @@ def core_main(monkeypatch, tmp_path):
     monkeypatch.setenv("ARTEMIS_RUNNER", "fake")
     monkeypatch.setenv("ARTEMIS_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("ARTEMIS_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("ARTEMIS_PREFS_FILE", str(tmp_path / "prefs" / "preferences.json"))  # never the home folder
     monkeypatch.delitem(sys.modules, "artemis.core.main", raising=False)
     module = importlib.import_module("artemis.core.main")
     monkeypatch.setitem(sys.modules, "artemis.core.main", module)  # removed again after the test
@@ -1040,6 +1041,49 @@ def test_installed_scanner_is_used_quietly(core_main, monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="artemis.core.main"):
         assert core_main.make_scan() is scan.scan
     assert "not installed" not in caplog.text
+
+
+# ----- remembered answer style (§5.4, conversation mode only) -----
+
+
+async def say(client, session, voice, transcript):
+    before = len(session.bus.history)
+    voice.transcript = transcript
+    await client.post("/voice/listen", headers=AUTH, json={"action": "start"})
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "transcript.final" for e in s.bus.history[before:]))
+
+
+async def test_keep_it_brief_is_remembered_in_the_next_session(client, core, voice, monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    core.prefs_path = tmp_path / "prefs" / "preferences.json"
+    _, first = await start(client, core)
+    await say(client, first, voice, "keep it brief")
+    assert first.conversation.style.verbosity == "brief"
+
+    _, second = await start(client, core)  # the next launch
+    assert second.conversation.style.verbosity == "brief"
+    saved = json.loads(core.prefs_path.read_text(encoding="utf-8"))
+    assert saved == {"version": 1, "style": {"verbosity": "brief", "focus": "none"}}  # nothing else
+
+
+async def test_with_conversation_off_no_style_file_is_written(client, core, voice, monkeypatch, tmp_path, core_main):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "off")
+    assert core_main.prefs_path(tmp_path / "projects") is None  # main.py passes no path at all
+    core.prefs_path = tmp_path / "prefs" / "preferences.json"  # and a path given anyway is not used
+    _, session = await start(client, core)
+    await say(client, session, voice, "keep it brief")
+    assert session.conversation is None
+    assert not (tmp_path / "prefs").exists()
+
+
+def test_style_file_never_in_the_projects_folder_or_the_repo(core_main, monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    projects = tmp_path / "projects"
+    assert core_main.prefs_path(projects) == tmp_path / "prefs" / "preferences.json"
+    for bad in [projects / "calc" / "p.json", core_main.REPO / "server" / "p.json", "p.json"]:
+        monkeypatch.setenv("ARTEMIS_PREFS_FILE", str(bad))
+        assert core_main.prefs_path(projects) is None
 
 
 # ----- result earcons (ARTEMIS_RESULT_EARCONS, contracts.md 5.5) -----

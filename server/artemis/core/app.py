@@ -87,6 +87,7 @@ class Core:
         log_dir=None,
         vocabulary=None,
         heartbeat_s: float = HEARTBEAT_S,
+        prefs_path: Path | None = None,
     ):
         self.voice = voice
         self.make_runner = make_runner
@@ -102,6 +103,9 @@ class Core:
         self.wake = None  # the "Hey Artemis" listener, when ARTEMIS_LISTEN_MODE=wake
         self.activity: tuple[str, str | None] = ("idle", None)  # the last voice.activity sent
         self.heartbeat_s = heartbeat_s
+        # Where the answer style is remembered (conversation mode only). None, the default, remembers
+        # nothing: only main.py passes a path, so tests never touch the home folder.
+        self.prefs_path = prefs_path
         # Interpreter pre-check: probed once per process, then reused by every session.
         self._interpreter_probe: asyncio.Task | None = None
         self.background: set[asyncio.Task] = set()  # per-session checks, canceled at shutdown
@@ -119,6 +123,7 @@ class Core:
             log_dir=self.log_dir,
             on_project=self._on_project,
             heartbeat_s=self.heartbeat_s,
+            prefs_path=self.prefs_path,
         )
         self.sessions[sid] = session
         return session

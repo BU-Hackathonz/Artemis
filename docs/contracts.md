@@ -361,14 +361,19 @@ transcript.
   "Use the keyboard to decide…"; a queued request adds "A decision is still waiting".
 - **Errors.** If handling an utterance fails (for example the voice can't change its rate), the
   core speaks an `error` with code `conversation_failed` and the session keeps working.
-- **Remembered answer style (proposed; needs the core to opt in).** The controller takes a starting
+- **Remembered answer style.** The controller takes a starting
   `Style` and calls an `on_style` hook on every change; `artemis.conversation.prefs` loads and saves
   it as `{"version": 1, "style": {"verbosity": …, "focus": …}}` in `ARTEMIS_PREFS_FILE`, or
   `%USERPROFILE%/.artemis/preferences.json`. Only those two fields are ever stored, never a
   transcript, project name or path. A missing, damaged or wrong-version file means the defaults, and
-  a failed save never reaches the conversation. The core decides whether to pass the saved style in
-  (tests and the browser demo must not touch the developer's home folder), so with no wiring nothing
-  is remembered and nothing changes.
+  a failed save never reaches the conversation. The core opts in only from `artemis.core.main`, and
+  only with `ARTEMIS_CONVERSATION=on`: each new session starts from the saved style and saves every
+  change (`Session(prefs_path=…)`). With the flag off nothing is read or written. `Core` and
+  `Session` default to no file, so tests and the in-memory browser demo never touch the home folder.
+  The core ignores an `ARTEMIS_PREFS_FILE` that is relative or inside the projects folder or the
+  repository. Sessions don't share a style while they run: the last change saved wins.
+  `infra\setup-demo.ps1 -Force` deletes the file, so a style set in a rehearsal doesn't reach the
+  stage run.
 - **Agent prompt.** With the flag on, the agent's system prompt also gets a "How to read a spoken
   request" paragraph (`artemis.agent.prompts.system_prompt(True)`). With it off, the system prompt
   is unchanged.
