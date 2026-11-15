@@ -6,6 +6,7 @@ instruction planted in a file has no tool that could carry it out.
 """
 
 import asyncio
+import sys
 import json
 import re
 
@@ -266,13 +267,33 @@ def test_an_instruction_planted_in_a_file_is_only_data(tmp_path):
     assert "ignoring" in outcome.text
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="the desktop tools exist only on Linux (contracts.md §9)")
+def test_an_injected_command_is_shown_word_for_word_and_runs_only_if_approved(tmp_path):
+    """run_command exists now (contracts.md §9): the defense is the dialog. The developer hears the
+    exact command and its folder; rejecting it runs nothing, and a risky one needs the override key."""
+    project = tmp_path / "calc"
+    project.mkdir()
+    (project / "README.md").write_text(INJECTED)
+    script = [
+        call("t1", "open_project", name="calc"),
+        message({"type": "tool_use", "id": "t2", "name": "run_command",
+                 "input": {"command": "rm -rf ~/Documents", "cwd": None}}, stop_reason="tool_use"),
+        text("I didn't run it."),
+    ]
+    s = Session(tmp_path, script, approvals=[Decision.reject])
+    asyncio.run(s.ask("summarize this project"))
+    [asked] = s.approvals.requests
+    assert asked.kind == "run_command" and asked.desktop.text == "rm -rf ~/Documents"
+    assert asked.blocking is True and "rm -rf ~/Documents" in asked.summary
+    assert s.results()[1]["error"] == "scan_blocked"
+
+
 @pytest.mark.parametrize(
     "tool_name, args",
     [
         ("delete_files", {"paths": ["main.py", "README.md"]}),
         ("delete_file", {"path": "main.py"}),
         ("shell", {"command": "del /q *"}),
-        ("run_command", {"command": "cleanup.bat"}),
         ("run_program", {"entry": "cleanup.bat", "args": []}),
         ("write_files", {"files": [{"path": "cleanup.bat", "content": "del /q *"}]}),
         ("edit_file", {"path": "cleanup.bat", "edits": [{"old": "rem", "new": "del /q *"}]}),
@@ -308,11 +329,14 @@ def test_if_the_model_obeyed_the_injection_the_gateway_still_refuses(tmp_path, t
 def test_no_destructive_tool_exists():
     assert set(RULES) == {
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
-        "inspect_page", "scan_project",
+        "inspect_page", "scan_project", "plan",
+        "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys",
     }
-    # Everything that changes the disk or starts a process needs the developer's approval.
+    # Everything that changes the disk, starts a process, reads outside the project or types needs
+    # the developer's approval (contracts.md §9).
     assert {name for name, rule in RULES.items() if rule.needs_approval} == {
         "write_files", "run_program", "edit_file",
+        "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys",
     }
 
 

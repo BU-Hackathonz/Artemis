@@ -52,6 +52,7 @@ from artemis.contracts import (
     WriteFilesArgs,
 )
 
+from .desktop import DesktopBridge, DesktopTools
 from .hashing import approval_hash, run_payload, write_payload
 from .paths import (
     MAX_FILES_PER_BATCH,
@@ -64,7 +65,7 @@ from .paths import (
     safe_resolve,
 )
 from .redact import redact, redact_obj
-from .rules import RULES
+from .rules import rule_for
 
 # Scans a folder and returns findings with paths relative to it. None until M2 (Bandit).
 # scan_project also passes a second argument: the one file or folder inside it to read.
@@ -185,7 +186,14 @@ def unified_diff(path: str, old: str | None, new: str) -> tuple[str, int, int]:
     return "".join(diff), added, removed
 
 
-class ToolGateway:
+# Desktop tools send their ring cue themselves, after the approval, when the action really starts.
+_SELF_CUED = {"open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "plan",
+              "write_files", "edit_file", "run_program"}
+
+
+class ToolGateway(DesktopTools):
+    _tool_error = _ToolError  # DesktopTools raises the gate's own error type
+
     def __init__(
         self,
         runner: Runner,
@@ -195,6 +203,8 @@ class ToolGateway:
         projects_dir: Path,
         scan: Scan | None = None,
         run_timeout_s: int = 10,
+        desktop: DesktopBridge | None = None,
+        require_plan: bool = False,  # the core turns it on for the real agent (§10)
     ):
         self._runner = runner
         self._approvals = approvals
@@ -206,9 +216,13 @@ class ToolGateway:
         self._folder_pending = False  # reserved by create_project, not on disk yet
         self._created: set[str] = set()  # slugs of projects created in this session
         self._echo_reports: dict = {}  # path -> last Echo Check report, for before/after
+        self._desktop = desktop  # the island's typing bridge (§9); None = no typing
+        self._require_plan = require_plan  # §10: acting tools wait for the request's plan
+        self._plans: dict = {}  # task id -> its PlanArgs
+        self._cued: dict = {}  # task id -> plan steps already cued
 
     async def call(self, task_id: str, name: str, args: dict) -> ToolResult:
-        rule = RULES.get(name)
+        rule = rule_for(name)
         if rule is None:
             return ToolResult(ok=False, error="not_found", message=f"There is no tool named {name}.")
         try:
@@ -222,6 +236,9 @@ class ToolGateway:
             return ToolResult(ok=False, error="invalid_args", message=problems)
 
         try:
+            self._plan_check(task_id, name)
+            if name not in _SELF_CUED:
+                await self._cue(task_id, name, None)
             data = await getattr(self, f"_{name}")(task_id, parsed)
         except PathRejected as exc:
             await self._error(task_id, "path_rejected", exc.reason, "Nothing was changed.")
@@ -666,6 +683,7 @@ class ToolGateway:
                 "The files changed twice while waiting for approval. Nothing was written.",
             )
 
+        await self._cue(task_id, "write_files", None)  # approved: the write really starts now
         # No await between the first and the last write, so a cancel can't split the batch.
         changes = []
         try:
@@ -793,6 +811,7 @@ class ToolGateway:
                 "invalidated", f"{a.entry} changed twice while waiting for approval. {nothing}"
             )
 
+        await self._cue(task_id, "run_program", None)  # approved: the run really starts now
         await self._state(task_id, "running", f"Running {entry}.")
         try:
             result = await self._runner.run(project, entry, list(a.args), self._run_timeout_s)
