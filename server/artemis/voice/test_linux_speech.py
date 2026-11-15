@@ -200,6 +200,16 @@ def test_each_artemis_priority_maps_to_its_speechd_level_and_is_set_only_on_chan
                            "main.py failed with exit code 1."]
 
 
+
+def test_a_silently_dropped_notification_never_leaves_busy_stuck():
+    # Measured on Ubuntu: speech-dispatcher discards a notification while another client speaks and
+    # sends no 702/703 for it. busy() must not wait for an event that never comes.
+    spd, fake = speechd()
+    spd.speak("Still working.", interrupt=False, priority="low")
+    assert fake.spoken == ["Still working."] and not spd.busy()
+    spd.speak("Created main.py, 1 line.", interrupt=False, priority="normal")
+    assert spd.busy()  # a normal line is still tracked until its END
+
 def test_windows_speakers_never_get_a_priority_argument():
     said = []
 

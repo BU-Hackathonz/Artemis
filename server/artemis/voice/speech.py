@@ -728,7 +728,9 @@ class SpeechDispatcherSpeaker:
                 self._reply()  # 230 OK RECEIVING DATA
                 self._send(*lines, ".")
                 queued = self._reply()  # 225-<msg id> / 225 OK MESSAGE QUEUED
-            if len(queued) > 1:
+            # A notification can be discarded silently, with no END or CANCELED event, so it is never
+            # counted: otherwise busy() would stay true for the session and every later low line be lost.
+            if len(queued) > 1 and level != "notification":
                 with self._state:
                     self._queued.add(queued[0][4:])
         except Exception as e:
