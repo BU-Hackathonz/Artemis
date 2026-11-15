@@ -149,6 +149,25 @@ def test_is_core_python_refuses_core_interpreter_and_venv(tmp_path, monkeypatch)
     assert not local._is_core_python(core_venv / "lib" / "helper.py")
 
 
+@pytest.mark.skipif(local.IS_WINDOWS, reason="symlinked venvs are the Linux and macOS layout")
+def test_symlinked_venv_python_does_not_make_the_system_python_ours(tmp_path, monkeypatch):
+    # Ubuntu: a uv venv's bin/python is a symlink to /usr/bin/python3.12 (David's laptop).
+    base = tmp_path / "usr" / "bin"
+    base.mkdir(parents=True)
+    system_python = base / "python3.12"
+    system_python.write_text("")
+    core_venv = tmp_path / "core" / ".venv"
+    (core_venv / "bin").mkdir(parents=True)
+    core_python = core_venv / "bin" / "python"
+    core_python.symlink_to(system_python)
+    monkeypatch.setattr(local.sys, "executable", str(core_python))
+    monkeypatch.setattr(local.sys, "prefix", str(core_venv))
+    monkeypatch.setattr(local.sys, "base_prefix", str(tmp_path / "usr"))
+    assert not local._is_core_python(system_python)  # the system Python runs user code
+    assert local._is_core_python(core_python)  # the venv's own python never does
+    assert local._is_core_python(core_venv / "bin" / "python3")
+
+
 def test_is_core_python_fails_closed_when_a_path_cannot_resolve(tmp_path, monkeypatch):
     def broken(self, strict=False):
         raise OSError("no such device")

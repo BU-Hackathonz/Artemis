@@ -14,3 +14,7 @@ server/artemis/voice/bin/
 *.pem
 *.key
 *.pfx
+
+# Voice previews from python -m artemis.voice.design_voice
+voice-previews/
+voice-samples/

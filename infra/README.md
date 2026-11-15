@@ -95,9 +95,18 @@ log or in the exe. It is removed from the environment when the launcher exits, a
 copies end with the process.
 
 Options: `-Agent stub|claude`, `-Voice whisper|stub`, `-AppPath <exe>`, `-NoConversation`,
-`-ForgetKey`, and `-NoPause` (for scripts: never wait for a key press). The launcher turns
+`-ForgetKey`, `-VoiceDemo`, `-NvdaVoice`, and `-NoPause` (for scripts: never wait for a key press). The launcher turns
 conversation mode on by default (built-in spoken phrases and one waiting follow-up, contracts.md
 §5.4); `start.ps1` itself still defaults to off.
+
+**Demo voice (reversible).** `-VoiceDemo` makes ElevenLabs Artemis's voice for that run. It asks for
+the ElevenLabs key as a hidden prompt (this process only; never saved, logged or put on a command
+line). Artemis stops sending its own lines to NVDA's speech, but they still go to the braille
+display, and NVDA keeps reading the screen: the screen reader and the app's accessibility are not
+changed. `-NvdaVoice` is the way back: NVDA speaks Artemis's lines and ElevenLabs is not used. With
+neither, the environment decides (ElevenLabs only if `ELEVENLABS_API_KEY` is already set). Nothing
+persists, so the next launch without the switch is the undo. `start.ps1` takes the same choice as
+`-VoiceEngine elevenlabs|nvda|sapi`. The desktop app never receives the ElevenLabs key.
 
 ### The window never closes unread
 
