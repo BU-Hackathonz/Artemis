@@ -809,3 +809,42 @@ def test_low_lines_are_not_spoken_while_push_to_talk_has_the_mic():
     asyncio.run(run())
     said = [e for e in log if isinstance(e, tuple)]
     assert said == [("say", "Still working.", "low"), ("say", "Created main.py, 1 line.", "normal"), ("say", "Still working.", "low")]
+
+
+def test_warm_primes_the_model_once_so_the_first_request_is_fast(monkeypatch):
+    """The first decode after login took 11-15 s on David's laptop: warm() now runs one throwaway pass."""
+    faster_whisper = pytest.importorskip("faster_whisper")  # CI's server job has no voice group
+
+    made = []
+
+    class Model(FakeModel):
+        def __init__(self, *a, **k):
+            super().__init__("ignored")
+            made.append(self)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", Model)
+    v = WhisperVoice()
+    v.warm()
+    v.warm()  # already loaded: no second priming
+    assert len(made) == 1 and len(made[0].calls) == 2
+    assert {kw["vad_filter"] for _, kw in made[0].calls} == {True, False}  # the VAD and the decoder both ran
+
+
+def test_a_failed_priming_still_leaves_a_working_model(monkeypatch):
+    faster_whisper = pytest.importorskip("faster_whisper")
+
+    class Model(FakeModel):
+        def __init__(self, *a, **k):
+            super().__init__("hello")
+            self.first = True
+
+        def transcribe(self, audio, **kw):
+            if self.first:
+                self.first = False
+                raise RuntimeError("cold start")
+            return super().transcribe(audio, **kw)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", Model)
+    v = WhisperVoice()
+    v.warm()
+    assert v._model is not None
