@@ -210,7 +210,7 @@ def test_a_risky_command_needs_the_override(home):
 
 # ----- open and read -----
 
-@pytest.mark.parametrize("name", ["evil.desktop", "run.sh", "tool.AppImage"])
+@pytest.mark.parametrize("name", ["evil.desktop", "run.sh", "tool.AppImage", "tool.py"])
 def test_open_never_runs_a_program(home, name):
     (home / "Documents" / name).write_text("x")
     g, _, approvals = gate(home, [Decision.approve])
@@ -296,12 +296,25 @@ def test_launcher_keys_are_refused_in_any_modifier_order(home, keys):
 
 @pytest.mark.parametrize("window", [
     "dev.warp.Warp.desktop: ~", "org.tabby.Tabby.desktop: x", "org.gnome.Guake.desktop: x", "org.kde.yakuake.desktop: x",
-    "com.mitchellh.ghostty.desktop: x", "jetbrains-idea.desktop: Main.java", "emacs.desktop: vterm", "foot.desktop: x",
-    "org.gnome.TextEditor.desktop: bob@box: ~/src", "Terminal"])
+    "com.mitchellh.ghostty.desktop: x", "foot.desktop: x", "org.gnome.TextEditor.desktop: bob@box: ~/src",
+    "org.gnome.Terminal.desktop: install.sh", "Terminal", "code.desktop: bob@box: ~/src", "code.desktop: main.py - Terminal",
+    "emacs.desktop: vterm", "code.desktop: zsh"])
 def test_more_terminals_need_the_override(home, window):
     g, _, approvals = gate(home, [Decision.reject], desktop=bridge(window, []))
     run(g.call("t1", "type_text", {"text": "ls"}))
     assert approvals.requests[0].blocking is True
+
+
+@pytest.mark.parametrize("window", ["code.desktop: main.py", "com.visualstudio.code.oss.desktop: main.py - project",
+                                    "code.desktop: install.sh - project", "code.desktop: .zshrc - Visual Studio Code",
+                                    "sublime-text.desktop: notes.txt", "jetbrains-idea.desktop: Main.java",
+                                    "emacs.desktop: init.el", "gvim.desktop: x.py", "cursor.desktop: app.ts",
+                                    "codium.desktop: x.py", "Visual Studio Code"])
+def test_editors_get_a_normal_approval(home, window):
+    typed = []
+    g, _, approvals = gate(home, [Decision.approve], desktop=bridge(window, typed))
+    assert run(g.call("t1", "type_text", {"text": "hello"})).ok
+    assert approvals.requests[0].blocking is False and typed == [("type", "hello", window)]
 
 
 @pytest.mark.parametrize("window", ["org.gnome.TextEditor.desktop: notes.txt", "org.gnome.Nautilus.desktop: Documents",
@@ -374,7 +387,8 @@ def test_acting_waits_for_the_plan(home):
     assert run(g.call("t1", "plan", plan)).ok
     assert run(g.call("t1", "run_command", {"command": "ls", "cwd": None})).ok
     cues = [e.data for e in log.of("ring.cue")]
-    assert cues == [{"step": 0, "action": "run", "target": "terminal"}]
+    assert cues == [{"step": None, "action": "think", "target": None},
+                    {"step": 0, "action": "run", "target": "terminal"}]
     assert log.of("agent.plan")[0].data["goal"] == "List the folder"
 
 
@@ -497,6 +511,129 @@ def test_the_launcher_file_is_part_of_the_approval(home, monkeypatch):
     assert launched == [] and approvals.requests[0].desktop.sha256
 
 
+def _system_apps(home, monkeypatch, **files):
+    """Apps in a system folder, not the developer's own: their launchers are not a planted file."""
+    sysdir = home / "sysshare"
+    (sysdir / "applications").mkdir(parents=True, exist_ok=True)
+    for name, body in files.items():
+        (sysdir / "applications" / f"{name}.desktop").write_text("[Desktop Entry]\nType=Application\n" + body)
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / "userdata"))
+    monkeypatch.setenv("XDG_DATA_DIRS", str(sysdir))
+
+
+@pytest.fixture
+def launched(monkeypatch):
+    argvs = []
+
+    async def fake(argv):
+        argvs.append(argv)
+    monkeypatch.setattr("artemis.policy.desktop._spawn_detached", fake)
+    return argvs
+
+
+# ----- opening: no dialog unless it could run something -----
+
+def test_a_normal_app_opens_without_the_dialog(home, monkeypatch, launched):
+    _system_apps(home, monkeypatch, notes="Name=Notes\nExec=notes %U\n")
+    g, log, approvals = gate(home, [Decision.reject])
+    run(g.call("t1", "plan", {"goal": "Open notes", "steps": [{"say": "Opening Notes.", "action": "open", "target": "Notes"}]}))
+    assert run(g.call("t1", "open_app", {"app": "notes"})).ok
+    assert approvals.requests == [] and launched == [["gtk-launch", "notes.desktop"]]
+    assert "Opened Notes." in log.spoken()
+    # the plan's think cue, then the open cue for its step
+    assert [e.data for e in log.of("ring.cue")] == [
+        {"step": None, "action": "think", "target": None}, {"step": 0, "action": "open", "target": "Notes"}]
+
+
+def test_vs_code_opens_without_the_dialog(home, monkeypatch, launched):
+    _system_apps(home, monkeypatch, code="Name=Visual Studio Code\nExec=/usr/bin/code %F\n")
+    g, log, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_app", {"app": "VS Code"})).ok
+    assert approvals.requests == [] and launched == [["gtk-launch", "code.desktop"]]
+    assert "Opened Visual Studio Code." in log.spoken()
+
+
+@pytest.mark.parametrize("app, entry", [
+    ("ptyxis", "Name=Terminal\nExec=ptyxis\n"),
+    ("tilix", "Name=Tilix\nExec=tilix -e %U\nTerminal=false\n"),
+    ("idle", "Name=IDLE\nExec=x\nTerminal=true\n"),
+    ("py", "Name=Py\nExec=python3 %F\n"),
+])
+def test_a_terminal_or_interpreter_asks_with_the_blocking_key(home, monkeypatch, launched, app, entry):
+    _system_apps(home, monkeypatch, **{app: entry})
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_app", {"app": app})).error == "scan_blocked"
+    assert approvals.requests[0].kind == "open" and approvals.requests[0].blocking is True
+    assert launched == []
+
+
+def test_an_approved_terminal_is_opened_only_after_the_decision(home, monkeypatch, launched):
+    _system_apps(home, monkeypatch, ptyxis="Name=Terminal\nExec=ptyxis\n")
+    g, _, approvals = gate(home, [Decision.approve])
+    assert run(g.call("t1", "open_app", {"app": "ptyxis"})).ok
+    assert approvals.requests[0].blocking is True and launched == [["gtk-launch", "ptyxis.desktop"]]
+
+
+def test_a_launcher_in_my_own_applications_folder_asks_even_for_a_normal_app(home, monkeypatch, launched):
+    _apps(home, monkeypatch, firefox="Name=Firefox\nExec=firefox\n")  # the user's folder: could be planted
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_app", {"app": "firefox"})).error == "scan_blocked"
+    assert approvals.requests[0].blocking is True and launched == []
+
+
+@pytest.mark.parametrize("folder", ["Documents", "Desktop", "Downloads", "Projects"])
+def test_a_document_in_my_own_folders_opens_without_the_dialog(home, launched, folder):
+    (home / folder).mkdir(exist_ok=True)
+    (home / folder / "notes.md").write_text("# hi")
+    g, log, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_path", {"path": f"~/{folder}/notes.md", "with_app": None})).ok
+    assert approvals.requests == [] and launched == [["gio", "open", str((home / folder / "notes.md").resolve())]]
+    assert "Opened notes.md." in log.spoken()
+
+
+def test_a_file_in_the_projects_folder_and_the_current_project_opens_without_the_dialog(home, launched):
+    g, _, approvals = gate(home, [Decision.reject])
+    project = home / "ArtemisProjects" / "calc"
+    project.mkdir(parents=True)
+    (project / "notes.md").write_text("x")
+    assert run(g.call("t1", "open_project", {"name": "calc"})).ok
+    assert run(g.call("t1", "open_path", {"path": "notes.md", "with_app": None})).ok
+    assert run(g.call("t1", "open_path", {"path": str(home / "ArtemisProjects" / "calc" / "notes.md"), "with_app": None})).ok
+    assert approvals.requests == [] and len(launched) == 2
+
+
+def test_a_file_outside_my_folders_asks_without_the_blocking_key(home, launched):
+    (home / "Music").mkdir()
+    (home / "Music" / "song.txt").write_text("la")
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_path", {"path": "~/Music/song.txt", "with_app": None})).error == "rejected_by_user"
+    assert approvals.requests[0].kind == "open" and approvals.requests[0].blocking is False and launched == []
+
+
+def test_an_approved_file_outside_my_folders_opens(home, launched):
+    (home / "Music").mkdir()
+    (home / "Music" / "song.txt").write_text("la")
+    g, _, approvals = gate(home, [Decision.approve])
+    assert run(g.call("t1", "open_path", {"path": "~/Music/song.txt", "with_app": None})).ok
+    assert len(approvals.requests) == 1 and launched == [["gio", "open", str((home / "Music" / "song.txt").resolve())]]
+
+
+def test_a_normal_app_for_a_document_opens_without_the_dialog(home, monkeypatch, launched):
+    _system_apps(home, monkeypatch, notes="Name=Notes\nExec=notes %U\n")
+    (home / "Documents" / "n.txt").write_text("hi")
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_path", {"path": "~/Documents/n.txt", "with_app": "notes"})).ok
+    assert approvals.requests == [] and launched == [["gtk-launch", "notes.desktop", str((home / "Documents" / "n.txt").resolve())]]
+
+
+def test_opening_with_a_planted_launcher_asks_with_the_blocking_key(home, monkeypatch, launched):
+    _apps(home, monkeypatch, notes="Name=Notes\nExec=notes %U\n")  # the user's folder
+    (home / "Documents" / "n.txt").write_text("hi")
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_path", {"path": "~/Documents/n.txt", "with_app": "notes"})).error == "scan_blocked"
+    assert approvals.requests[0].blocking is True and launched == []
+
+
 def test_open_with_a_terminal_or_interpreter_is_refused(home, monkeypatch):
     _apps(home, monkeypatch, ptyxis="Name=Terminal\nExec=ptyxis %U\nTerminal=false\n", py="Name=Py\nExec=python3 %F\n",
           idle="Name=IDLE\nExec=x\nTerminal=true\n", code="Name=Visual Studio Code\nExec=/usr/bin/code %F\n")
@@ -525,3 +662,155 @@ def test_a_failed_launch_reports_why(tmp_path):
     script.chmod(0o755)
     with pytest.raises(RuntimeError, match="no such app"):
         run(_spawn_detached([str(script)]))
+
+
+# ----- VS Code: how it is installed, what the developer calls it, and what opens in it -----
+
+_VSCODE_INSTALLS = {
+    # deb package: /usr/share/applications/code.desktop
+    "deb": ("code", "Name=Visual Studio Code\nExec=/usr/share/code/code --unity-launch %F\n"
+                    "Categories=Utility;TextEditor;Development;IDE;\n"),
+    # snap: snapd exports code_code.desktop; its Exec starts with env
+    "snap": ("code_code", "Name=Visual Studio Code\nExec=env BAMF_DESKTOP_FILE_HINT=/var/lib/snapd/desktop/"
+                          "applications/code_code.desktop /snap/bin/code --unity-launch %F\n"
+                          "Categories=Utility;TextEditor;Development;IDE;\n"),
+    # flatpak: exported under /var/lib/flatpak/exports/share/applications
+    "flatpak": ("com.visualstudio.code", "Name=Visual Studio Code\nExec=/usr/bin/flatpak run --branch=stable "
+                                         "--arch=x86_64 --command=code com.visualstudio.code %F\n"
+                                         "Categories=Utility;TextEditor;Development;IDE;\n"),
+    # VSCodium, the open build
+    "vscodium": ("codium", "Name=VSCodium\nExec=/usr/share/codium/codium --unity-launch %F\n"
+                           "Categories=TextEditor;IDE;\n"),
+}
+
+
+def _only(home, monkeypatch, **files):
+    """Only these desktop entries are installed: a fake applications folder, nothing from this machine."""
+    folder = home / "apps"
+    folder.mkdir(exist_ok=True)
+    for name, body in files.items():
+        (folder / f"{name}.desktop").write_text("[Desktop Entry]\nType=Application\n" + body)
+    monkeypatch.setattr("artemis.policy.desktop._app_dirs", lambda: [folder])
+    return folder
+
+
+def _launches(monkeypatch):
+    launched = []
+
+    async def fake(argv):
+        launched.append(argv)
+    monkeypatch.setattr("artemis.policy.desktop._spawn_detached", fake)
+    return launched
+
+
+def test_the_app_folders_cover_snap_flatpak_and_the_deb_menu(monkeypatch):
+    from artemis.policy.desktop import _app_dirs
+    monkeypatch.setenv("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
+    folders = [str(p) for p in _app_dirs()]
+    assert "/usr/share/applications" in folders
+    assert "/var/lib/snapd/desktop/applications" in folders
+    assert "/var/lib/flatpak/exports/share/applications" in folders
+
+
+@pytest.mark.parametrize("install", sorted(_VSCODE_INSTALLS))
+@pytest.mark.parametrize("said", ["VS Code", "vscode", "Visual Studio Code", "code", "editor"])
+def test_vs_code_is_found_whatever_the_install(home, monkeypatch, install, said):
+    from artemis.policy.desktop import find_app
+    stem, body = _VSCODE_INSTALLS[install]
+    _only(home, monkeypatch, **{stem: body})
+    assert find_app(said)[0] == f"{stem}.desktop"
+
+
+def test_editor_falls_back_to_the_text_editor_without_vs_code(home, monkeypatch):
+    from artemis.policy.desktop import find_app
+    _only(home, monkeypatch, **{"org.gnome.TextEditor": "Name=Text Editor\nExec=gnome-text-editor %U\n"
+                                                      "Categories=GNOME;GTK;Utility;TextEditor;\n"})
+    assert find_app("editor") == ("org.gnome.TextEditor.desktop", "Text Editor")
+    assert find_app("vs code") is None
+
+
+def test_code_does_not_match_an_app_that_only_contains_it(home, monkeypatch):
+    from artemis.policy.desktop import find_app
+    _only(home, monkeypatch, barcode="Name=Barcode Scanner\nExec=barcode\n")
+    assert find_app("code") is None and find_app("vs code") is None
+
+
+def test_the_launcher_hash_is_the_file_that_launches(home, monkeypatch):
+    from artemis.policy.desktop import app_digest, file_sha256
+    folder = _only(home, monkeypatch, **{"code_code": _VSCODE_INSTALLS["snap"][1]})
+    assert app_digest("code_code.desktop") == file_sha256(folder / "code_code.desktop")
+    assert app_digest("vs code") == file_sha256(folder / "code_code.desktop")
+
+
+def test_a_snap_vs_code_is_an_editor_and_an_env_prefixed_python_is_not(home, monkeypatch):
+    from artemis.policy.desktop import app_is_editor, app_runs_files
+    _only(home, monkeypatch, **{"code_code": _VSCODE_INSTALLS["snap"][1],
+                                "py": "Name=Py\nExec=/usr/bin/env python3 %F\n"})
+    assert app_runs_files("code_code.desktop") is False
+    assert app_is_editor("code_code.desktop") is True
+    assert app_runs_files("py") is True
+
+
+def _project_with_main(g):
+    assert run(g.call("t1", "create_project", {"name": "Hello App"})).ok
+    written = run(g.call("t1", "write_files", {"files": [{"path": "main.py", "content": "print('hi')\n"}]}))
+    assert written.ok, written
+    return Path(g.project.root)
+
+
+def test_vs_code_opens_the_program_the_agent_just_wrote(home, monkeypatch):
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    g, _, _ = gate(home)
+    project = _project_with_main(g)
+    result = run(g.call("t1", "open_path", {"path": "main.py", "with_app": "vs code"}))
+    assert result.ok, result
+    assert launched == [["gtk-launch", "code.desktop", str(project / "main.py")]]
+    assert result.data["with"] == "Visual Studio Code"
+
+
+def test_vs_code_opens_the_project_folder_by_relative_or_full_path(home, monkeypatch):
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    g, _, _ = gate(home)
+    project = _project_with_main(g)
+    assert run(g.call("t1", "open_path", {"path": ".", "with_app": "code"})).ok
+    assert launched[-1] == ["gtk-launch", "code.desktop", str(project)]
+    assert run(g.call("t1", "open_path", {"path": str(project), "with_app": None})).ok
+    assert launched[-1] == ["gio", "open", str(project)]
+
+
+def test_a_program_still_does_not_open_in_the_default_app(home, monkeypatch):
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    g, _, _ = gate(home)
+    _project_with_main(g)
+    assert run(g.call("t1", "open_path", {"path": "main.py", "with_app": None})).error == "path_rejected"
+    assert launched == []
+
+
+def test_vs_code_still_refuses_launchers_and_executables(home, monkeypatch):
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    g, _, _ = gate(home)
+    project = _project_with_main(g)
+    (project / "launch.desktop").write_text("[Desktop Entry]\nExec=sh -c evil\n")
+    (project / "index.html").write_text("<script>1</script>")
+    tool = project / "tool"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    for path in ("launch.desktop", "index.html", "tool"):
+        assert run(g.call("t1", "open_path", {"path": path, "with_app": "vs code"})).error == "path_rejected"
+    assert launched == []
+
+
+def test_a_project_outside_the_home_folder_opens_in_vs_code(tmp_path, home, monkeypatch):
+    from artemis.policy.testing import EventLog, FakeApprovals, FakeRunner
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    projects = tmp_path / "elsewhere" / "projects"
+    projects.mkdir(parents=True)
+    g = ToolGateway(FakeRunner(projects), FakeApprovals([]), EventLog(), projects_dir=projects)
+    project = _project_with_main(g)
+    assert run(g.call("t1", "open_path", {"path": "main.py", "with_app": "vs code"})).ok
+    assert launched == [["gtk-launch", "code.desktop", str(project / "main.py")]]
