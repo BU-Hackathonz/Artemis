@@ -6,6 +6,7 @@ instruction planted in a file has no tool that could carry it out.
 """
 
 import asyncio
+import sys
 import json
 import re
 
@@ -266,6 +267,7 @@ def test_an_instruction_planted_in_a_file_is_only_data(tmp_path):
     assert "ignoring" in outcome.text
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="the desktop tools exist only on Linux (contracts.md §9)")
 def test_an_injected_command_is_shown_word_for_word_and_runs_only_if_approved(tmp_path):
     """run_command exists now (contracts.md §9): the defense is the dialog. The developer hears the
     exact command and its folder; rejecting it runs nothing, and a risky one needs the override key."""

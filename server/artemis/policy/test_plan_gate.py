@@ -1,6 +1,9 @@
 """The plan gate (contracts.md section 10): re-plans, read-only tools, recovery, cue timing, cleanup."""
 
 import asyncio
+import sys
+
+import pytest
 
 from artemis.contracts import Decision
 from artemis.policy.gateway import ToolGateway
@@ -60,6 +63,7 @@ def test_a_rejected_write_is_not_cued(tmp_path):
     assert [e.data["step"] for e in log.of("ring.cue") if e.data["action"] == "write"] == [0]
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="the desktop tools exist only on Linux (contracts.md §9)")
 def test_a_self_cued_tool_is_not_cued_before_its_approval(tmp_path):
     g, log = gate(tmp_path, [Decision.reject])
     plan = {"goal": "Run", "steps": [{"say": "Run it.", "action": "run", "target": "terminal"}]}
