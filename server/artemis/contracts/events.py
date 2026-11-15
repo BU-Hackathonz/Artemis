@@ -22,6 +22,9 @@ EventType = Literal[
     "error",
     "voice.status",
     "voice.activity",
+    "agent.plan",
+    "ring.cue",
+    "desktop.action",
 ]
 
 # `awaiting_reply` is reserved and unused in the MVP (design A4).
@@ -110,6 +113,37 @@ class VoiceActivityData(BaseModel):
     engine: str | None = None  # who is speaking: elevenlabs, sapi, nvda (an estimate), or null
 
 
+class PlanStepData(BaseModel):
+    say: str
+    action: Literal["think", "read", "write", "run", "open", "type", "explain"]
+    target: str | None = None
+
+
+class AgentPlanData(BaseModel):
+    """The agent's plan for the request, before it acts (contracts.md §10, Proposed)."""
+
+    goal: str
+    steps: list[PlanStepData]
+
+
+class RingCueData(BaseModel):
+    """A plan step that is really happening now: sent by the gate on each tool call, never from the
+    plan alone, so the ring only shows what Artemis is actually doing (§10)."""
+
+    step: int | None = None  # index into the plan's steps, when a step matches
+    action: Literal["think", "read", "write", "run", "open", "type", "explain", "done"]
+    target: str | None = None  # "editor", "terminal", "file", "browser", an app name, or a path's name
+
+
+class DesktopActionData(BaseModel):
+    """An approved desktop action the island performs (only the shell can type on Wayland; §9).
+    The island answers with POST /desktop/{op_id}/result."""
+
+    op_id: str
+    kind: Literal["type", "keys"]
+    text: str
+
+
 DATA_MODELS: dict[str, type[BaseModel]] = {
     "transcript.partial": TranscriptData,
     "transcript.final": TranscriptData,
@@ -123,6 +157,9 @@ DATA_MODELS: dict[str, type[BaseModel]] = {
     "error": ErrorData,
     "voice.status": VoiceStatusData,
     "voice.activity": VoiceActivityData,
+    "agent.plan": AgentPlanData,
+    "ring.cue": RingCueData,
+    "desktop.action": DesktopActionData,
 }
 
 

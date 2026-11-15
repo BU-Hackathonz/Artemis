@@ -530,3 +530,44 @@ task contract is needed: `voice.activity` (§2) adds the voice's own states.
 - **Proposed (Avery), from David's run with real speech:** Artemis talks through most of a task, so an overlay hid Editing, Running and Done for the whole task. Speaking now shows on its own only when idle. Listening and transcribing still take priority over everything, since push-to-talk stops speech (§5.1).
 - On Linux there is no NVDA estimate: `speaking` comes from the engine that plays the audio.
   Orca's own speech is the screen reader's and is never reported.
+
+## 9. Desktop tools (Proposed (David), for Avery to merge)
+
+Artemis may act on the whole desktop, never without the guarded approval dialog. The models are in
+`contracts/tools.py` (`DESKTOP_TOOL_ARGS`). Each tool moves into `TOOL_ARGS`, and so becomes visible
+to the model, only when the policy gate handles it.
+
+| Tool | Args | Approval `kind` | What the dialog shows and says |
+|---|---|---|---|
+| `open_app` | `{app}` | `open` | "Open VS Code." |
+| `open_path` | `{path, with_app?}` | `open` | "Open notes.txt in Text Editor." |
+| `read_path` | `{path, start_line?, end_line?}` | `read_outside` | "Read ~/Documents/plan.md." (one approval per file) |
+| `run_command` | `{command, cwd?}` | `run_command` | The exact command and its folder, word for word |
+| `type_text` | `{text}` | `type` | The exact text, and "into the focused window" |
+| `press_keys` | `{keys}` | `type` | The keys, e.g. "Control S" |
+
+- `Approval.desktop` (`DesktopSpec {action, target, text?}`) carries what a desktop approval will do.
+  `approval_hash` covers it, so what was approved is what runs.
+- **Policy:** paths must be under `$HOME` and pass `safe_resolve`'s link check. Never `.ssh`, `.gnupg`,
+  `.local/share/keyrings`, `.env*`, `.git`, browser profiles, `~/.config/Claude`, `~/.artemis` or the
+  launch file. `run_command` runs with a 30 s timeout and capped output, in an environment without
+  `ANTHROPIC_*`, `ELEVENLABS_*` or `ARTEMIS_TOKEN`. Everything read or printed returns to the model
+  wrapped as untrusted. A blocked or rejected action follows the #113 rule.
+- **Typing** happens in the GNOME shell, because only the shell can type on Wayland. After approval
+  the core emits `desktop.action {op_id, kind: "type"|"keys", text}`. The island types into the
+  focused window, stopping if focus moves, and answers `POST /desktop/{op_id}/result {ok, message?}`
+  (`DesktopResult`). With no island connected, the tool fails with `desktop_unavailable`.
+- Opening apps and paths runs in the core (`gio launch`, `xdg-open`), with or without the island.
+
+## 10. The plan and the ring (Proposed (David), for Avery to merge)
+
+- **The plan comes first.** For each request the agent calls `plan {goal, steps: [{say, action, target?}]}`
+  before any other tool, where `action` is one of think, read, write, run, open, type or explain.
+  Any other tool called first fails with `plan_required`. The agent may call `plan` again to re-plan,
+  for example after a rejection.
+- The core emits `agent.plan {goal, steps}` once per plan. The island lists the steps up front.
+- **The ring follows real tool calls, never the plan alone.** On each tool call, the gate emits
+  `ring.cue {step?, action, target?}`: the matching plan step, if there is one, and what is really
+  happening. When the task ends it emits `ring.cue {action: "done"}`. The island moves the ring to
+  the target (editor, terminal, a window) and gives each action its own look, which is Jun's call.
+- Spoken lines stay the agent's own: a step's `say` is short enough to speak as is.
