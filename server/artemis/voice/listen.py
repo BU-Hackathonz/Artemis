@@ -137,6 +137,7 @@ class WhisperVoice:
         self._stream_factory = stream_factory or _input_stream
         self._earcon = earcon
         self._stream = None
+        self.transcribing = False  # Whisper is turning the last recording into text (voice.activity)
         self._wanted = False  # key is held; cleared by stop, even while the start earcon plays
         self._gen = 0  # bumped by every press and release, so a stale start never opens the mic
         self._tail: tuple[asyncio.Event, asyncio.Event] | None = None  # (cut, closed) during an opt-in post-roll
@@ -247,7 +248,11 @@ class WhisperVoice:
         if level < MIN_RMS:
             log.warning("Release dropped: silent (loudest 100 ms RMS %.5f, needs %.3f)", level, MIN_RMS)
             return ""  # nobody spoke
-        text = await asyncio.to_thread(self._transcribe, audio)
+        self.transcribing = True
+        try:
+            text = await asyncio.to_thread(self._transcribe, audio)
+        finally:
+            self.transcribing = False
         return strip_wake_word(text)
 
     def _close(self, stream) -> np.ndarray:

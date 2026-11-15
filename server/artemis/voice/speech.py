@@ -380,6 +380,10 @@ class ElevenLabsSpeaker:
     def busy(self) -> bool:
         return self._playing.is_set() or not self._queue.empty()
 
+    def speaking(self) -> bool:
+        """Audio is playing now (a queued or downloading line is not speech yet)."""
+        return self._playing.is_set()
+
     # Speed: "faster" and "slower"
 
     def step_speed(self, delta: int) -> RateStatus:
@@ -639,6 +643,20 @@ class Announcer:
                     self.sapi.set_rate(profile.sapi_rate)
                 except Exception as e:
                     log.warning("Could not set the SAPI rate: %s", type(e).__name__)
+
+    def speaking_engine(self) -> str | None:
+        """Which speaker is audibly saying Artemis's line now, or None. ElevenLabs: its audio is playing.
+        SAPI: SpVoice is speaking. NVDA: only Artemis's own estimate, since NVDA can't report playback."""
+        eleven = self.eleven
+        if eleven is not None and getattr(eleven, "speaking", eleven.busy)():
+            return "elevenlabs"
+        for speaker in (self.sapi, self.nvda):
+            try:
+                if speaker.available() and speaker.busy():
+                    return speaker.name
+            except Exception:  # a speaker that can't be asked is not speaking
+                continue
+        return None
 
     def active_engine(self) -> str:
         """The name of the speaker that would speak the next line: elevenlabs, nvda, sapi or none."""

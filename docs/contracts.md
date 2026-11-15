@@ -69,6 +69,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 | `security.findings` | `{op_id, tool: "bandit"\|"semgrep", findings: [{rule, severity, path, line, message}]}`, not announced: the findings are spoken in the approval summary that follows, or in `scan_project`'s own line. Sent only when there are findings. `tool` is always `"bandit"` today (Semgrep is not implemented) |
 | `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on. Announced at high as "message recovery", except a failed task's, which says "The task failed. <reason> You can try again." |
 | `voice.status` | `{voice_ready, screen_reader, engine}`, emitted at session start and whenever either value changes (§5.3). `engine` (**Proposed (Avery)**, §7) is the speaker that would say the next line: `elevenlabs`, `nvda`, `sapi` or `none`; a settings change that alters it is also emitted |
+| `voice.activity` | `{state: "idle"\|"listening"\|"transcribing"\|"speaking", engine}` (approved by Avery, §8), not announced. Sent to every session when the voice's real state changes, never from timers: `listening` from the push-to-talk press until the mic closes (the listening earcon and any post-roll included), `transcribing` while Whisper turns the recording into text, `speaking` while Artemis's line is audible (`engine` says who: `elevenlabs` while its audio plays, `sapi` while SpVoice speaks, `nvda` for Artemis's own estimate, since NVDA can't report playback), `idle` otherwise. A session starts idle; one created while the voice is busy gets the current state once. State and engine only: no text, transcript or audio |
 
 ```jsonc
 // Approval
@@ -458,3 +459,27 @@ A `422` or `409` saves nothing and applies nothing. A `GET` never writes the fil
 conversation controller's `prefs` work), remembered preferences across launches, the listening mode,
 the push-to-talk shortcut (client-side), and reduced motion (client-side). A wider `Settings` model
 covering these was proposed in the settings audit and is not part of this section.
+
+## 8. Island states (approved by Avery; the notch and island)
+
+The island shows only what the core's events prove. Nothing is inferred from timers, and no new
+task contract is needed: `voice.activity` (§2) adds the voice's own states.
+
+| Island state | Shown when | Ends when |
+|---|---|---|
+| idle | no active task and `voice.activity` is `idle` | any row below starts |
+| listening | `voice.activity` `listening` | `transcribing` or `idle` |
+| thinking | `voice.activity` `transcribing`, or `task.state` `queued` or `working` with no `file.changed` yet in this task | the next row's event |
+| editing | `approval.requested` of kind `write_files` (waiting), then `file.changed` after it is approved | `task.state` `running`, `succeeded`, `failed` or `canceled` |
+| running | `task.state` `running` | `run.result` |
+| speaking | `voice.activity` `speaking`, on top of whichever task state holds | `voice.activity` leaves `speaking` |
+| done | `task.state` `succeeded` (the `run.result` exit code is 0 or there was no run) | the next request or about 3 s, client's choice |
+| error | `task.state` `failed`, an `error` event, or `run.result` with a non-zero exit code or `timed_out` | the next request |
+
+- `awaiting_approval` is not a separate island state: the approval dialog is focused (Enter guard,
+  §5) while the island keeps the state it had, marked as waiting.
+- `canceled` returns to idle after the spoken "Canceled.".
+- Speaking overlays the task states because Artemis talks while it works. Listening and
+  transcribing take priority over speaking, since push-to-talk stops speech (§5.1).
+- On Linux there is no NVDA estimate: `speaking` comes from the engine that plays the audio.
+  Orca's own speech is the screen reader's and is never reported.

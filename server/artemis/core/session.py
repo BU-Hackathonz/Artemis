@@ -544,3 +544,7 @@ class Session:
                 data={"voice_ready": voice_ready, "screen_reader": screen_reader, "engine": engine},
             )
         )
+
+    async def voice_activity(self, state: str, engine: str | None) -> None:
+        """State and engine only: no text, transcript or audio (contracts.md section 2)."""
+        await self.emit(EventDraft(type="voice.activity", data={"state": state, "engine": engine}))
