@@ -590,8 +590,8 @@ class WakeListener:
             self._handle(event)
 
     def _handle(self, event: Event) -> None:
-        if event.kind in ("wake", "request"):  # numbers only: how long after the last word it was decided
-            log.info("Wake word: %s %.2f s after the last word (%.1f s quiet + %.2f s Whisper)", event.kind,
+        if event.kind in ("wake", "request"):  # numbers only: how long after the last word it was decided (warning: core.log keeps warning+)
+            log.warning("Wake word: %s %.2f s after the last word (%.1f s quiet + %.2f s Whisper)", event.kind,
                      event.quiet_s + event.whisper_s, event.quiet_s, event.whisper_s)
         if event.kind == "wake":
             self._earcon("listening")

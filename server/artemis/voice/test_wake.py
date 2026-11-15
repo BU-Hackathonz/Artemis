@@ -493,6 +493,16 @@ def test_a_misheard_wake_plays_the_stopped_earcon(monkeypatch):
     assert voice.earcons == ["stopped"]
 
 
+def test_the_timing_line_is_a_warning_with_numbers_only(caplog):
+    from artemis.voice.wake import Event
+    listener = WakeListener(FakeVoice([]), lambda text: None, stream_factory=FakeStream)
+    with caplog.at_level("WARNING"):
+        listener._handle(Event("wake", text="hey artemis open secret", quiet_s=0.5, whisper_s=0.1))
+    rec = [r for r in caplog.records if "after the last word" in r.getMessage()]
+    assert rec and rec[0].levelname == "WARNING"
+    assert "0.60 s after the last word" in rec[0].getMessage() and "secret" not in caplog.text
+
+
 def test_quick_model_setting(monkeypatch):
     from artemis.voice.wake import quick_model
     monkeypatch.delenv("ARTEMIS_WAKE_QUICK_MODEL", raising=False)
