@@ -77,17 +77,17 @@
           </div>
         </div>
       </div>
-      <p class="caption">Artemis speaks in your NVDA voice and sends the same line to your braille display (or uses the Windows voice without NVDA), and keeps every line in a log you can review.</p>
+      <p class="caption">Artemis speaks in its own voice while Orca keeps reading your screen, and keeps every line in a log you can review.</p>
     </div>
   </section>
 
   <section class="marquee-sec" aria-label="Built on">
     <p class="marquee-label">Built with</p>
     <div class="marquee" aria-hidden="true">
-      <div class="track"><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span><span>NVDA</span><span>Windows SAPI</span><span>Whisper</span><span>Claude</span><span>Tauri</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Braille displays</span></div>
-      <div class="track rev"><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Reviewable log</span><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech</span><span>Reviewable log</span></div>
+      <div class="track"><span>Ubuntu</span><span>GNOME Shell</span><span>Orca</span><span>Whisper</span><span>ElevenLabs</span><span>Claude</span><span>axe-core</span><span>Bandit</span><span>Python</span><span>Ubuntu</span><span>GNOME Shell</span><span>Orca</span><span>Whisper</span><span>ElevenLabs</span><span>Claude</span><span>axe-core</span><span>Bandit</span><span>Python</span></div>
+      <div class="track rev"><span>Hey Artemis</span><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech recognition</span><span>Reviewable log</span><span>Hey Artemis</span><span>Push-to-talk</span><span>Spoken diffs</span><span>Keyboard approvals</span><span>Security scans</span><span>Echo Check</span><span>Local speech recognition</span><span>Reviewable log</span></div>
     </div>
-    <p class="sr">Built on NVDA, Windows SAPI, Whisper, Claude, Tauri, axe-core, Bandit and Python, with braille display support. Features: push-to-talk, spoken diffs, keyboard approvals, security scans, Echo Check, local speech and a reviewable log.</p>
+    <p class="sr">Built on Ubuntu, GNOME Shell, Orca, Whisper, ElevenLabs, Claude, axe-core, Bandit and Python. Features: the "Hey Artemis" wake word, push-to-talk, spoken diffs, keyboard approvals, security scans, Echo Check, local speech recognition and a reviewable log.</p>
   </section>
 
   <section aria-labelledby="what-title">
@@ -95,12 +95,12 @@
       <h2 class="sr" id="what-title">What Artemis does</h2>
       <p class="statement" data-light>Code you can hear, changes you approve, results you can trust. Built for screen readers first, and fast where it counts.</p>
       <ul class="list" id="what-list">
-        <li><a href="how-it-works.html"><span class="k">Voice</span><strong>Speak or type a request</strong><p>Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app. Artemis reads back what it heard first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="how-it-works.html"><span class="k">Voice</span><strong>Speak or type a request</strong><p>Say "Hey Artemis", or hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app. Artemis reads back what it heard first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="trust.html"><span class="k">Control</span><strong>Approve the exact change</strong><p>Enter approves, Escape rejects. A spoken "yes" never decides.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="how-it-works.html"><span class="k">Runs</span><strong>Run it for real</strong><p>A fixed command, a time limit, and none of Artemis's secrets.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="trust.html"><span class="k">Safety</span><strong>Catch problems before they run</strong><p>Python files are scanned before each write or run. A serious finding blocks it until you decide.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="how-it-works.html"><span class="k">Echo Check</span><strong>Hear what a page really exposes</strong><p>Artemis reads a local web page's real accessibility tree and speaks the problems, most serious first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
-        <li><a href="trust.html"><span class="k">Screen reader</span><strong>Your voice, never a second one</strong><p>Speaks through NVDA when it runs, and sends the same line to braille.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="trust.html"><span class="k">Screen reader</span><strong>Its own voice, beside Orca</strong><p>Artemis speaks in a voice you pick. Orca keeps your screen, and every control works from the keyboard.</p><span class="arr" aria-hidden="true">↗</span></a></li>
       </ul>
     </div>
   </section>
@@ -137,10 +137,10 @@
           <caption class="sr">Voice versus keyboard</caption>
           <thead><tr><td></td><th scope="col"><small>Way 1</small><strong>Voice</strong></th><th scope="col"><small>Way 2</small><strong>Keyboard</strong></th></tr></thead>
           <tbody>
-            <tr><th scope="row">Start</th><td>Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> and talk</td><td>Type the request, press Enter</td></tr>
+            <tr><th scope="row">Start</th><td>Say "Hey Artemis", or hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>, and talk</td><td>Type the request, press Enter</td></tr>
             <tr><th scope="row">Check</th><td>"Heard: …" is read back first</td><td>What you typed is the request</td></tr>
             <tr><th scope="row">Approve</th><td colspan="2">Enter approves, Escape rejects, on the focused dialog. Never by voice.</td></tr>
-            <tr><th scope="row">Result</th><td colspan="2">Spoken through NVDA or the Windows voice, and kept in the log.</td></tr>
+            <tr><th scope="row">Result</th><td colspan="2">Spoken in your chosen voice, and kept in the log.</td></tr>
             <tr><th scope="row">Best for</th><td>Hands on the keyboard, mind on the idea</td><td>Noisy rooms, precise names, no microphone</td></tr>
           </tbody>
         </table>
@@ -157,7 +157,7 @@
         <div class="tile"><b><span class="sr">No more: </span><s>Hunting through an IDE</s></b><p>Ask for the change in plain words; Artemis finds the files.</p></div>
         <div class="tile"><b><span class="sr">No more: </span><s>Scanning a terminal</s></b><p>Exit code and final error line, read out word for word.</p></div>
         <div class="tile"><b><span class="sr">No more: </span><s>Reading a visual diff</s></b><p>A spoken summary built from the real edit, steppable by line.</p></div>
-        <div class="tile"><b><span class="sr">No more: </span><s>Two voices at once</s></b><p>NVDA when it runs, the Windows voice when it doesn't. Never both.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Two voices at once</s></b><p>One voice speaks each line. If ElevenLabs can't be reached, the offline voice takes over.</p></div>
         <div class="tile"><b><span class="sr">No more: </span><s>Guessing what's safe</s></b><p>Python files are scanned before each write or run, and nothing runs without your keypress.</p></div>
       </div>
     </div>
@@ -168,7 +168,7 @@
       <p class="eyebrow">How it works</p>
       <h2 class="h2" id="how-title">From your voice to a running program, <span class="lite">in five clear steps.</span></h2>
       <ol class="steps">
-        <li class="step"><div><span class="k">Speak</span><h3>You hold the shortcut and talk.</h3><p>Artemis stops talking, plays a rising tone, then listens. Release and it transcribes on your own computer.</p></div></li>
+        <li class="step"><div><span class="k">Speak</span><h3>You say "Hey Artemis" and talk.</h3><p>The notch lights up and Artemis listens. Or hold the shortcut instead. Either way it transcribes on your own computer.</p></div></li>
         <li class="step"><div><span class="k">Confirm</span><h3>It reads back what it heard.</h3><p>"Heard: create a Python program…" The text also lands in the request field, so you can cancel, fix a misheard word and send it again.</p></div></li>
         <li class="step"><div><span class="k">Review</span><h3>You hear the exact change.</h3><p>A summary built from the real edit, with the full diff to step through. Enter approves, Escape rejects.</p></div></li>
         <li class="step"><div><span class="k">Scan and run</span><h3>It checks the code, then runs it.</h3><p>A security scan of any Python files first, then its own approval, a fixed command and a time limit.</p></div></li>
@@ -185,7 +185,7 @@
         <div class="stat"><div class="n">49</div><span class="k">Pull requests</span><p>merged by 8 AM Saturday, each reviewed.</p></div>
         <div class="stat"><div class="n">500+</div><span class="k">Server tests</span><p>run on Windows and Linux in every pull request.</p></div>
         <div class="stat"><div class="n">0</div><span class="k">Audio uploads</span><p>Speech is recognised on your computer and never saved.</p></div>
-        <div class="stat"><div class="n">4</div><span class="k">People</span><p>Voice, agent and safety, core, and the desktop app.</p></div>
+        <div class="stat"><div class="n">4</div><span class="k">People</span><p>Voice, agent and safety, core, and the desktop.</p></div>
       </div>
     </div>
   </section>
@@ -197,7 +197,7 @@
         <li><small>01</small><h3>You decide every change.</h3><p>Nothing is written or run without your keypress. An approval covers the exact edit or run you reviewed.</p></li>
         <li><small>02</small><h3>Every result is real.</h3><p>Programs really run, and you hear what they actually printed.</p></li>
         <li><small>03</small><h3>Errors are never softened.</h3><p>Exit code and final error line come first, word for word.</p></li>
-        <li><small>04</small><h3>Your screen reader comes first.</h3><p>Your own NVDA voice, never talked over, and every control works from the keyboard.</p></li>
+        <li><small>04</small><h3>Your screen reader comes first.</h3><p>Built to run beside Orca, and every control works from the keyboard.</p></li>
       </ol>
     </div>
   </section>
@@ -206,9 +206,9 @@
     <div class="wrap">
       <h2 class="h2" id="faq-title">Everything you need <span class="dim">to know</span></h2>
       <div class="faq">
-        <details><summary>Which screen readers does it work with?</summary><p>Artemis is built and tested with NVDA on Windows 11. Without NVDA it speaks through the Windows voice. Other screen readers aren't tested yet.</p></details>
+        <details><summary>Which screen readers does it work with?</summary><p>The demo runs on Ubuntu 24.04 with Orca. Artemis also has a Windows build that speaks through NVDA. Other screen readers aren't tested yet.</p></details>
         <details><summary>Does my voice leave my computer?</summary><p>No. Speech is recognised locally with Whisper, held in memory only while you speak, and never saved or uploaded.</p></details>
-        <details><summary>Is my code sent anywhere?</summary><p>Your request, the open project's file names, the files the agent reads and its tool results (such as a program's output) go to Anthropic's Claude to plan changes. Artemis sends nothing else. An approved program runs on your computer with your permissions.</p></details>
+        <details><summary>Is my code sent anywhere?</summary><p>Your request, the open project's file names, the files the agent reads and its tool results (such as a program's output) go to Anthropic's Claude to plan changes. What Artemis says aloud goes to ElevenLabs to be voiced, with secrets removed first. Artemis sends nothing else. An approved program runs on your computer with your permissions.</p></details>
         <details><summary>Can it run anything it wants?</summary><p>No. Every run needs your approval, Python files are scanned first, and it runs with a fixed command and a time limit. It's gated and limited, not an operating-system sandbox.</p></details>
         <details><summary>What if the shortcut doesn't work?</summary><p>Another app may own it. Choose a different shortcut in Artemis, or use the Start listening button.</p></details>
       </div>

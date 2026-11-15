@@ -33,3 +33,13 @@ class ClientReady(BaseModel):
     # registration failed (the client also reports that as a diagnostic). Only the native app
     # calls /ready: a browser has no Start listening button, which the no-chord line names.
     shortcut: str | None = Field(default=None, pattern=CHORD_PATTERN)
+    desktop: bool = False  # the island can type into the focused window (contracts.md §9)
+
+
+class DesktopResult(BaseModel):
+    """Body of POST /desktop/{op_id}/result: what the island did with a desktop.action (§9)."""
+
+    ok: bool
+    message: str | None = None  # why it stopped, e.g. "something else took the keyboard"
+    # focus: the focused window as "<app id>: <title>", e.g. "org.gnome.Ptyxis.desktop: ~/project"
+    window: str | None = None

@@ -5,16 +5,20 @@ from .approvals import (
     ApprovalKind,
     ApprovalResponse,
     Decision,
+    DesktopSpec,
     FileAction,
     FileSummary,
     Finding,
     RunSpec,
     Severity,
 )
-from .client import ClientDiagnostic, ClientReady, DiagnosticCode
+from .client import ClientDiagnostic, ClientReady, DesktopResult, DiagnosticCode
 from .events import (
     DATA_MODELS,
     AgentMessageData,
+    AgentPlanData,
+    DesktopActionData,
+    RingCueData,
     Announce,
     ApprovalResolvedData,
     ErrorData,
@@ -44,8 +48,18 @@ from .tasks import (
     TurnSummary,
 )
 from .tools import (
+    DESKTOP_TOOL_ARGS,
+    PLAN_ARGS,
     TOOL_ARGS,
     CreateProjectArgs,
+    OpenAppArgs,
+    OpenPathArgs,
+    PlanArgs,
+    PlanStep,
+    PressKeysArgs,
+    ReadPathArgs,
+    RunCommandArgs,
+    TypeTextArgs,
     Edit,
     EditFileArgs,
     ErrorCode,

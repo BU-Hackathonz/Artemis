@@ -4,8 +4,8 @@
 
 1. Downloads NVDA's controller client from NV Access, checks its pinned SHA-256, and extracts
    the x64 DLL (64-bit Python can't load the x86 one) to voice/bin/.
-2. Downloads and loads the faster-whisper model (ARTEMIS_WHISPER_MODEL, default small.en) so the
-   first push-to-talk doesn't stall.
+2. Downloads and loads the faster-whisper models (ARTEMIS_WHISPER_MODEL, default small.en, and the
+   quick wake model, default tiny.en) so the first push-to-talk and the first "Hey Artemis" don't stall.
 """
 
 from __future__ import annotations
@@ -45,15 +45,25 @@ def fetch_nvda_dll() -> None:
         print("NVDA isn't running now; Artemis will use SAPI until it starts.")
 
 
+def model_names() -> list[str]:
+    """The models to fetch: the one the core transcribes with, then the quick wake model (unless off or the same)."""
+    from .listen import whisper_model
+    from .wake import quick_model
+
+    names = [whisper_model()]
+    quick = quick_model()
+    if quick and quick not in names:
+        names.append(quick)
+    return names
+
+
 def fetch_model() -> None:
     from faster_whisper import WhisperModel
 
-    from .listen import whisper_model
-
-    model = whisper_model()  # the same one the core will load
-    t = time.time()
-    WhisperModel(model, device="cpu", compute_type="int8")
-    print(f"Whisper {model} ready ({time.time() - t:.1f} s).")
+    for model in model_names():
+        t = time.time()
+        WhisperModel(model, device="cpu", compute_type="int8")
+        print(f"Whisper {model} ready ({time.time() - t:.1f} s).")
 
 
 if __name__ == "__main__":

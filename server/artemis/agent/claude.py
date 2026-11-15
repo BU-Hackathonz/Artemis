@@ -64,6 +64,7 @@ class ClaudeAgent:
             # failed. <message> You can try again."). Saying it here too put it in the log twice.
             return Failed(code=code, message=message)
 
+        last_failed = False  # the last tool result was an error
         for _ in range(self._config.max_iterations):
             try:
                 response = await self._create(task, emit)
@@ -105,7 +106,8 @@ class ClaudeAgent:
             calls = [block for block in response.content if block.type == "tool_use"]
             if not calls:
                 text = "\n".join(b.text for b in response.content if b.type == "text").strip()
-                text = text or "Done."
+                # An empty answer after a failed tool must not claim it worked.
+                text = text or ("That did not work. Ask me to try again." if last_failed else "Done.")
                 await say(emit, task.task_id, text)
                 return Answered(text=text)
 
@@ -138,6 +140,7 @@ class ClaudeAgent:
                 self.messages.append({"role": "user", "content": results})
                 raise
             self.messages.append({"role": "user", "content": results})
+            last_failed = bool(results) and results[-1]["is_error"]
 
         return await fail("too_many_steps", "That took too many steps. Try a smaller request.")
 
