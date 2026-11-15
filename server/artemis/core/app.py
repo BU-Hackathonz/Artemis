@@ -54,8 +54,19 @@ class SpeechBody(BaseModel):
 SAMPLE_TEXT = "This is how I sound."  # the voice picker's Test voice: fixed, never free text
 
 
+ALLOWED_HOSTS = ("127.0.0.1", "localhost")
+
+
+def host_allowed(host: str) -> bool:
+    """The Host header must name the loopback address (any port): 127.0.0.1 or localhost."""
+    name, sep, port = host.strip().lower().rpartition(":")
+    if not sep or not port.isdigit():
+        name = host.strip().lower()  # no port
+    return name in ALLOWED_HOSTS
+
+
 class Guard(BaseHTTPMiddleware):
-    """§6: an unlisted Origin (including "null") gets 403; every request needs the Bearer token.
+    """§6: an unlisted Origin or a non-loopback Host gets 403; every request needs the Bearer token.
 
     CORS preflights are answered by CORSMiddleware outside this one, so they never reach it.
     """
@@ -65,6 +76,8 @@ class Guard(BaseHTTPMiddleware):
         self._expected = f"Bearer {token}".encode()
 
     async def dispatch(self, request: Request, call_next):
+        if not host_allowed(request.headers.get("host", "")):  # DNS rebinding: a page on evil.example
+            return JSONResponse({"error": "host_not_allowed"}, status_code=403)  # resolving to 127.0.0.1
         origin = request.headers.get("origin")
         if origin is not None and origin not in ALLOWED_ORIGINS:
             return JSONResponse({"error": "origin_not_allowed"}, status_code=403)
