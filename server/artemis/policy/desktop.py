@@ -26,6 +26,8 @@ import hashlib
 import os
 import re
 import signal
+import stat
+import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -67,7 +69,16 @@ NEEDS_PLAN = {"write_files", "edit_file", "run_program", "run_command", "open_ap
 
 # Opening one of these would run it, not open it.
 _RUNNABLE_SUFFIXES = {".desktop", ".sh", ".bash", ".zsh", ".appimage", ".run", ".jar", ".bin",
-                      ".exe", ".msi", ".deb", ".rpm", ".flatpakref", ".py", ".pl", ".rb"}
+                      ".exe", ".msi", ".deb", ".rpm", ".flatpakref", ".py", ".pl", ".rb", ".bat", ".cmd",
+                      ".ps1", ".vbs", ".command", ".jnlp",
+                      # A browser runs the scripts in these (and an .svg can hold them).
+                      ".html", ".htm", ".xhtml", ".svg", ".svgz", ".mht", ".mhtml"}
+# Terminal apps, which run what they are given (VS Code is not one, unlike in _TERMINALS).
+_TERMINAL_APPS = re.compile(r"ptyxis|gnome-terminal|org\.gnome\.console|kgx|kitty|alacritty|xterm|konsole|"
+                            r"terminator|tilix|wezterm|\bfoot\b|terminal", re.I)
+# An app that would run the file it is given, not show it.
+_INTERPRETERS = re.compile(r"^(env|sh|bash|dash|zsh|fish|python[\d.]*|perl|ruby|node|nodejs|deno|bun|php|java|"
+                           r"lua|gjs|pwsh|powershell)$")
 # Windows that run what is typed into them.
 _TERMINALS = re.compile(r"ptyxis|gnome-terminal|org\.gnome\.terminal|org\.gnome\.console|kgx|kitty|"
                         r"alacritty|xterm|konsole|terminator|tilix|wezterm|foot|code|vscode", re.I)
@@ -183,8 +194,37 @@ def spoken_path(path: Path) -> str:
         return path.name
 
 
+def _open_regular(path: Path) -> int:
+    """A read-only descriptor for a regular file, never blocking on a pipe or a device, never
+    following a link in the last place (the path is already resolved)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        raise PathRejected(f"{path.name} can't be read.") from None
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise PathRejected(f"{path.name} is not an ordinary file.")
+    return fd
+
+
+def read_capped(path: Path, limit: int = MAX_READ_BYTES) -> bytes:
+    """The file's bytes, or PathRejected when it is not a regular file or holds more than `limit`
+    (a file can grow after it was checked, so the size is enforced while reading)."""
+    fd = _open_regular(path)
+    with os.fdopen(fd, "rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise PathRejected(f"{path.name} is larger than 1 megabyte, which is too big to read.")
+    return data
+
+
 def file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """Streamed, so opening a big video doesn't load it into memory."""
+    digest = hashlib.sha256()
+    with os.fdopen(_open_regular(path), "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def command_findings(command: str) -> list[Finding]:
@@ -213,14 +253,17 @@ _ALIASES = {"vs code": "visual studio code", "vscode": "visual studio code", "co
             "terminal": "terminal", "calculator": "calculator", "settings": "settings"}
 
 
-def find_app(query: str) -> tuple[str, str] | None:
-    """(desktop id, display name) of the installed app that best matches `query`: an exact desktop
+_MAX_DESKTOP_FILE = 256 * 1024
+
+
+def _find_app_file(query: str) -> tuple[Path, str, configparser.SectionProxy] | None:
+    """(file, display name, entry) of the installed app that best matches `query`: an exact desktop
     id, then an exact name, then a name or id that contains it. Hidden and NoDisplay apps are skipped."""
     want = query.strip().lower().removesuffix(".desktop")
     want = _ALIASES.get(want, want)
     if not want:
         return None
-    best: tuple[int, str, str] | None = None
+    best: tuple[int, Path, str, configparser.SectionProxy] | None = None
     seen: set[str] = set()
     for folder in _app_dirs():
         if not folder.is_dir():
@@ -231,6 +274,9 @@ def find_app(query: str) -> tuple[str, str] | None:
             seen.add(file.name)
             parser = configparser.ConfigParser(interpolation=None, strict=False)
             try:
+                # A pipe or a device named *.desktop must not hang the search, nor a huge file fill memory.
+                if not file.is_file() or file.stat().st_size > _MAX_DESKTOP_FILE:
+                    continue
                 parser.read(file, encoding="utf-8")
                 entry = parser["Desktop Entry"]
                 if entry.get("Type") != "Application" or entry.getboolean("NoDisplay", False) or entry.getboolean("Hidden", False):
@@ -241,21 +287,52 @@ def find_app(query: str) -> tuple[str, str] | None:
             app_id = file.stem.lower()
             score = 3 if want == app_id else 2 if want == name.lower() else 1 if (want in name.lower() or want in app_id) else 0
             if score and (best is None or score > best[0]):
-                best = (score, file.name, name)
-    return (best[1], best[2]) if best else None
+                best = (score, file, name, entry)
+    return best[1:] if best else None
+
+
+def find_app(query: str) -> tuple[str, str] | None:
+    """(desktop id, display name) of the app `_find_app_file` finds."""
+    found = _find_app_file(query)
+    return (found[0].name, found[1]) if found else None
+
+
+def app_digest(query: str) -> str | None:
+    """The sha256 of the .desktop file that would launch, so the approval binds what it runs
+    (a user file in ~/.local/share/applications can shadow a system app of the same name)."""
+    found = _find_app_file(query)
+    return file_sha256(found[0]) if found else None
+
+
+def app_runs_files(query: str) -> bool:
+    """True for an app that would execute a file it is given: a terminal, or an interpreter."""
+    found = _find_app_file(query)
+    if found is None:
+        return False
+    file, name, entry = found
+    if entry.getboolean("Terminal", False) or _TERMINAL_APPS.search(file.stem) or _TERMINAL_APPS.search(name):
+        return True
+    words = entry.get("Exec", "").split()
+    return any(_INTERPRETERS.match(os.path.basename(w)) for w in words[:2])
 
 
 async def _spawn_detached(argv: list[str]) -> None:
-    """Start a desktop program and don't wait for it (gtk-launch and gio return once it started)."""
-    proc = await asyncio.create_subprocess_exec(
-        *argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE, env=desktop_env(), start_new_session=True)
-    try:
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=15)
-    except asyncio.TimeoutError:
-        return  # still starting: the app is on its way
-    if proc.returncode:
-        raise RuntimeError(err.decode(errors="replace").strip()[:200] or f"exit code {proc.returncode}")
+    """Start a desktop program and don't wait for it (gtk-launch and gio return once it started).
+
+    The launched app inherits our stderr. A pipe would stay open as long as the app lives (so we
+    would wait out the timeout every time) and, unread, would freeze the app once it filled. A
+    temporary file has neither problem."""
+    with tempfile.TemporaryFile() as err:
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+            stderr=err, env=desktop_env(), start_new_session=True)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=15)
+        except asyncio.TimeoutError:
+            return  # still starting: the app is on its way
+        if proc.returncode:
+            err.seek(0)
+            raise RuntimeError(err.read(200).decode(errors="replace").strip() or f"exit code {proc.returncode}")
 
 
 # ----- commands -----
@@ -456,7 +533,7 @@ class DesktopTools:
             raise self._tool_error("not_found", f"There is no file {raw}.")
         if path.stat().st_size > MAX_READ_BYTES:
             raise PathRejected(f"{raw} is larger than 1 megabyte, which is too big to read.")
-        return path
+        return path  # read_capped enforces the size again while reading
 
     # ----- the tools -----
 
@@ -465,7 +542,12 @@ class DesktopTools:
         if found is None:
             raise self._tool_error("not_found", f"I couldn't find an app called {a.app}.")
         app_id, name = found
-        await self._approve_desktop(task_id, "open", DesktopSpec(action="open_app", target=app_id), f"Open {name}.", "Nothing was opened.")
+
+        def spec() -> DesktopSpec:
+            # The launcher file's hash is bound too: swapped or shadowed, it would run something else.
+            return DesktopSpec(action="open_app", target=app_id, sha256=app_digest(app_id))
+
+        await self._approve_desktop(task_id, "open", spec(), f"Open {name}.", "Nothing was opened.", still=spec)
         await self._cue(task_id, "open_app", name)
         try:
             await _spawn_detached(["gtk-launch", app_id])
@@ -479,6 +561,8 @@ class DesktopTools:
         app = find_app(a.with_app) if a.with_app else None
         if a.with_app and app is None:
             raise self._tool_error("not_found", f"I couldn't find an app called {a.with_app}.")
+        if app and app_runs_files(app[0]):
+            raise PathRejected(f"{app[1]} would run the file, not show it, so I won't open anything with it.")
         where = f" in {app[1]}" if app else ""
 
         def spec() -> DesktopSpec:
@@ -500,12 +584,12 @@ class DesktopTools:
 
         def spec() -> DesktopSpec:
             p = self._readable(a.path)
-            return DesktopSpec(action="read_path", target=str(p), sha256=file_sha256(p))
+            return DesktopSpec(action="read_path", target=str(p), sha256=hashlib.sha256(read_capped(p)).hexdigest())
 
         approved = spec()
         await self._approve_desktop(task_id, "read_outside", approved, f"Read {spoken_path(path)}.", "Nothing was read.", still=spec)
         await self._cue(task_id, "read_path", path.name)
-        data = path.read_bytes()
+        data = read_capped(path)
         if hashlib.sha256(data).hexdigest() != approved.sha256:
             raise self._tool_error("invalidated", f"{path.name} changed after you approved it. Nothing was read.")
         lines = data.decode("utf-8", errors="replace").splitlines()

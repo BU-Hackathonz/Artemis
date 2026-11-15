@@ -298,3 +298,152 @@ def test_acting_waits_for_the_plan(home):
     cues = [e.data for e in log.of("ring.cue")]
     assert cues == [{"step": 0, "action": "run", "target": "terminal"}]
     assert log.of("agent.plan")[0].data["goal"] == "List the folder"
+
+
+# ----- review of the path tools (r176-paths) -----
+
+def test_case_tricks_and_dotdot_are_denied(home):
+    for raw in ["~/.SSH/id_ed25519", "~/Documents/.Env", "~/Documents/.ENV.local", "~/Documents/.GIT/config",
+                "~/Documents/../.ssh/id_ed25519"]:
+        with pytest.raises(PathRejected):
+            home_resolve(raw)
+
+
+def test_a_projects_folder_that_is_a_link_to_another_drive(home, tmp_path):
+    drive = tmp_path / "drive"
+    (drive / "proj").mkdir(parents=True)
+    (drive / "proj" / "a.txt").write_text("x")
+    (home / "Projects").symlink_to(drive)
+    assert home_resolve("~/Projects/proj/a.txt", extra_roots=(home / "Projects",)) == (drive / "proj" / "a.txt").resolve()
+    (drive / "proj" / "out").symlink_to("/etc")
+    with pytest.raises(PathRejected):
+        home_resolve("~/Projects/proj/out/passwd", extra_roots=(home / "Projects",))
+
+
+def test_a_pipe_or_device_is_not_read(home):
+    os.mkfifo(home / "Documents" / "pipe")
+    g, _, approvals = gate(home, [Decision.approve])
+    for raw in ("~/Documents/pipe", "/dev/zero"):
+        assert not run(asyncio.wait_for(g.call("t1", "read_path", {"path": raw}), 5)).ok
+    assert approvals.requests == []
+
+
+def test_a_file_swapped_for_a_link_to_a_secret_is_not_read(home):
+    plan = home / "Documents" / "plan.md"
+
+    def swap(_approval):
+        plan.unlink()
+        plan.symlink_to(home / ".ssh" / "id_ed25519")
+        return Decision.approve
+    g, _, _ = gate(home, [swap])
+    result = run(g.call("t1", "read_path", {"path": "~/Documents/plan.md"}))
+    assert not result.ok and "SYNTHETIC_PRIVATE_KEY" not in str(result)
+
+
+def test_a_file_that_grew_after_approval_is_not_read(home):
+    plan = home / "Documents" / "plan.md"
+
+    def grow(_approval):
+        plan.write_bytes(b"x" * (2 * 1024 * 1024))
+        return Decision.approve
+    g, _, _ = gate(home, [grow])
+    assert not run(g.call("t1", "read_path", {"path": "~/Documents/plan.md"})).ok
+
+
+def test_read_capped_stops_at_the_limit_and_refuses_pipes(home):
+    from artemis.policy.desktop import file_sha256, read_capped
+    big = home / "Documents" / "big"
+    big.write_bytes(b"x" * 1025)
+    with pytest.raises(PathRejected):
+        read_capped(big, 1024)
+    assert read_capped(home / "Documents" / "plan.md") == b"step one\nstep two\n"
+    os.mkfifo(home / "Documents" / "pipe")
+    for fn in (read_capped, file_sha256):
+        with pytest.raises(PathRejected):
+            fn(home / "Documents" / "pipe")
+
+
+def test_start_and_end_lines(home):
+    (home / "Documents" / "n.txt").write_text("".join(f"line {i}\n" for i in range(1, 11)))
+    g, _, _ = gate(home, [Decision.approve, Decision.approve, Decision.approve])
+    got = run(g.call("t1", "read_path", {"path": "~/Documents/n.txt", "start_line": 3, "end_line": 4})).data["content"]
+    assert "3\tline 3" in got and "4\tline 4" in got and "5\tline 5" not in got and "2\tline 2" not in got
+    assert "10\tline 10" in run(g.call("t1", "read_path", {"path": "~/Documents/n.txt", "start_line": 10})).data["content"]
+    assert run(g.call("t1", "read_path", {"path": "~/Documents/n.txt", "start_line": 99})).data["total_lines"] == 10
+
+
+@pytest.mark.parametrize("name", ["page.html", "pic.SVG", "run.bat", "x.jnlp"])
+def test_open_refuses_what_a_browser_or_shell_would_run(home, name):
+    (home / "Documents" / name).write_text("<script>1</script>")
+    g, _, approvals = gate(home, [Decision.approve])
+    assert run(g.call("t1", "open_path", {"path": f"~/Documents/{name}"})).error == "path_rejected"
+    assert approvals.requests == []
+
+
+def test_a_script_without_the_execute_bit_is_just_a_document(home):
+    (home / "Documents" / "notes").write_text("#!/bin/sh\necho hi\n")
+    g, _, _ = gate(home)
+    assert g._openable("~/Documents/notes").name == "notes"
+
+
+def _apps(home, monkeypatch, **files):
+    data = home / "share"
+    (data / "applications").mkdir(parents=True, exist_ok=True)
+    for name, body in files.items():
+        (data / "applications" / f"{name}.desktop").write_text("[Desktop Entry]\nType=Application\n" + body)
+    monkeypatch.setenv("XDG_DATA_HOME", str(data))
+    monkeypatch.setenv("XDG_DATA_DIRS", str(home / "nowhere"))
+
+
+def test_a_pipe_named_like_an_app_does_not_hang_the_search(home, monkeypatch):
+    from artemis.policy.desktop import find_app
+    _apps(home, monkeypatch, firefox="Name=Firefox\nExec=firefox\n")
+    os.mkfifo(home / "share" / "applications" / "aaa.desktop")
+    assert run(asyncio.wait_for(asyncio.to_thread(find_app, "firefox"), 5)) == ("firefox.desktop", "Firefox")
+
+
+def test_the_launcher_file_is_part_of_the_approval(home, monkeypatch):
+    _apps(home, monkeypatch, firefox="Name=Firefox\nExec=firefox\n")
+    launcher = home / "share" / "applications" / "firefox.desktop"
+    launched = []
+
+    async def fake(argv):
+        launched.append(argv)
+    monkeypatch.setattr("artemis.policy.desktop._spawn_detached", fake)
+
+    def swap(_approval):
+        launcher.write_text("[Desktop Entry]\nType=Application\nName=Firefox\nExec=sh -c evil\n")
+        return Decision.approve
+    g, _, approvals = gate(home, [swap])
+    assert run(g.call("t1", "open_app", {"app": "firefox"})).error == "invalidated"
+    assert launched == [] and approvals.requests[0].desktop.sha256
+
+
+def test_open_with_a_terminal_or_interpreter_is_refused(home, monkeypatch):
+    _apps(home, monkeypatch, ptyxis="Name=Terminal\nExec=ptyxis %U\nTerminal=false\n", py="Name=Py\nExec=python3 %F\n",
+          idle="Name=IDLE\nExec=x\nTerminal=true\n", code="Name=Visual Studio Code\nExec=/usr/bin/code %F\n")
+    (home / "Documents" / "n.txt").write_text("hi")
+    g, _, approvals = gate(home, [Decision.approve])
+    for app in ("ptyxis", "py", "idle"):
+        assert run(g.call("t1", "open_path", {"path": "~/Documents/n.txt", "with_app": app})).error == "path_rejected"
+    assert approvals.requests == []
+
+
+def test_an_app_that_keeps_stderr_open_does_not_stall_the_launch(tmp_path):
+    import time
+    from artemis.policy.desktop import _spawn_detached
+    script = tmp_path / "app.sh"
+    script.write_text("#!/bin/bash\n(sleep 30) &\nexit 0\n")
+    script.chmod(0o755)
+    start = time.monotonic()
+    run(_spawn_detached([str(script)]))
+    assert time.monotonic() - start < 5
+
+
+def test_a_failed_launch_reports_why(tmp_path):
+    from artemis.policy.desktop import _spawn_detached
+    script = tmp_path / "bad.sh"
+    script.write_text("#!/bin/bash\necho no such app >&2\nexit 1\n")
+    script.chmod(0o755)
+    with pytest.raises(RuntimeError, match="no such app"):
+        run(_spawn_detached([str(script)]))
