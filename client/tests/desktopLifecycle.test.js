@@ -10,11 +10,23 @@ function fixture() {
         timeout_add: (_priority, _ms, callback) => timers.push(callback)};
     const Clutter = {KeyState: {PRESSED: 1, RELEASED: 0}, unicode_to_keysym: n => n};
     const Main = {modalCount: 0};
-    const global = {display: {focus_window: {get_title: () => 'Document'}}};
+    const win = {title: 'Document', get_title() { return this.title; }};
+    const global = {display: {focus_window: win}};
     const Shell = {WindowTracker: {get_default: () => ({get_window_app: () => ({get_id: () => 'editor'})})}};
     const Typist = new Function('GLib', 'Clutter', 'Main', 'global', 'Shell', `${source}; return Typist;`)(GLib, Clutter, Main, global, Shell);
     const typist = new Typist({notify_keyval: (_time, key, state) => events.push([key, state])});
-    return {typist, events, timers};
+    return {typist, events, timers, win, global};
+}
+// Runs queued sleeps until the job settles.
+async function drain(timers, job) {
+    let done = false;
+    job.then(() => { done = true; });
+    for (let i = 0; i < 100 && !done; i++) {
+        await Promise.resolve();
+        if (timers.length) timers.shift()();
+        await Promise.resolve();
+    }
+    return job;
 }
 describe('desktop typing lifecycle', () => {
     test('cancel releases held keys and a new task cannot revive the old job', async () => {
@@ -44,5 +56,21 @@ describe('desktop typing lifecycle', () => {
         typist.stop(); typist.resume();
         expect((await typist.run('type', 'a', 'editor: Document', generation)).ok).toBe(false);
         expect(events).toEqual([]);
+    });
+    test('a title change while typing (an editor marking the document modified) does not stop the job', async () => {
+        const {typist, events, timers, win} = fixture();
+        const job = typist.run('type', 'hello', 'editor: Document');
+        win.title = '*Document';
+        expect(await drain(timers, job)).toEqual({ok: true});
+        expect(events.filter(([, state]) => state === 1).map(([key]) => key)).toEqual([104, 101, 108, 108, 111]);
+    });
+    test('focus moving to another window stops typing', async () => {
+        const {typist, events, timers, global} = fixture();
+        const job = typist.run('type', 'hello', 'editor: Document');
+        global.display.focus_window = {get_title: () => 'Document'};
+        const result = await drain(timers, job);
+        expect(result.ok).toBe(false);
+        expect(result.message).toMatch(/focus moved/);
+        expect(events.filter(([, state]) => state === 1)).toEqual([[104, 1]]);
     });
 });

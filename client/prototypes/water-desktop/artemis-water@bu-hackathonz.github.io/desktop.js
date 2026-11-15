@@ -84,12 +84,17 @@ export class Typist {
     async run(kind, text, window, generation = this._generation) {
         if (!this._device)
             return {ok: false, message: 'the keyboard is not available, so nothing was typed'};
-        // Checked before every keystroke: the same window, and no shell prompt or dialog holding the keyboard.
-        const guard = () => !this._stopped && generation === this._generation && Main.modalCount === 0 && !!window && focusedWindow() === window;
         if (!window)
             return {ok: false, message: 'no window was approved for typing, so nothing was typed'};
-        if (!guard())
+        const live = () => !this._stopped && generation === this._generation && Main.modalCount === 0;
+        // The approved "<app id>: <title>" must have the keyboard when the job starts. After that the job is
+        // pinned to that window object: typing changes many titles ("Untitled" -> "*Untitled"), so the title
+        // can't be re-checked per keystroke. Checked before every keystroke: the same window still has focus,
+        // and no shell prompt or dialog holds the keyboard.
+        if (!live() || focusedWindow() !== window)
             return {ok: false, message: this._stopped ? 'the task was canceled, so nothing was typed' : 'the focus moved, so nothing was typed'};
+        const target = global.display.focus_window;
+        const guard = () => live() && global.display.focus_window === target;
         try {
             if (kind === 'keys')
                 await this._chord(text);
