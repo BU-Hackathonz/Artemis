@@ -13,16 +13,19 @@ About 4 minutes: 40 s of setup, 2:30 of live demo, 50 s on safety. David runs th
 
 ## 1. The problem (0:00 to 0:40)
 
-> Blind developers write code with screen readers every day. But today's AI coding tools are built
-> around the screen: a diff you have to look at, a button you have to click, an error that scrolls
-> past. Most of the time, someone sighted ends up checking the result.
+> **43 million people around the world are blind.** Many of them write code, with a screen reader.
+> But today's AI coding tools are built around the screen: a diff you have to look at, a button you
+> have to click, an error that scrolls past. Most of the time, someone sighted ends up checking the
+> result.
 >
-> Artemis is a voice-first development environment. You say what you want, you hear exactly what will
-> change, you approve it, and you hear the real result. Nothing in your project is written or run
-> without your approval.
+> So we built Artemis, a voice-first development environment. You say what you want, you hear exactly
+> what will change, you approve it, and you hear the real result. Nothing in your project is written
+> or run without your approval.
 >
-> We'll build a web page by voice, from an empty folder to GitHub. Watch the small notch at the top of
-> the screen: it shows when Artemis is listening, thinking or speaking.
+> This is David. He's going to build a web page by voice, from an empty folder to GitHub. Watch the
+> small notch at the top of the screen: it shows when Artemis is listening, thinking or speaking.
+
+Pause after the number. Turn to David on "This is David"; he starts on your nod.
 
 ## 2. Live demo (0:40 to 3:10)
 
@@ -75,6 +78,7 @@ About 4 minutes: 40 s of setup, 2:30 of live demo, 50 s on safety. David runs th
 | "Speech recognition is on the laptop; spoken lines go to ElevenLabs, redacted." | "Nothing leaves the computer" |
 | "Only the word 'approve', for clean changes in your project, after it's read." | "Approvals are keyboard-only" (not with conversation mode on) |
 | "Built to work beside Orca; it's off here so you can hear Artemis clearly." | "Orca is running" (it's off for the demo) |
+| "43 million people are blind." (Lancet Global Health, 2021: 43.3 million in 2020) | "43 million blind developers" or a count of blind programmers |
 | "Over 1,600 server tests run on Windows and Linux on every pull request." | A pass rate we didn't measure |
 | "On Ubuntu with GNOME; a Windows build speaks through NVDA." | That other screen readers are tested |
 
