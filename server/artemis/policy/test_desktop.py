@@ -540,7 +540,9 @@ def test_a_normal_app_opens_without_the_dialog(home, monkeypatch, launched):
     assert run(g.call("t1", "open_app", {"app": "notes"})).ok
     assert approvals.requests == [] and launched == [["gtk-launch", "notes.desktop"]]
     assert "Opened Notes." in log.spoken()
-    assert [e.data for e in log.of("ring.cue")] == [{"step": 0, "action": "open", "target": "Notes"}]
+    # the plan's think cue, then the open cue for its step
+    assert [e.data for e in log.of("ring.cue")] == [
+        {"step": None, "action": "think", "target": None}, {"step": 0, "action": "open", "target": "Notes"}]
 
 
 def test_vs_code_opens_without_the_dialog(home, monkeypatch, launched):
