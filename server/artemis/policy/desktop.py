@@ -28,6 +28,7 @@ import re
 import signal
 import stat
 import tempfile
+import unicodedata
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -79,12 +80,60 @@ _TERMINAL_APPS = re.compile(r"ptyxis|gnome-terminal|org\.gnome\.console|kgx|kitt
 # An app that would run the file it is given, not show it.
 _INTERPRETERS = re.compile(r"^(env|sh|bash|dash|zsh|fish|python[\d.]*|perl|ruby|node|nodejs|deno|bun|php|java|"
                            r"lua|gjs|pwsh|powershell)$")
-# Windows that run what is typed into them.
-_TERMINALS = re.compile(r"ptyxis|gnome-terminal|org\.gnome\.terminal|org\.gnome\.console|kgx|kitty|"
-                        r"alacritty|xterm|konsole|terminator|tilix|wezterm|foot|code|vscode", re.I)
-# Keys that open a launcher or a shell rather than act in the focused window.
-_LAUNCHER_KEYS = re.compile(r"^((ctrl|shift|alt)\+)*(super|super_l|super_r|meta)$|super\+|"
-                            r"^alt\+f2$|^ctrl\+alt\+(t|delete|backspace)$|^(ctrl\+)?alt\+f[1-9]$", re.I)
+# Windows that run what is typed into them: terminals, and editors with a built-in terminal.
+# Substring match on the app id (the part before ": "), then whole-word matches for short names.
+_TERMINALS = re.compile(
+    r"ptyxis|gnome-terminal|org\.gnome\.terminal|org\.gnome\.console|kgx|kitty|alacritty|xterm|konsole|"
+    r"terminator|tilix|wezterm|ghostty|warp|tabby|guake|yakuake|blackbox|terminology|terminal|console|"
+    r"rxvt|sakura|contour|cool-retro-term|tmux|putty|termius|emacs|neovide|nvim|gvim|"
+    r"vscode|vscodium|codium|cursor|windsurf|jetbrains|intellij|pycharm|webstorm|clion|goland|rider|"
+    r"phpstorm|rubymine|datagrip|android-?studio|sublime", re.I)
+_TERMINAL_WORDS = re.compile(r"(?<![a-z0-9])(foot|code|st|term|rio|hyper|zed|vim|idea|screen|tty)(?![a-z0-9])", re.I)
+# A terminal's title often says so: "user@host: ~/dir", or the shell's name.
+_TERMINAL_TITLE = re.compile(r"^[\w.-]+@[\w.-]+[: ]|(?<![a-z0-9])(bash|zsh|fish|sh|tmux|ssh|sudo)(?![a-z0-9])", re.I)
+# Keys that open a launcher or a shell rather than act in the focused window (see _launcher_key).
+_LAUNCHER_FKEY = re.compile(r"^f([1-9]|1[0-2])$")
+# What pastes the clipboard: the dialog can't show what that is.
+_PASTE_KEYS = {("ctrl", "v"), ("ctrl", "shift", "v"), ("shift", "insert"), ("ctrl", "y")}
+
+
+def _key_parts(keys: str) -> tuple[frozenset[str], str]:
+    parts = [p.strip().lower() for p in keys.split("+")]
+    return frozenset(parts[:-1]), parts[-1]
+
+
+def _launcher_key(keys: str) -> bool:
+    """True for keys that open a launcher, the overview, a console or a power dialog, whatever the
+    order of the modifiers (alt+ctrl+t is ctrl+alt+t)."""
+    mods, key = _key_parts(keys)
+    if {"super", "meta", "hyper"} & mods or key.startswith(("super", "meta", "hyper", "xf86", "iso_")):
+        return True
+    if "alt" in mods and _LAUNCHER_FKEY.match(key):
+        return True  # alt+F2 (run), ctrl+alt+F1..F12 (another console)
+    return {"ctrl", "alt"} <= mods and key in {"t", "delete", "backspace"}
+
+
+def _pastes(keys: str) -> bool:
+    mods, key = _key_parts(keys)
+    return any(set(c[:-1]) == mods and c[-1] == key for c in _PASTE_KEYS)
+
+
+def _clean(text: str, limit: int) -> str:
+    """Printable, one line, short: a window title is written by whatever is in the window, so it
+    can't carry line breaks or invisible and right-to-left marks into the dialog."""
+    text = "".join(c if unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp") else " " for c in text)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def _is_terminal(window: str) -> bool:
+    app, sep, title = window.partition(": ")
+    if not sep:  # no app id was reported: the whole string is all there is
+        app, title = "", window
+    return bool(_TERMINALS.search(app) or _TERMINAL_WORDS.search(app) or _TERMINAL_TITLE.search(title)
+                or (not app and _TERMINALS.search(title)))
+
+
 # What a command may not do without the blocking key. A heuristic, not a boundary: a shell can name
 # anything in a way no pattern reads, so every rule is checked on the line as written and on the line
 # with its quotes and backslashes removed (r''m, "rm", \rm). The environment and the group kill in
@@ -431,13 +480,23 @@ def _short(text: str, limit: int = SPOKEN_TEXT_CHARS) -> str:
 def _window_name(window: str) -> str:
     """'org.gnome.TextEditor.desktop: notes.txt' -> 'notes.txt in TextEditor', for the dialog."""
     app, _, title = window.partition(": ")
-    app = app.removesuffix(".desktop").split(".")[-1] or "the focused window"
+    app = _clean(app.removesuffix(".desktop").split(".")[-1], 40) or "the focused window"
+    title = _clean(title, 60)
     return f"{title} in {app}" if title else app
 
 
 # The island's side (contracts.md §9): (task_id, op_id, kind, text, window) -> (ok, message, window).
 # kind "focus" asks which window has the focus; "type" and "keys" act in `window` only. None = no island.
 DesktopBridge = Callable[[str, str, str, str, str | None], Awaitable[tuple[bool, str | None, str | None]]]
+
+
+def _island_message(message: str | None) -> str:
+    """The core's answers are codes ("desktop_unavailable", "canceled"): say them as a sentence."""
+    if message in (None, "", "desktop_unavailable"):
+        return "The Artemis island didn't answer, so nothing was typed."
+    if message == "canceled":
+        return "The task was canceled, so nothing was typed."
+    return _clean(message, 200)
 
 
 class DesktopTools:
@@ -630,28 +689,40 @@ class DesktopTools:
             raise self._tool_error("desktop_unavailable", "Typing needs the Artemis island, and it isn't connected.")
         ok, message, window = await self._desktop(task_id, f"op_{uuid.uuid4().hex[:12]}", "focus", "", None)
         if not ok or not window:
-            raise self._tool_error("desktop_unavailable", message or "The island couldn't tell which window has the focus.")
+            raise self._tool_error("desktop_unavailable", _island_message(message) if message else "The island couldn't tell which window has the focus.")
         return window
 
     async def _type_into(self, task_id: str, kind: str, text: str, what: str) -> dict:
         window = await self._focused(task_id)
         action = "type_text" if kind == "type" else "press_keys"
         findings = []
-        if _TERMINALS.search(window.partition(": ")[0]):
+        if _is_terminal(window):
             findings.append(Finding(rule="desktop-terminal", severity="high", path="window", line=1,
                                     message="The focused window is a terminal, so what is typed may run as a command."))
         await self._approve_desktop(task_id, "type", DesktopSpec(action=action, target=window, text=text),
                                     f"{what} into {_window_name(window)}.", "Nothing was typed.", findings=findings)
+        # The decision can take a while: ask again which window has the focus, so a focus that moved
+        # (or a title that changed) stops here and not only in the island.
+        if await self._focused(task_id) != window:
+            raise self._tool_error("invalidated", "The focus moved while you were deciding. Nothing was typed.")
         await self._cue(task_id, action, _window_name(window))
         ok, message, _ = await self._desktop(task_id, f"op_{uuid.uuid4().hex[:12]}", kind, text, window)
         if not ok:
-            raise self._tool_error("tool_failed", message or "The typing stopped.")
+            raise self._tool_error("tool_failed", _island_message(message))
         return {"typed": len(text) if kind == "type" else text, "window": _window_name(window)}
 
     async def _type_text(self, task_id: str, a: TypeTextArgs) -> dict:
-        return await self._type_into(task_id, "type", a.text, f"Type “{_short(a.text)}”")
+        # Escape, Ctrl-C and the like would act as keys, not text; only line breaks and tabs are text.
+        if any(unicodedata.category(c) == "Cc" and c not in "\n\t" for c in a.text.replace("\r\n", "\n")):
+            raise self._tool_error("invalid_args", "The text has control characters, so I won't type it.")
+        text = a.text.replace("\r\n", "\n").replace("\r", "\n")
+        # _short joins lines, so say out loud that each line break is an Enter key.
+        breaks = text.count("\n")
+        enter = f" with {breaks} line break{'s' if breaks != 1 else ''}, each one the Enter key" if breaks else ""
+        return await self._type_into(task_id, "type", text, f"Type “{_short(text)}”{enter}")
 
     async def _press_keys(self, task_id: str, a: PressKeysArgs) -> dict:
-        if _LAUNCHER_KEYS.search(a.keys):
+        if _launcher_key(a.keys):
             raise PathRejected(f"{a.keys} opens a launcher or a shell, so I don't press it.")
-        return await self._type_into(task_id, "keys", a.keys, f"Press {a.keys.replace('+', ' ')}")
+        paste = " (this pastes the clipboard, which I can't show)" if _pastes(a.keys) else ""
+        return await self._type_into(task_id, "keys", a.keys, f"Press {a.keys.replace('+', ' ')}{paste}")

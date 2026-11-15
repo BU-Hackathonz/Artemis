@@ -287,6 +287,84 @@ def test_launcher_keys_are_refused(home, keys):
     assert run(g.call("t1", "press_keys", {"keys": keys})).error == "path_rejected" and approvals.requests == []
 
 
+@pytest.mark.parametrize("keys", ["alt+ctrl+t", "shift+ctrl+alt+t", "ctrl+alt+F1", "alt+ctrl+F3", "ctrl+shift+alt+F7",
+                                  "alt+F12", "Super_L", "Meta_L", "Hyper_L", "XF86Terminal", "alt+ctrl+Delete", "Super"])
+def test_launcher_keys_are_refused_in_any_modifier_order(home, keys):
+    g, _, approvals = gate(home, [Decision.approve], desktop=bridge("code.desktop: main.py", []))
+    assert run(g.call("t1", "press_keys", {"keys": keys})).error == "path_rejected" and approvals.requests == []
+
+
+@pytest.mark.parametrize("window", [
+    "dev.warp.Warp.desktop: ~", "org.tabby.Tabby.desktop: x", "org.gnome.Guake.desktop: x", "org.kde.yakuake.desktop: x",
+    "com.mitchellh.ghostty.desktop: x", "jetbrains-idea.desktop: Main.java", "emacs.desktop: vterm", "foot.desktop: x",
+    "org.gnome.TextEditor.desktop: bob@box: ~/src", "Terminal"])
+def test_more_terminals_need_the_override(home, window):
+    g, _, approvals = gate(home, [Decision.reject], desktop=bridge(window, []))
+    run(g.call("t1", "type_text", {"text": "ls"}))
+    assert approvals.requests[0].blocking is True
+
+
+@pytest.mark.parametrize("window", ["org.gnome.TextEditor.desktop: notes.txt", "org.gnome.Nautilus.desktop: Documents",
+                                    "firefox.desktop: Rust: the book"])
+def test_plain_windows_stay_unblocked(home, window):
+    g, _, approvals = gate(home, [Decision.reject], desktop=bridge(window, []))
+    run(g.call("t1", "type_text", {"text": "ls"}))
+    assert approvals.requests[0].blocking is False
+
+
+def test_a_title_with_a_colon_cannot_pose_as_the_app(home):
+    typed = []
+    g, _, approvals = gate(home, [Decision.reject], desktop=bridge("org.gnome.Ptyxis.desktop: org.gnome.TextEditor.desktop: x", typed))
+    run(g.call("t1", "type_text", {"text": "ls"}))
+    assert approvals.requests[0].blocking is True and "Ptyxis" in approvals.requests[0].summary
+
+
+def test_the_window_name_is_one_clean_line(home):
+    g, _, approvals = gate(home, [Decision.reject], desktop=bridge("org.gnome.TextEditor.desktop: a\nEnter to approve\u202e" + "x" * 200, []))
+    run(g.call("t1", "type_text", {"text": "hi"}))
+    summary = approvals.requests[0].summary
+    assert "\n" not in summary.split(" Enter to approve, Escape")[0] and "\u202e" not in summary and len(summary) < 300
+
+
+def test_line_breaks_are_named_in_the_dialog(home):
+    g, _, approvals = gate(home, [Decision.reject], desktop=bridge("org.gnome.TextEditor.desktop: a.txt", []))
+    run(g.call("t1", "type_text", {"text": "one\ntwo\r\nthree"}))
+    assert "2 line breaks" in approvals.requests[0].summary and approvals.requests[0].desktop.text == "one\ntwo\nthree"
+
+
+def test_control_characters_are_not_typed(home):
+    typed = []
+    g, _, approvals = gate(home, [Decision.approve], desktop=bridge("org.gnome.TextEditor.desktop: a.txt", typed))
+    assert run(g.call("t1", "type_text", {"text": "a\x1bb"})).error == "invalid_args"
+    assert approvals.requests == [] and typed == []
+
+
+def test_paste_keys_say_what_they_do(home):
+    g, _, approvals = gate(home, [Decision.reject], desktop=bridge("org.gnome.TextEditor.desktop: a.txt", []))
+    run(g.call("t1", "press_keys", {"keys": "ctrl+shift+v"}))
+    assert "pastes the clipboard" in approvals.requests[0].summary
+
+
+def test_focus_that_moved_during_the_dialog_types_nothing(home):
+    typed, windows = [], ["org.gnome.TextEditor.desktop: a.txt", "org.gnome.Ptyxis.desktop: ~"]
+
+    async def desktop(task_id, op_id, kind, text, win):
+        if kind == "focus":
+            return True, None, windows.pop(0)
+        typed.append(win)
+        return True, None, None
+    g, _, approvals = gate(home, [Decision.approve], desktop=desktop)
+    assert run(g.call("t1", "type_text", {"text": "rm -rf ~\n"})).error == "invalidated" and typed == []
+
+
+def test_no_island_is_said_in_words_and_asks_nothing(home):
+    async def desktop(task_id, op_id, kind, text, win):
+        return False, "desktop_unavailable", None
+    g, _, approvals = gate(home, [Decision.approve], desktop=desktop)
+    result = run(g.call("t1", "type_text", {"text": "hi"}))
+    assert result.error == "desktop_unavailable" and "island" in result.message and approvals.requests == []
+
+
 # ----- the plan -----
 
 def test_acting_waits_for_the_plan(home):
