@@ -140,20 +140,22 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Say what you will do for this request, before acting: the goal and the steps in order. "
         "Each step has say (one short spoken sentence), action (think, read, write, run, open, type "
         "or explain) and target (editor, terminal, file, browser, an app name, or null). Required "
-        "before any tool that writes, runs, opens, reads outside the project or types: write_files, "
-        "edit_file, run_program, run_command, open_app, open_path, read_path, type_text and press_keys. "
-        "Without a plan they return plan_required. Call it again to re-plan."
+        "before any tool that writes, runs, reads outside the project or types: write_files, "
+        "edit_file, run_program, run_command, read_path, type_text and press_keys. Opening an app or a file "
+        "(open_app, open_path) needs no plan. Without a plan the others return plan_required. Call it again to re-plan."
     ),
     "open_app": (
         "Open an installed app on the developer's desktop, by name (\"VS Code\", \"Terminal\", "
-        "\"Files\") or desktop id. It opens right away; only a terminal or a script runner asks the developer first."
+        "\"Files\", \"Firefox\", \"browser\") or desktop id, whichever build is installed. It opens right away and never asks the developer. "
+        "If it says the app isn't installed, tell the developer in one sentence."
     ),
     "open_path": (
         "Open a file or folder in the developer's home folder, in its default app or in the app "
         "you name in with_app (null for the default). A relative path is in the current project. "
-        "To show code you wrote, pass with_app \"VS Code\" (or \"Text Editor\"): code files open in an editor, "
-        "while with no app named, programs and scripts are refused. It opens right away inside the developer's "
-        "usual folders and the projects folder; elsewhere the developer approves it first."
+        "The file or folder must already exist: write it first with write_files, then open it. To show code you wrote, "
+        "pass with_app \"VS Code\" (or \"Text Editor\"); with no app named, programs and scripts such as .py are refused. "
+        "A website (.html) opens in the browser with with_app null or \"browser\". It opens right away inside the "
+        "developer's usual folders and the projects folder, with no approval; elsewhere the developer approves it first."
     ),
     "read_path": (
         "Read a text file anywhere in the developer's home folder, after their approval. Returns "
@@ -168,7 +170,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "type_text": (
         "Type text into the window that has the keyboard focus, after the developer approves the "
-        "exact text. Open or focus the right app first. Typing stops if the focus moves."
+        "exact text. Open the right app first (it waits for that app's window to have the focus). Typing stops if the focus "
+        "moves. Prefer write_files plus open_path over typing whole programs."
     ),
     "press_keys": (
         "Press a key or a shortcut in the focused window, after the developer approves it, for "

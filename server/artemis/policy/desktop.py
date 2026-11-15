@@ -27,9 +27,12 @@ import configparser
 import hashlib
 import os
 import re
+import shlex
+import shutil
 import signal
 import stat
 import tempfile
+import time
 import unicodedata
 import uuid
 from collections.abc import Awaitable, Callable
@@ -58,6 +61,12 @@ from .paths import MAX_READ_BYTES, PathRejected
 COMMAND_TIMEOUT_S = 30
 MAX_COMMAND_OUTPUT = 16 * 1024
 SPOKEN_TEXT_CHARS = 120
+# A slow VS Code start: typing waits this long for the app just opened to have the focus, asking the island
+# every FOCUS_POLL_S; and a focus question the island didn't answer is asked again (FOCUS_TRIES times).
+FOCUS_WAIT_S = 20.0
+FOCUS_POLL_S = 0.5
+FOCUS_TRIES = 3
+RECENT_OPEN_S = 120.0  # an app opened longer ago than this is no longer the one typing is meant for
 
 # The plan action each tool carries out, for the ring.
 TOOL_ACTIONS = {
@@ -74,22 +83,27 @@ TOOL_TARGETS = {
     "inspect_page": "browser", "run_program": "terminal", "run_command": "terminal",
 }
 # Tools that change something or reach outside the project: the plan comes first (§10).
-NEEDS_PLAN = {"write_files", "edit_file", "run_program", "run_command", "open_app", "open_path",
-              "read_path", "type_text", "press_keys"}
+# Opening an app or one of the developer's own files is not here: "open VS Code" must just open it
+# (it asks nothing and changes nothing), not bounce off plan_required first.
+NEEDS_PLAN = {"write_files", "edit_file", "run_program", "run_command", "read_path", "type_text", "press_keys"}
 
 # Opening one of these would run it, not open it.
 _RUNNABLE_SUFFIXES = {".desktop", ".sh", ".bash", ".zsh", ".appimage", ".run", ".jar", ".bin",
                       ".exe", ".msi", ".deb", ".rpm", ".flatpakref", ".py", ".pl", ".rb", ".bat", ".cmd",
-                      ".ps1", ".vbs", ".command", ".jnlp",
-                      # A browser runs the scripts in these (and an .svg can hold them).
-                      ".html", ".htm", ".xhtml", ".svg", ".svgz", ".mht", ".mhtml"}
+                      ".ps1", ".vbs", ".command", ".jnlp", ".svgz", ".mht", ".mhtml"}
+# The pages the agent writes for the developer (a website, a picture): they open in a browser, in the
+# default app or in an editor, from the developer's own folders, with no dialog. A browser running a
+# local page is what "open the website you made" means; the file is hashed and bound all the same.
+_WEB_SUFFIXES = {".html", ".htm", ".xhtml", ".svg"}
 # Source and markup a code editor shows and never runs: what the agent writes for the developer, which
 # may open in VS Code (and only there; in the default app these are refused as above).
-# Browsers run .html and .svg, so they are not here: they are refused in any app.
+# .html and .svg are here too: an editor shows their source (a browser would run them, so in any other
+# app they are refused as above).
 _EDITABLE_SUFFIXES = {".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".css",
                       ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1", ".rb", ".pl", ".lua", ".go", ".rs", ".java",
                       ".c", ".h", ".cpp", ".hpp", ".cs", ".kt", ".swift", ".php", ".sql", ".json", ".yaml", ".yml",
-                      ".toml", ".md", ".txt"}
+                      ".toml", ".md", ".txt", ".html", ".htm", ".xhtml", ".svg", ".xml", ".scss", ".less", ".vue",
+                      ".svelte", ".ini", ".cfg", ".csv", ".ipynb", ".rst"}
 # Terminal apps, which run what they are given (editors are not, see _EDITORS).
 _TERMINAL_APPS = re.compile(r"ptyxis|gnome-terminal|org\.gnome\.console|kgx|kitty|alacritty|xterm|konsole|"
                             r"terminator|tilix|wezterm|\bfoot\b|terminal", re.I)
@@ -210,8 +224,15 @@ _RISKY = [
 # and no display, so a command can't reach the keyring, GNOME Shell or the screen.
 _ENV_COMMAND = ("PATH", "HOME", "LANG", "LANGUAGE", "TERM", "USER", "LOGNAME", "SHELL")
 # Apps Artemis opens (gtk-launch, gio) do need the session.
+# XDG_DATA_DIRS matters most: gtk-launch finds snap's code_code.desktop only through it. XAUTHORITY is
+# how an Xwayland app (VS Code is Electron) reaches the display under GDM; without it the app dies silently.
 _ENV_APP = ("XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
-            "DBUS_SESSION_BUS_ADDRESS")
+            "DBUS_SESSION_BUS_ADDRESS", "XDG_DATA_DIRS", "XDG_DATA_HOME", "XDG_CONFIG_DIRS", "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_SESSION_DESKTOP", "XDG_SESSION_ID", "DESKTOP_SESSION",
+            "XAUTHORITY", "GDK_BACKEND", "QT_QPA_PLATFORM", "GNOME_SETUP_DISPLAY")
+# Where launchers put their programs when a service's PATH is short (snap, flatpak, the VS Code deb).
+_APP_BIN_DIRS = ("/usr/local/bin", "/usr/bin", "/bin", "/snap/bin", "/usr/share/code/bin",
+                 "/var/lib/flatpak/exports/bin")
 _ENV_ALLOW = _ENV_COMMAND + _ENV_APP
 RUN_MARKER = "ARTEMIS_RUN_ID"  # in a command's environment, to find what it left behind
 
@@ -222,6 +243,20 @@ def desktop_env(for_command: bool = False) -> dict[str, str]:
     allow = _ENV_COMMAND if for_command else _ENV_ALLOW
     env = {k: v for k, v in os.environ.items() if k in allow or k.startswith("LC_")}
     env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+    if not for_command:
+        # Started from a service or a bare shell, the session variables may be missing: fill in what
+        # a GNOME session always has, when it is really there.
+        uid = os.getuid()
+        runtime = env.get("XDG_RUNTIME_DIR") or (f"/run/user/{uid}" if os.path.isdir(f"/run/user/{uid}") else "")
+        if runtime:
+            env.setdefault("XDG_RUNTIME_DIR", runtime)
+            if "DBUS_SESSION_BUS_ADDRESS" not in env and os.path.exists(f"{runtime}/bus"):
+                env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={runtime}/bus"
+            if "WAYLAND_DISPLAY" not in env and "DISPLAY" not in env and os.path.exists(f"{runtime}/wayland-0"):
+                env["WAYLAND_DISPLAY"] = "wayland-0"
+        have = env["PATH"].split(":")
+        extra = [d for d in (*_APP_BIN_DIRS, str(home() / ".local/share/flatpak/exports/bin")) if d not in have]
+        env["PATH"] = ":".join(have + extra)
     return env
 
 
@@ -320,8 +355,13 @@ def command_findings(command: str) -> list[Finding]:
 def _app_dirs() -> list[Path]:
     data = [os.environ.get("XDG_DATA_HOME") or str(home() / ".local/share")]
     data += (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
-    data += ["/var/lib/snapd/desktop", "/var/lib/flatpak/exports/share", str(home() / ".local/share/flatpak/exports/share")]
-    return [Path(d) / "applications" for d in data if d]
+    data += ["/usr/local/share", "/usr/share", "/var/lib/snapd/desktop", "/var/lib/flatpak/exports/share",
+             str(home() / ".local/share/flatpak/exports/share")]
+    folders: list[Path] = []
+    for d in data:
+        if d and (path := Path(d) / "applications") not in folders:
+            folders.append(path)
+    return folders
 
 
 # VS Code and the builds that are VS Code for the developer, by the desktop id or the name each one
@@ -333,13 +373,42 @@ _VSCODE_LOOKUP = ("code", "code_code", "com.visualstudio.code", "code-oss", "vis
 _VSCODIUM_LOOKUP = ("codium", "com.vscodium.codium", "vscodium")
 _TEXT_EDITOR_LOOKUP = ("org.gnome.texteditor", "text editor")
 _CODE_IDS = {"code", "code_code", "com.visualstudio.code", "code-oss", "codium", "com.vscodium.codium", "vscodium"}
-# What the developer says for an app: each lookup list is tried in order, exact matches only.
-_FAMILIES = {"vs code": _VSCODE_LOOKUP, "vscode": _VSCODE_LOOKUP, "visual studio code": _VSCODE_LOOKUP,
-             "code": _VSCODE_LOOKUP, "editor": _VSCODE_LOOKUP + _TEXT_EDITOR_LOOKUP,
-             "codium": _VSCODIUM_LOOKUP, "vscodium": _VSCODIUM_LOOKUP}
-# Other names for an app whose real name differs; matched as before, by name or id that contains it.
-_ALIASES = {"browser": "firefox", "web browser": "firefox", "file manager": "files",
-            "terminal": "terminal", "calculator": "calculator", "settings": "settings"}
+# What the developer says for an app: each lookup list is tried in order, exact matches only (desktop
+# id or name), so a family never picks some other app that merely contains the word.
+_FIREFOX = ("firefox", "firefox_firefox", "org.mozilla.firefox", "firefox-esr", "mozilla firefox", "firefox web browser")
+_CHROME = ("google-chrome", "google chrome", "google-chrome-stable", "com.google.chrome", "chromium",
+           "chromium_chromium", "chromium-browser", "org.chromium.chromium", "brave-browser", "com.brave.browser",
+           "microsoft-edge", "com.microsoft.edge")
+_TERMINAL = ("org.gnome.terminal", "gnome-terminal", "org.gnome.ptyxis", "ptyxis", "org.gnome.console", "kgx",
+             "terminal", "konsole", "org.kde.konsole", "xfce4-terminal", "tilix", "kitty", "alacritty", "xterm")
+_FILES = ("org.gnome.nautilus", "nautilus", "files", "org.gnome.files", "nemo", "thunar", "org.kde.dolphin", "dolphin")
+_GEDIT = ("org.gnome.gedit", "gedit", "text editor")
+_FAMILIES = {
+    "vs code": _VSCODE_LOOKUP, "vscode": _VSCODE_LOOKUP, "visual studio code": _VSCODE_LOOKUP,
+    "visual studio": _VSCODE_LOOKUP, "code": _VSCODE_LOOKUP, "code editor": _VSCODE_LOOKUP,
+    "microsoft vs code": _VSCODE_LOOKUP, "microsoft visual studio code": _VSCODE_LOOKUP,
+    "editor": _VSCODE_LOOKUP + _TEXT_EDITOR_LOOKUP + _GEDIT, "text editor": _TEXT_EDITOR_LOOKUP + _GEDIT,
+    "gedit": _GEDIT, "gnome text editor": _TEXT_EDITOR_LOOKUP,
+    "codium": _VSCODIUM_LOOKUP, "vscodium": _VSCODIUM_LOOKUP,
+    "firefox": _FIREFOX, "browser": _FIREFOX + _CHROME, "web browser": _FIREFOX + _CHROME,
+    "chrome": _CHROME, "google chrome": _CHROME, "chromium": _CHROME[4:],
+    "terminal": _TERMINAL, "gnome terminal": _TERMINAL, "console": _TERMINAL, "command line": _TERMINAL,
+    "files": _FILES, "file manager": _FILES, "file browser": _FILES, "nautilus": _FILES, "finder": _FILES,
+}
+# Families that, when none of their builds is installed, may still match an app whose name contains the word.
+_FUZZY = {"firefox", "browser", "web browser", "chrome", "google chrome", "chromium", "terminal", "gnome terminal",
+          "console", "files", "file manager", "file browser", "nautilus"}
+# Other names for an app whose real name differs; matched by name or id that contains it.
+_ALIASES = {"calculator": "calculator", "settings": "settings"}
+
+
+def _normal(query: str) -> str:
+    """What the developer said, as a lookup key: lower case, no ".desktop", one space between words
+    ("VS-Code", "vs  code" and "VS Code." are all "vs code")."""
+    want = query.strip().lower().removesuffix(".desktop")
+    if want in _FAMILIES or (" " not in want and ("." in want or "_" in want)):
+        return want
+    return " ".join(re.sub(r"[-_.,!?\"']+", " ", want).split())
 
 
 _MAX_DESKTOP_FILE = 256 * 1024
@@ -391,14 +460,17 @@ def _find_app_file(query: str, exact: bool = False) -> tuple[Path, str, configpa
 def _lookup(query: str) -> tuple[Path, str, configparser.SectionProxy] | None:
     """The installed app for what the developer said or for a desktop id: a family ("VS Code", "editor")
     tries each of its builds in order, exact matches only; anything else is `_find_app_file`."""
-    want = query.strip().lower().removesuffix(".desktop")
+    want = _normal(query)
     if want in _FAMILIES:
         for candidate in _FAMILIES[want]:
             found = _find_app_file(candidate, exact=True)
             if found is not None:
                 return found
-        return None
-    return _find_app_file(_ALIASES.get(want, want))
+        if want not in _FUZZY:
+            return None  # "code" must never open some other app whose name contains it
+    found = _find_app_file(_ALIASES.get(want, want))
+    raw = query.strip().lower()
+    return found or (_find_app_file(raw) if raw != want else None)
 
 
 def find_app(query: str) -> tuple[str, str] | None:
@@ -449,21 +521,111 @@ def app_is_editor(query: str) -> bool:
 
 def _in_user_apps(file: Path) -> bool:
     """True for a launcher in the developer's own applications folder (~/.local/share/applications by
-    default): something could have been planted there, and it shadows a system app of the same name."""
+    default)."""
     return file.parent.resolve() == _app_dirs()[0].resolve()
 
 
+def _planted(file: Path, entry: configparser.SectionProxy) -> bool:
+    """True for a launcher in the developer's own applications folder that looks planted: it shadows a
+    system launcher of the same name with another content, or its program sits in a folder the agent
+    writes into (Documents, Desktop, Downloads, ArtemisProjects). A user-level install (a tarball VS Code
+    or a Chrome app in ~/.local/share/applications) is the developer's own and opens without asking."""
+    if not _in_user_apps(file):
+        return False
+    for folder in _app_dirs()[1:]:
+        twin = folder / file.name
+        try:
+            if twin.is_file() and twin.read_bytes() != file.read_bytes():
+                return True
+        except OSError:
+            continue
+    words = _program_words(entry.get("Exec", ""))
+    if not words:
+        return False
+    program = Path(words[0]).expanduser()
+    if not program.is_absolute():
+        return False
+    places = [home() / name for name in (*_OWN_FOLDERS, "ArtemisProjects")]
+    return any(program.resolve().is_relative_to(p.resolve()) for p in places)
+
+
 def _app_findings(found: tuple[Path, str, configparser.SectionProxy]) -> list[Finding]:
-    """High findings (the blocking key is then needed) for an app that may run what it is given, or
-    whose launcher may have been planted. An app with neither needs no approval to open."""
-    file, name, entry = found
-    reasons = []
-    if _runs_files(file, name, entry):
-        reasons.append("it is a terminal or runs the files it is given")
-    if _in_user_apps(file):
-        reasons.append("its launcher is in your own applications folder, where something could have been planted")
+    """High findings (the blocking key is then needed) for an app whose launcher may have been planted.
+    Any other installed app opens without asking: opening a terminal or an editor runs nothing, and
+    typing into one has its own approval."""
+    file, _name, entry = found
+    if not _planted(file, entry):
+        return []
     return [Finding(rule="desktop-app", severity="high", path="app", line=1,
-                    message=f"This app needs a second look: {reason}.") for reason in reasons]
+                    message="This app needs a second look: its launcher is in your own applications folder and "
+                            "looks planted, because it replaces a system app or starts a program from a folder I write into.")]
+
+
+def _entry_argv(entry: configparser.SectionProxy, paths: list[str]) -> list[str] | None:
+    """The Exec line of a launcher as an argv, with the file codes (%f %F %u %U) filled in with `paths`
+    and the other codes dropped. None when it can't be read."""
+    try:
+        words = shlex.split(entry.get("Exec", ""))
+    except ValueError:
+        return None
+    argv: list[str] = []
+    used = False
+    for word in words:
+        if word in ("%f", "%F", "%u", "%U"):
+            argv += paths[:1] if word in ("%f", "%u") else paths
+            used = True
+        else:
+            word = re.sub(r"%[ickdDnNvm]", "", word).replace("%%", "%")
+            if word:
+                argv.append(word)
+    if paths and not used:
+        argv += paths
+    return argv or None
+
+
+def _code_binaries(file: Path) -> list[str]:
+    """The programs to try by name when the launcher itself can't start: VS Code's `code`, VSCodium's."""
+    stem = file.stem.lower()
+    if stem in {"codium", "com.vscodium.codium", "vscodium"}:
+        names = ["codium", "vscodium"]
+    elif stem in _CODE_IDS:
+        names = ["code", "code-oss"]
+    else:
+        return []
+    path = desktop_env()["PATH"]
+    return [found for n in names if (found := shutil.which(n, path=path))]
+
+
+class LaunchFailed(Exception):
+    """Every way of starting the app failed; `reasons` says what each one reported."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        super().__init__("; ".join(reasons))
+        self.reasons = reasons
+
+
+async def _launch_app(found: tuple[Path, str, configparser.SectionProxy], paths: list[str] = ()) -> None:
+    """Start an installed app (with `paths` to open in it): gtk-launch by desktop id, then `gio launch`
+    on the launcher file (which needs no data-dir lookup), then the launcher's own Exec line, then, for
+    VS Code, `code` on the PATH (`code --new-window <path>`). The first that starts it wins; if none does,
+    LaunchFailed says why, so the developer hears a reason instead of nothing happening."""
+    file, _name, entry = found
+    paths = list(paths)
+    attempts: list[list[str]] = [["gtk-launch", file.name, *paths], ["gio", "launch", str(file), *paths]]
+    exec_argv = _entry_argv(entry, paths)
+    if exec_argv:
+        attempts.append(exec_argv)
+    for binary in _code_binaries(file):
+        attempts.append([binary, "--new-window", *paths] if paths else [binary, "--new-window"])
+    reasons: list[str] = []
+    for argv in attempts:
+        try:
+            await _spawn_detached(argv)
+            return
+        except Exception as exc:  # FileNotFoundError (no such program), RuntimeError (it exited with an error)
+            reason = _clean(str(exc), 100) if str(exc) else type(exc).__name__
+            reasons.append(f"{os.path.basename(argv[0])}: {reason}")
+    raise LaunchFailed(reasons)
 
 
 async def _spawn_detached(argv: list[str]) -> None:
@@ -483,6 +645,18 @@ async def _spawn_detached(argv: list[str]) -> None:
         if proc.returncode:
             err.seek(0)
             raise RuntimeError(err.read(200).decode(errors="replace").strip() or f"exit code {proc.returncode}")
+
+
+async def _open_default(path: Path) -> None:
+    """Open a document or folder in its default app: gio open, then xdg-open."""
+    reasons = []
+    for argv in (["gio", "open", str(path)], ["xdg-open", str(path)]):
+        try:
+            await _spawn_detached(argv)
+            return
+        except Exception as exc:
+            reasons.append(f"{argv[0]}: {_clean(str(exc), 100) or type(exc).__name__}")
+    raise LaunchFailed(reasons)
 
 
 # ----- commands -----
@@ -586,6 +760,18 @@ def _window_name(window: str) -> str:
     return f"{title} in {app}" if title else app
 
 
+def _window_is_app(window: str, stem: str, name: str) -> bool:
+    """True when the focused window ("code.desktop: main.py - Visual Studio Code") belongs to the app
+    started from the launcher `stem` (code, code_code, com.visualstudio.code) named `name`."""
+    app = window.partition(": ")[0] if ": " in window else window
+    app = app.lower().removesuffix(".desktop")
+    stem = stem.lower()
+    names = {stem, stem.rsplit(".", 1)[-1], stem.split("_")[0], name.lower(), name.lower().replace(" ", "")}
+    if stem in _CODE_IDS:
+        names |= {"code", "code-oss", "vscodium", "codium", "visual studio code", "com.visualstudio.code", "code_code"}
+    return any(n and re.search(rf"(?<![a-z0-9]){re.escape(n)}(?![a-z0-9])", app) for n in names)
+
+
 # The island's side (contracts.md §9): (task_id, op_id, kind, text, window) -> (ok, message, window).
 # kind "focus" asks which window has the focus; "type" and "keys" act in `window` only. None = no island.
 DesktopBridge = Callable[[str, str, str, str, str | None], Awaitable[tuple[bool, str | None, str | None]]]
@@ -687,10 +873,11 @@ class DesktopTools:
         still don't."""
         path = home_resolve(raw, self._base(), self._roots())
         if not path.exists():
-            raise self._tool_error("not_found", f"There is no file or folder {raw}.")
+            raise self._tool_error("not_found", f"There is no file or folder {raw} yet. Create it first with write_files "
+                                                "(or create_project for a new project folder), then open it.")
         if path.is_file():
             suffix = path.suffix.lower()
-            if editor and suffix in _EDITABLE_SUFFIXES:
+            if suffix in _WEB_SUFFIXES or (editor and suffix in _EDITABLE_SUFFIXES):
                 return path
             if suffix in _RUNNABLE_SUFFIXES or os.access(path, os.X_OK):
                 raise PathRejected(f"{path.name} is a program or a script, so opening it would run it. I only open documents and folders.")
@@ -714,10 +901,26 @@ class DesktopTools:
             places.append(self._base())
         return any(real.is_relative_to(p.resolve()) for p in places)
 
+    def _not_installed(self, said: str) -> Exception:
+        want = _normal(said)
+        hint = ""
+        if want in _FAMILIES and want in {"vs code", "vscode", "visual studio code", "code", "visual studio"}:
+            hint = " Say editor to use any installed text editor."
+        return self._tool_error("not_found", f"I couldn't find an app called {said}; it doesn't look installed.{hint}")
+
+    def _launch_failed(self, name: str, exc: Exception) -> Exception:
+        why = "; ".join(exc.reasons[-2:]) if isinstance(exc, LaunchFailed) else type(exc).__name__
+        return self._tool_error(
+            "tool_failed", f"I couldn't open {name}. I tried the desktop launcher, gio and starting the program itself ({why}).")
+
+    def _note_opened(self, task_id: str, found: tuple[Path, str, configparser.SectionProxy]) -> None:
+        """Remember the app just started, so typing waits for its window to have the focus."""
+        self.__dict__.setdefault("_opened", {})[task_id] = (found[0].stem, found[1], time.monotonic())
+
     async def _open_app(self, task_id: str, a: OpenAppArgs) -> dict:
         found = _lookup(a.app)
         if found is None:
-            raise self._tool_error("not_found", f"I couldn't find an app called {a.app}.")
+            raise self._not_installed(a.app)
         app_id, name = found[0].name, found[1]
         findings = _app_findings(found)  # decided now, before anything is launched
 
@@ -725,14 +928,15 @@ class DesktopTools:
             # The launcher file's hash is bound too: swapped or shadowed, it would run something else.
             return DesktopSpec(action="open_app", target=app_id, sha256=app_digest(app_id))
 
-        if findings:  # only a terminal, an interpreter or a planted launcher is asked about
+        if findings:  # only a launcher that looks planted is asked about
             await self._approve_desktop(task_id, "open", spec(), f"Open {name}.", "Nothing was opened.",
                                         findings=findings, still=spec)
         await self._cue(task_id, "open_app", name)
         try:
-            await _spawn_detached(["gtk-launch", app_id])
+            await _launch_app(found)
         except Exception as exc:
-            raise self._tool_error("tool_failed", f"{name} could not be opened: {type(exc).__name__}.") from None
+            raise self._launch_failed(name, exc) from None
+        self._note_opened(task_id, found)
         await self._say(task_id, f"Opened {name}.")
         return {"opened": name, "app_id": app_id}
 
@@ -740,7 +944,7 @@ class DesktopTools:
         found = _lookup(a.with_app) if a.with_app else None
         if a.with_app and found is None:
             self._openable(a.path)  # a program is refused whichever app was named, before the app's absence
-            raise self._tool_error("not_found", f"I couldn't find an app called {a.with_app}.")
+            raise self._not_installed(a.with_app)
         if found and _runs_files(*found):
             raise PathRejected(f"{found[1]} would run the file, not show it, so I won't open anything with it.")
         app = (found[0].name, found[1]) if found else None
@@ -761,9 +965,14 @@ class DesktopTools:
                                         findings=findings, still=spec)
         await self._cue(task_id, "open_path", app[1] if app else "file")
         try:
-            await _spawn_detached(["gtk-launch", app[0], str(path)] if app else ["gio", "open", str(path)])
+            if found:
+                await _launch_app(found, [str(path)])
+            else:
+                await _open_default(path)
         except Exception as exc:
-            raise self._tool_error("tool_failed", f"{path.name} could not be opened: {type(exc).__name__}.") from None
+            raise self._launch_failed(f"{path.name}{where}", exc) from None
+        if found:
+            self._note_opened(task_id, found)
         await self._say(task_id, f"Opened {path.name}{where}.")
         return {"opened": spoken_path(path), "with": app[1] if app else "its default app"}
 
@@ -816,13 +1025,38 @@ class DesktopTools:
     async def _focused(self, task_id: str) -> str:
         if self._desktop is None:
             raise self._tool_error("desktop_unavailable", "Typing needs the Artemis island, and it isn't connected.")
-        ok, message, window = await self._desktop(task_id, f"op_{uuid.uuid4().hex[:12]}", "focus", "", None)
-        if not ok or not window:
-            raise self._tool_error("desktop_unavailable", _island_message(message) if message else "The island couldn't tell which window has the focus.")
-        return window
+        message = None
+        for attempt in range(FOCUS_TRIES):
+            ok, message, window = await self._desktop(task_id, f"op_{uuid.uuid4().hex[:12]}", "focus", "", None)
+            if ok and window:
+                return window
+            if message == "canceled" or attempt == FOCUS_TRIES - 1:
+                break
+            await asyncio.sleep(FOCUS_POLL_S)  # the island may still be starting, or a window opening: ask again
+        raise self._tool_error("desktop_unavailable", _island_message(message) if message else "The island couldn't tell which window has the focus.")
+
+    async def _wait_for_opened_app(self, task_id: str, window: str) -> str:
+        """After open_app or open_path, typing goes into that app: wait (up to FOCUS_WAIT_S) until its window
+        has the focus, so a slow VS Code start doesn't send the text into the window it opened over."""
+        opened = self.__dict__.get("_opened", {}).get(task_id)
+        if opened is None or time.monotonic() - opened[2] > RECENT_OPEN_S:
+            return window
+        if _window_is_app(window, opened[0], opened[1]):
+            self._opened.pop(task_id, None)
+            return window
+        deadline = time.monotonic() + FOCUS_WAIT_S
+        while time.monotonic() < deadline:
+            await asyncio.sleep(FOCUS_POLL_S)
+            window = await self._focused(task_id)
+            if _window_is_app(window, opened[0], opened[1]):
+                self._opened.pop(task_id, None)
+                return window
+        self._opened.pop(task_id, None)
+        raise self._tool_error("tool_failed", f"{opened[1]} didn't come to the front in {int(FOCUS_WAIT_S)} seconds, so nothing was typed. "
+                                              "Open it again, or ask the developer to click its window, then type.")
 
     async def _type_into(self, task_id: str, kind: str, text: str, what: str) -> dict:
-        window = await self._focused(task_id)
+        window = await self._wait_for_opened_app(task_id, await self._focused(task_id))
         action = "type_text" if kind == "type" else "press_keys"
         findings = []
         if _is_terminal(window):
