@@ -15,7 +15,9 @@ Settings (environment):
   "stopped", so that beep is never transcribed either.
 - ARTEMIS_WHISPER_PROMPT: unset (default) is the word-list prompt; natural is the spoken-style lead (text.py).
 - ARTEMIS_WORKING_CUE: unset (default) keeps the core's spoken "Still working."; earcon plays a soft
-  "working" tick instead (working_cue, contracts.md 3.3), only when a voice can speak and never into the mic.
+  "working" tick instead (working_cue, contracts.md 3.3 and 5.7), only when a voice can speak, never into
+  the mic, never while Whisper runs and never over Artemis's speech or another earcon. The core still puts
+  "Still working." in the log, unspoken, so a screen reader can read it.
 A beam above 1, a post-roll and the natural prompt are opt-in: switch them on for the stage only after
 docs/demo.md row 3 (the demo sentence, word for word) passes with them on, on the demo laptop.
 
@@ -57,6 +59,7 @@ BEAM = 1
 # Off by default. Opt-in: ARTEMIS_PTT_POST_ROLL=0.35 keeps the mic open that many seconds after release.
 POST_ROLL = 0.0
 MAX_POST_ROLL = 1.0
+TICK_GUARD_S = 0.2  # after the working tick, for the room's echo: the wake listener stays deaf this long
 
 
 def whisper_model() -> str:
@@ -135,7 +138,10 @@ class WhisperVoice:
         self.working_earcon = working_earcon_on() if working_earcon is None else working_earcon
         self._model = model
         self._stream_factory = stream_factory or _input_stream
-        self._earcon = earcon
+        self._play_earcon = earcon
+        self._earcon_until = 0.0  # monotonic time this voice's last earcon ends; no tick before it
+        self._tick_until = 0.0  # the last tick's end: the wake listener drops the mic's audio until then
+        self.wake_listener = None  # set by the core when ARTEMIS_LISTEN_MODE=wake (it has .armed)
         self._stream = None
         self.transcribing = False  # Whisper is turning the last recording into text (voice.activity)
         self._wanted = False  # key is held; cleared by stop, even while the start earcon plays
@@ -169,12 +175,37 @@ class WhisperVoice:
             return True
         return self.working_earcon
 
-    def _tick(self) -> None:
-        if self._wanted or self._stream is not None or self._tail is not None:
-            return  # push-to-talk is under way: a tick now would be recorded into the request
-        if self.announcer.current().busy():
-            return  # never over speech; the next heartbeat tries again
-        self._earcon("working")
+    def _earcon(self, name: str) -> float:
+        """Play one of this voice's earcons and note when it ends, so a tick never cuts it off."""
+        duration = self._play_earcon(name) or 0.0
+        self._earcon_until = max(self._earcon_until, time.monotonic() + duration)
+        return duration
+
+    def _tick(self) -> bool:
+        """Play the "working" tick if nothing else owns the sound or the mic. True if it played.
+
+        Skipped beats are not made up: the next heartbeat (about 3 s later) tries again.
+        """
+        if self.busy_listening or self.transcribing:
+            return False  # push-to-talk is under way or Whisper is running: never a sound in that cycle
+        wake = self.wake_listener
+        if wake is not None and wake.armed:
+            return False  # heard "Hey Artemis": the mic is recording the request
+        if time.monotonic() < self._earcon_until:
+            return False  # "listening" or "stopped" is still playing; a tick would cut it off
+        try:
+            if self.announcer.current().busy() or self.announcer.speaking_engine() is not None:
+                return False  # never over Artemis's speech, including a line ElevenLabs handed to the fallback
+        except Exception:
+            return False  # can't tell: silence is safer than a tick over speech
+        duration = self._earcon("working")
+        self._tick_until = time.monotonic() + duration + TICK_GUARD_S
+        return True
+
+    @property
+    def tick_playing(self) -> bool:
+        """The tick is audible now (plus a short tail): the wake listener drops the mic's audio meanwhile."""
+        return time.monotonic() < self._tick_until
 
     @property
     def busy_listening(self) -> bool:

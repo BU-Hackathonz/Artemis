@@ -234,6 +234,8 @@ class Core:
             log.warning("Wake word could not start the microphone (%s); push-to-talk only", type(e).__name__)
             return
         self.wake = listener
+        if hasattr(self.voice, "wake_listener"):
+            self.voice.wake_listener = listener  # the working tick stays quiet while a request is being heard
 
     def wire_voice(self) -> None:
         """Say the ElevenLabs fallback notice through the bus when that voice gives up. Called at

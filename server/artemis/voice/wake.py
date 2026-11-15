@@ -292,10 +292,12 @@ class WakeListener:
         return self.wake.armed
 
     def _muted(self) -> bool:
-        """Drop the microphone's audio: Artemis is talking, or push-to-talk owns the mic."""
+        """Drop the microphone's audio: Artemis is talking or ticking, or push-to-talk owns the mic."""
         voice = self.voice
         if getattr(voice, "busy_listening", getattr(voice, "listening", False)) or getattr(voice, "transcribing", False):
             return True
+        if getattr(voice, "tick_playing", False):
+            return True  # the opt-in working tick (ARTEMIS_WORKING_CUE=earcon) is not a request
         announcer = getattr(voice, "announcer", None)
         if announcer is None:
             return False
