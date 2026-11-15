@@ -70,7 +70,9 @@ async function coreFixture({failFirstStart=false,delayFirstStart=false,voiceRead
   });
   await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
   const url=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
-  return{actions,diagnostics,readies,url,finishStart:()=>pendingStart?.writeHead(204).end(),close:async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
+  return{actions,diagnostics,readies,url,emit:(type:string,data:object,taskId:string|null=null)=>{
+    events?.write(`id: ${++seq}\ndata: ${JSON.stringify({seq,session_id:'ses_voice',task_id:taskId,at:new Date().toISOString(),type,data,announce:null})}\n\n`);
+  },finishStart:()=>pendingStart?.writeHead(204).end(),close:async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
 }
 async function send(page:Page,state:'Pressed'|'Released') {await page.evaluate(state=>(window as unknown as {voiceBridge:Bridge}).voiceBridge.send(state),state);}
 
@@ -212,4 +214,36 @@ test('Tab from the request field reaches the listening toggle before wrapping to
     await page.keyboard.press('Shift+Tab');
     await expect(talk).not.toBeFocused();
   }finally{await core.close();}
+});
+
+
+test('voice task approval closure cannot leave a transcript to resend as a typed request', async ({page}) => {
+  const core=await coreFixture();
+  const submissions:string[]=[];
+  page.on('request',request=>{
+    if(request.method()==='POST' && new URL(request.url()).pathname==='/sessions/ses_voice/tasks')submissions.push(request.postData()??'');
+  });
+  try {
+    await bridge(page,core.url);await page.goto('/');
+    await expect(page.getByRole('status')).toHaveText('Connected');
+    const request=page.getByLabel('What would you like to build?');
+    const transcript='Create a Python program that prints Hello World';
+    core.emit('transcript.final',{text:transcript,client_request_id:'voice-original'});
+    core.emit('task.state',{state:'queued'},'tsk_voice');
+    core.emit('approval.requested',{approval_id:'apr_voice',approval_hash:'sha256:voice',kind:'write_files',summary:'Voice proposal',files:[],diff:null,run:null,findings:[]},'tsk_voice');
+    await expect(page.getByRole('dialog')).toBeVisible();
+    core.emit('approval.resolved',{approval_id:'apr_voice',decision:'reject',by:'user'},'tsk_voice');
+    core.emit('task.state',{state:'canceled'},'tsk_voice');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(request).toBeFocused();
+    await expect(request).toHaveValue('');
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('button',{name:'Send request',exact:true})).toBeDisabled();
+    expect(submissions).toEqual([]);
+    await expect(page.getByRole('log')).toContainText(transcript);
+    await request.fill('My unfinished keyboard draft');
+    core.emit('transcript.final',{text:'repeat',client_request_id:'voice-control',intent:'repeat'});
+    await expect(page.getByRole('log')).toContainText('repeat');
+    await expect(request).toHaveValue('My unfinished keyboard draft');
+  } finally {await core.close();}
 });
