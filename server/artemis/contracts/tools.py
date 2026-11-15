@@ -83,8 +83,8 @@ class ScanProjectArgs(_Args):
     path: str | None = None  # a file or folder in the current project; None scans all of it
 
 
-# ----- desktop tools (contracts.md §9, Proposed). Not in TOOL_ARGS yet: each goes in when the gate
-# handles it (Workstream A), so the model never sees a tool the policy can't check.
+# ----- desktop tools (contracts.md §9, Proposed). The gate handles each (policy/desktop.py), so
+# they are in TOOL_ARGS below too, with the plan.
 
 
 class OpenAppArgs(_Args):
@@ -160,6 +160,8 @@ TOOL_ARGS: dict[str, type[BaseModel]] = {
     "edit_file": EditFileArgs,
     "inspect_page": InspectPageArgs,
     "scan_project": ScanProjectArgs,
+    **DESKTOP_TOOL_ARGS,
+    **PLAN_ARGS,
 }
 
 

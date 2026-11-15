@@ -93,6 +93,18 @@ def answer(text: str) -> tuple[int, dict]:
     return reply({"type": "text", "text": text})
 
 
+def planned(goal: str, steps) -> list:
+    """The real agent plans before it acts (contracts.md §10, plan_required): a scripted turn list
+    that uses an acting tool gets a plan call first."""
+    from artemis.policy.desktop import NEEDS_PLAN
+
+    names = {b["name"] for _, body in steps for b in body.get("content", []) if b["type"] == "tool_use"}
+    if not names & NEEDS_PLAN:
+        return list(steps)
+    plan = tool("plan", goal=goal[:200], steps=[{"say": "I'll do it step by step.", "action": "think"}])
+    return [plan, *steps]
+
+
 def api_error(status: int, kind: str, message: str) -> tuple[int, dict]:
     return status, {"type": "error", "error": {"type": kind, "message": message}}
 
@@ -380,7 +392,7 @@ class Launch:
         return [e["announce"]["text"] for e in self.events if e["task_id"] == tid and e["announce"]]
 
     async def task(self, sid: str, text: str, *steps, expect: str = "succeeded") -> str:
-        self.model.steps.extend(steps)
+        self.model.steps.extend(planned(text, steps))
         body = {"client_request_id": f"cr_{uuid.uuid4().hex[:12]}", "source": "keyboard", "text": text}
         tid = (await self.call("POST", f"/sessions/{sid}/tasks", json=body)).json()["task_id"]
         await self.wait(lambda: self.state(tid) in FINAL)
@@ -487,12 +499,12 @@ async def test_no_secret_leaks_end_to_end(launch):
         # the timed waits below, so they measure the voice flow and nothing else.
         await asyncio.to_thread(lambda: run.core.sessions[sid].runner.python)
         voice.transcript = "Artemis, create a Python program that prints Hello World, and run it"
-        run.model.steps += [
+        run.model.steps += planned("Hello World", [
             tool("create_project", name="hello world"),
             tool("write_files", files=[{"path": "main.py", "content": HELLO}]),
             tool("run_program", entry="main.py", args=[]),
             answer("I created hello-world and ran main.py. It printed Hello, World!"),
-        ]
+        ])
         assert (await run.call("POST", "/voice/listen", json={"action": "start"})).status_code == 204
         assert (await run.call("POST", "/voice/listen", json={"action": "stop"})).status_code == 204
         # Wait for this request's own transcript, then for the task it started (not any task).

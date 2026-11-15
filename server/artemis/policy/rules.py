@@ -1,8 +1,10 @@
 """The policy table: what each tool needs before it may run (design B3).
 
-There is no shell, delete, network or install tool. A tool that isn't in this table doesn't exist.
+There is no delete, network or install tool, and the one shell tool (run_command) runs a single approved line
+without the API keys. A tool that isn't in this table doesn't exist.
 """
 
+import sys
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -13,11 +15,19 @@ from artemis.contracts import (
     EditFileArgs,
     InspectPageArgs,
     ListFilesArgs,
+    OpenAppArgs,
+    OpenPathArgs,
+    PlanArgs,
+    PressKeysArgs,
+    ReadPathArgs,
+    RunCommandArgs,
+    TypeTextArgs,
     OpenProjectArgs,
     ReadFileArgs,
     RunProgramArgs,
     ScanProjectArgs,
     WriteFilesArgs,
+    DESKTOP_TOOL_ARGS,
 )
 
 
@@ -46,4 +56,27 @@ RULES: dict[str, Rule] = {
     "inspect_page": Rule(InspectPageArgs),
     # The same Bandit scan, when the developer asks for it. Read-only, so no approval.
     "scan_project": Rule(ScanProjectArgs),
+    # The request's plan (contracts.md §10): no approval, it only says what will happen.
+    "plan": Rule(PlanArgs),
+    # The desktop (contracts.md §9): every one waits for the developer.
+    "open_app": Rule(OpenAppArgs, approval_kind="open"),
+    "open_path": Rule(OpenPathArgs, approval_kind="open"),
+    "read_path": Rule(ReadPathArgs, approval_kind="read_outside"),
+    "run_command": Rule(RunCommandArgs, approval_kind="run_command"),
+    "type_text": Rule(TypeTextArgs, approval_kind="type"),
+    "press_keys": Rule(PressKeysArgs, approval_kind="type"),
 }
+
+
+def desktop_supported() -> bool:
+    """The six desktop tools (contracts.md section 9) are built on bash, gtk-launch, gio and the XDG
+    folders, so they exist on Linux only. Elsewhere (Windows: SAPI/NVDA client) they are neither offered
+    to the model nor run; the plan stays."""
+    return sys.platform.startswith("linux")
+
+
+def rule_for(name: str) -> "Rule | None":
+    """The rule for a tool, or None when it doesn't exist here (a desktop tool off Linux)."""
+    if name in DESKTOP_TOOL_ARGS and not desktop_supported():
+        return None
+    return RULES.get(name)

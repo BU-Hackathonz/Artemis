@@ -7,6 +7,7 @@ import asyncio
 import copy
 import json
 import os
+import sys
 import time
 
 import pytest
@@ -22,7 +23,7 @@ from artemis.agent.config import Config  # noqa: E402
 from artemis.agent.context import task_message, vocabulary  # noqa: E402
 from artemis.agent.prompts import DESKTOP, SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
 from artemis.agent.stub import StubAgent  # noqa: E402
-from artemis.contracts import TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
+from artemis.contracts import DESKTOP_TOOL_ARGS, TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
 from artemis.policy.gateway import ToolGateway  # noqa: E402
 from artemis.policy.testing import EventLog, FakeApprovals, FakeRunner  # noqa: E402
 
@@ -156,7 +157,8 @@ def test_request_shape(tmp_path):
     assert call["system"] == SYSTEM_PROMPT
     # Thinking is always on for this model, forced tool choice is a 400, and we don't stream.
     assert not {"thinking", "tool_choice", "stream", "temperature"} & set(call)
-    assert [t["name"] for t in call["tools"]] == list(TOOL_ARGS)
+    offered = [n for n in TOOL_ARGS if sys.platform.startswith("linux") or n not in DESKTOP_TOOL_ARGS]
+    assert [t["name"] for t in call["tools"]] == offered
 
 
 def test_model_and_effort_come_from_config(tmp_path):
@@ -472,9 +474,11 @@ def test_tool_schemas_are_strict(tmp_path):
         assert definition["strict"] is True and definition["description"]
         check(definition["input_schema"])
     names = [t["name"] for t in tools]
+    desktop = ["open_app", "open_path", "read_path", "run_command", "type_text", "press_keys"]
     assert names == [
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
         "inspect_page", "scan_project",
+        *(desktop if sys.platform.startswith("linux") else []), "plan",
     ]
     assert not {"shell", "delete_file", "ask_user", "scan", "install"} & set(names)
 
@@ -488,16 +492,23 @@ def test_strict_schema_keeps_a_property_named_like_a_keyword():
 
 
 def test_system_prompt_is_frozen_and_covers_the_rules():
-    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network",
+    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "Plan first", "waits for", "never touched",
                    "what it does as a whole", "never speak symbols", "in the log"]:
         assert phrase in SYSTEM_PROMPT
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
-# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when a rejected or
-# scan-blocked change or run stopped being proposed again for the rest of the conversation) as it
+# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when the agent planned
+# first and gained the desktop tools, contracts.md §9 and §10, on top of the two-sentence answers) as it
 # is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "9f2b7c6b97d60b529c45317129405d2dbe83c35a50f55486c856d225e255c2c3"
+MAIN_SYSTEM_PROMPT_SHA256 = "3c12d33fc63f27ff6859830f547e0d143bcb0954c2daacb1575dd4ca2877f785"
+
+
+def test_spoken_answers_are_short_and_true_to_the_tool_results():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "at most two short sentences unless they ask for more detail" in flat
+    assert "if the last run failed, never say the program works" in flat
+    assert "never by their path or how their name is spelled" in flat
 
 
 def test_a_rejected_change_is_not_proposed_again_unless_asked():
