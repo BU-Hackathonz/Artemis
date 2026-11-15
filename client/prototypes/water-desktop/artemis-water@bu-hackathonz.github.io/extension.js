@@ -41,6 +41,8 @@ const ORB_LIVE_MS = 33;         // orb at rest but alive (slow morph and tumble)
 // poll checks that Control and Shift are still held.
 const SHORTCUT = 'Control+Shift+Space';
 const TALK_POLL_MS = 50;
+const STOP_RETRY_MS = 300;   // a stop the core didn't confirm is sent again once, this much later
+const STOP_WAIT_MS = 1500;   // disable: how long to wait for the core to confirm the stop
 // Island states shown with the ring's working look (contracts.md §8).
 const WORKING = new Set(['listening', 'thinking', 'editing', 'running', 'speaking']);
 const OFFLINE_CLOSE_MS = 5000; // the core gone this long: close an open approval dialog (reopened if it returns)
@@ -150,8 +152,19 @@ export default class ArtemisWaterExtension extends Extension {
     disable() {
         if (this._offlineTimer) GLib.source_remove(this._offlineTimer);
         this._offlineTimer = 0;
-        this._core?.destroy();
+        // An open push-to-talk is closed first, so disabling the island never leaves the mic on (#160):
+        // the client is destroyed only once the core has answered the stop (or after STOP_WAIT_MS).
+        const core = this._core;
         this._core = null;
+        if (core && this._listening) {
+            let done = false;
+            const finish = () => { if (!done) { done = true; core.destroy(); } };
+            (this._startPending ?? Promise.resolve(true)).then(() => core.listen('stop')).finally(finish);
+            this._startPending = null;
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, STOP_WAIT_MS, () => { finish(); return GLib.SOURCE_REMOVE; });
+        } else {
+            core?.destroy();
+        }
         this._closeApproval();
         if (this._doneTimer) GLib.source_remove(this._doneTimer);
         this._doneTimer = 0;
@@ -519,7 +532,12 @@ export default class ArtemisWaterExtension extends Extension {
         if (!this._core) return;
         if (this._listening) { this._stopListening(); return; }
         this._listening = true;
-        this._core.listen('start').then((ok) => { if (!ok && this._listening) this._stopListening(false); });
+        // A quick release can come before the core has answered the start: the stop waits for it,
+        // so the two never arrive out of order and leave the mic open.
+        this._startPending = this._core.listen('start').then((ok) => {
+            if (!ok && this._listening) this._stopListening(false);
+            return ok;
+        });
         this._talkTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, TALK_POLL_MS, () => {
             const [, , mods] = global.get_pointer();
             if (mods & (Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.SHIFT_MASK)) return GLib.SOURCE_CONTINUE;
@@ -529,11 +547,23 @@ export default class ArtemisWaterExtension extends Extension {
         });
     }
 
+    // Closes push-to-talk. A stop the core didn't confirm is sent once more, so a lost request
+    // can't leave the mic open (#160).
     _stopListening(send = true) {
         if (this._talkTimer) GLib.source_remove(this._talkTimer);
         this._talkTimer = 0;
         this._listening = false;
-        if (send && this._core) this._core.listen('stop');
+        if (!send || !this._core) return;
+        const core = this._core;
+        const started = this._startPending ?? Promise.resolve(true);
+        this._startPending = null;
+        started.then(() => core.listen('stop')).then((ok) => {
+            if (ok || this._listening || this._core !== core) return;
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, STOP_RETRY_MS, () => {
+                if (!this._listening && this._core === core) core.listen('stop');
+                return GLib.SOURCE_REMOVE;
+            });
+        });
     }
 
     /** Drop one ring into the water at (x, y). */
