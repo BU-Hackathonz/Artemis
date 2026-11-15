@@ -77,15 +77,13 @@ class EventBus:
             data = {**event.data, "text": f"<redacted {len(str(event.data.get('text', '')))} chars>"}
             event = event.model_copy(update={"data": data})
         elif event.type in ("approval.requested", "approval.resolved"):
-            desktop = event.data.get("desktop")
-            if isinstance(desktop, dict) and desktop.get("action") == "type_text":
-                # the approval shows the text to type word for word: in the summary and the spoken line too
-                data = {**event.data, "desktop": {**desktop, "text": f"<redacted {len(str(desktop.get('text', '')))} chars>"}}
-                if "summary" in data:
-                    data["summary"] = "<redacted: typing approval>"
+            data, quoted, mark = _redact_typing(event.data)
+            if data is not event.data:
                 update: dict = {"data": data}
-                if event.announce is not None:
-                    update["announce"] = event.announce.model_copy(update={"text": "<redacted: typing approval>"})
+                if event.announce is not None:  # the spoken line quotes it too
+                    said = event.announce.text
+                    said = said.replace(quoted, mark) if quoted and quoted in said else "<redacted: typing approval>"
+                    update["announce"] = event.announce.model_copy(update={"text": said})
                 event = event.model_copy(update=update)
         return event.model_dump_json()
 
@@ -105,3 +103,18 @@ class EventBus:
 
     def unsubscribe(self, queue: asyncio.Queue[Event]) -> None:
         self._subscribers.discard(queue)
+
+
+def _redact_typing(data: dict) -> tuple[dict, str, str]:
+    """An approval to type text carries the text in desktop.text, in the dialog summary and in the spoken
+    line; the log keeps none of them. Returns (data, the quoted text, its marker); nothing to hide: (data, "", "").
+    When the summary doesn't quote the text the way we expect, the whole summary is redacted."""
+    desktop = data.get("desktop")
+    if not isinstance(desktop, dict) or desktop.get("action") not in ("type_text", "press_keys") or not desktop.get("text"):
+        return data, "", ""
+    text = str(desktop["text"])
+    mark = f"<redacted {len(text)} chars>"
+    quoted = " ".join(text.split())[:120].rstrip()  # the summary quotes it collapsed to one line, cut at 120
+    summary = str(data.get("summary", ""))
+    summary = summary.replace(quoted, mark) if quoted and quoted in summary else "<redacted: typing approval>"
+    return {**data, "desktop": {**desktop, "text": mark}, "summary": summary}, quoted, mark

@@ -250,7 +250,7 @@ async def test_typed_text_leaves_the_replay_history_once_the_op_is_over(core):
     assert all(SECRET not in e.model_dump_json() for e in session.bus.history)
 
 
-async def test_log_redacts_the_typing_approval(tmp_path):
+async def test_log_redacts_typed_text_in_the_approval_too(tmp_path):
     from artemis.contracts import EventDraft
 
     path = tmp_path / "log.jsonl"
@@ -263,3 +263,18 @@ async def test_log_redacts_the_typing_approval(tmp_path):
                               announce=Announce(text=f"Type “{SECRET}”", priority="high")))
     assert SECRET not in path.read_text()
     assert bus.history[-1].data["desktop"]["text"] == SECRET  # SSE and the approval dialog still carry it
+
+
+async def test_log_redacts_the_typing_approval(tmp_path):
+    path = tmp_path / "log.jsonl"
+    bus = EventBus("ses_1", log_path=path)
+    from artemis.contracts import EventDraft
+
+    data = {"approval_id": "apr_1", "kind": "type", "approval_hash": "h" * 8, "summary": f"Type “{SECRET}” into notes.txt in TextEditor. Enter to approve.",
+            "desktop": {"action": "type_text", "target": "w", "text": SECRET, "sha256": None}}
+    await bus.emit(EventDraft(task_id="tsk_1", type="approval.requested", announce=None, data=data))
+    event = bus.history[-1]
+    assert event.data["desktop"]["text"] == SECRET  # SSE keeps it: the dialog shows it
+    line = json.loads(path.read_text().splitlines()[-1])
+    assert line["data"]["desktop"]["text"] == f"<redacted {len(SECRET)} chars>"
+    assert SECRET not in path.read_text() and "notes.txt in TextEditor" in line["data"]["summary"]
