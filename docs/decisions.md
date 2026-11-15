@@ -136,7 +136,7 @@ and NVDA's reading can overlap, and Artemis can't tell when NVDA is talking.
 
 **Privacy.** With ElevenLabs on, the text Artemis speaks is sent to ElevenLabs to be turned into
 audio. That includes file names, error lines, the agent's answers and the read-back of what you
-said ("Heard: …"), so the text of your request leaves the computer even though the audio does not.
+said ("Working on: …"), so the text of your request leaves the computer even though the audio does not.
 Speech recognition stays local: your recorded voice never leaves the computer, with or without
 ElevenLabs. Every line is run through `redact()` just before it is sent, so secrets in answers,
 transcripts and error lines are replaced with `[redacted]` first. The API key is read only from
@@ -171,7 +171,7 @@ sentence; `ARTEMIS_WHISPER_MODEL=medium.en` is more accurate and slower; beam 1 
 **Accuracy on code words.** Pass Whisper an `initial_prompt` that always starts with the wake word
 and demo words ("Hey Artemis, Artemis, Python, main.py"), then the open project's file names and
 symbols (`LoginForm`, `aria-label`, `index.html`). `ARTEMIS_WHISPER_PROMPT=natural` swaps the word
-list for a spoken-style lead (opt-in). The transcript is read back ("Heard: …") and
+list for a spoken-style lead (opt-in). The transcript is read back (once, as "Working on: …") and
 stays in an editable field, so the user can correct it and resend. Writes and runs still need
 approval, so a misheard request can't change anything on its own. A hosted STT can sit
 behind the same `voice/` interface as a fallback.

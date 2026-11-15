@@ -336,3 +336,48 @@ def test_no_destructive_tool_exists():
         "write_files", "run_program", "edit_file",
         "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys",
     }
+
+
+# ----- what is spoken vs shown for realistic model replies -----
+
+
+def _answer(tmp_path, reply, script_before=()):
+    s = Session(tmp_path, [*script_before, text(reply)])
+    asyncio.run(s.ask("q"))
+    msg = s.log.of("agent.message")[-1]
+    return msg.announce, msg.data
+
+
+def test_markdown_answer_is_spoken_plain_and_shown_whole(tmp_path):
+    md = "## Done\n\n```python\nx = 1\n```\n\n- Changed `main.py`\n- Ran it"
+    announce, data = _answer(tmp_path, md)
+    assert data["text"] == md  # the log keeps everything
+    assert announce.text == "Done. The code is in the log. Changed main.py. Ran it."
+    assert announce.priority == "normal"
+
+
+def test_an_empty_answer_after_a_failed_tool_does_not_say_done(tmp_path):
+    announce, data = _answer(tmp_path, "", [call("t1", "read_file", path="missing.py")])
+    assert "Done" not in announce.text and "did not work" in announce.text
+    # and with no failure, a bare acknowledgement
+    assert _answer(tmp_path, "")[0].text == "Done."
+
+
+def test_an_answer_with_only_markers_is_still_spoken(tmp_path):
+    assert _answer(tmp_path, "---")[0].text == "Done."
+
+
+def test_answer_is_queued_after_the_run_result_line(tmp_path):
+    s = Session(tmp_path, [call("t1", "create_project", name="p"), call("t2", "write_files", files=[{"path": "main.py", "content": "print(1)\n"}]),
+                           call("t3", "run_program", entry="main.py", args=[]), text("It prints one.")])
+
+    async def run(project, entry, args, timeout_s=10):
+        return run_result(0, stdout="1\n").model_copy(update={"op_id": "op_r"})
+
+    s.runner.run = run
+    asyncio.run(s.ask("run it"))
+    lines = [(e.type, e.announce.priority) for e in s.log.events if e.announce]
+    run_i = lines.index(("run.result", "high"))
+    answer_i = lines.index(("agent.message", "normal"))
+    # The high line is emitted first, and the answer is normal: it queues behind it rather than cutting it.
+    assert run_i < answer_i == len(lines) - 1

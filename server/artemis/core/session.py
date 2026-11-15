@@ -404,10 +404,15 @@ class Session:
                     task_id=active.task_id if active else None,
                 )
             return
+        words = normalize(text)
+        # A request that becomes a task is read back once, by "Working on: ..." (same words).
+        starts_task = (
+            bool(text.strip()) and not self.active_task and words not in CANCEL_WORDS and words not in REPEAT_WORDS
+        )
         await self.emit(
             EventDraft(
                 type="transcript.final",
-                announce=Announce(text=f"Heard: {text}", priority="normal") if text else None,
+                announce=Announce(text=f"Heard: {text}", priority="normal") if text and not starts_task else None,
                 data=TranscriptData(text=text, client_request_id=client_request_id).model_dump(),
             )
         )
@@ -415,7 +420,6 @@ class Session:
             # An accidental tap of push-to-talk records nothing: stay quiet (Yaovi's review on #20).
             # The stop earcon already told the user the mic closed.
             return
-        words = normalize(text)
         active = self.active_task
         if words in CANCEL_WORDS:
             if active:
@@ -451,7 +455,10 @@ class Session:
         await self.emit(
             EventDraft(
                 type="transcript.final",
-                announce=Announce(text=f"Heard: {text}", priority="normal") if text else None,
+                # "submit" is read back once, by "Working on: ..." (same words): no "Heard:" then.
+                announce=Announce(text=f"Heard: {text}", priority="normal")
+                if text and decision.action != "submit"
+                else None,
                 data=TranscriptData(
                     text=text,  # always the raw transcript
                     client_request_id=client_request_id,

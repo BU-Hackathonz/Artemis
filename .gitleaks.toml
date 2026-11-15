@@ -24,3 +24,9 @@ regexes = ['''^Artemis/Anthropic(ApiKey|WorkspaceId)$''']
 description = "Superseded branch infra/ubuntu-launcher (replaced by infra/ubuntu-launch, #142): its start.sh initialised an empty TOKEN, which generic-api-key reads as a key. No secret; the CI scan reads every branch."
 targetRules = ["generic-api-key"]
 commits = ["78279e2471b0de23dadbb823240f376ac5f61664"]
+
+[[allowlists]]
+description = "The press_keys tool's name in the policy table (#176) reads to generic-api-key as a key. No secret; the CI scan reads every branch."
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\s*"press_keys":\s*Rule\(PressKeysArgs''']

@@ -498,10 +498,17 @@ def test_system_prompt_is_frozen_and_covers_the_rules():
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
-# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when a rejected or
-# the agent planned first and gained the desktop tools, contracts.md §9 and §10) as it
+# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when the agent planned
+# first and gained the desktop tools, contracts.md §9 and §10, on top of the two-sentence answers) as it
 # is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "36f11aab0ba8171b526c0166d67e610f1cf83918678232d758b22aed2e01a147"
+MAIN_SYSTEM_PROMPT_SHA256 = "3c12d33fc63f27ff6859830f547e0d143bcb0954c2daacb1575dd4ca2877f785"
+
+
+def test_spoken_answers_are_short_and_true_to_the_tool_results():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "at most two short sentences unless they ask for more detail" in flat
+    assert "if the last run failed, never say the program works" in flat
+    assert "never by their path or how their name is spelled" in flat
 
 
 def test_a_rejected_change_is_not_proposed_again_unless_asked():
