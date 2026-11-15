@@ -217,10 +217,11 @@ describe('done expiry and connection', () => {
     expect(setConnected(s, true)).toBe(s);
   });
 
-  it('setConnected clears the task view', () => {
+  it('setConnected keeps the task across a reconnect to the same session', () => {
     const s = setConnected(reduce(initial(true), ev('task.state', 'tsk_a', {state: 'working'})), false);
     const back = setConnected(s, true);
-    expect(back).toMatchObject({connected: true, taskId: null, phase: 'idle'});
+    expect(back).toMatchObject({connected: true, taskId: 'tsk_a', phase: 'thinking'});
+    expect(view(back).state).toBe('thinking');
   });
 });
 

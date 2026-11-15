@@ -74,6 +74,8 @@ export class ApprovalDialog {
     }
 
     close() {
+        if (this._closed) return; // the dialog closes itself after a decision; a later close is a no-op
+        this._closed = true;
         this._dialog.close(global.get_current_time());
     }
 

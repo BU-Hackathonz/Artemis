@@ -42,6 +42,7 @@ const ORB_LIVE_MS = 33;         // orb at rest but alive (slow morph and tumble)
 // poll checks that Control and Shift are still held.
 const SHORTCUT = 'Control+Shift+Space';
 const TALK_POLL_MS = 50;
+const OFFLINE_CLOSE_MS = 5000; // the core gone this long: close an open approval dialog (reopened if it returns)
 
 // Water (how the wake answers speed).
 const MIN_SPEED = 60;           // px/s: slower movement makes no water
@@ -147,6 +148,8 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     disable() {
+        if (this._offlineTimer) GLib.source_remove(this._offlineTimer);
+        this._offlineTimer = 0;
         this._core?.destroy();
         this._core = null;
         this._closeApproval();
@@ -439,14 +442,34 @@ export default class ArtemisWaterExtension extends Extension {
         if (!this._settings) return;
         this._state = reduce(this._state, event);
         if (event.type === 'approval.requested') this._openApproval(event.data ?? {});
-        else if (event.type === 'approval.resolved' && this._dialog && event.data?.approval_id === this._dialog.approvalId) this._closeApproval();
+        else if (event.type === 'approval.resolved' && event.data?.approval_id === this._approval?.approval_id) this._closeApproval();
         this._render();
     }
 
+    // A drop keeps the task and its approval: a reconnect to the same session replays only what was
+    // missed. The dialog closes if the core stays away (so its modal grab can't trap the keyboard) and
+    // opens again if the same session comes back with that approval still open. A new session (the
+    // core restarted) starts clean.
     _onConnected(connected, sid) {
         if (!this._settings) return;
-        if (!connected) this._closeApproval();
-        this._state = setConnected(this._state, connected);
+        if (this._offlineTimer) { GLib.source_remove(this._offlineTimer); this._offlineTimer = 0; }
+        if (connected && sid && sid !== this._sid) {
+            this._sid = sid;
+            this._closeApproval();
+            this._state = initial(true);
+        } else {
+            this._state = setConnected(this._state, connected);
+        }
+        if (!connected && this._dialog) {
+            this._offlineTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, OFFLINE_CLOSE_MS, () => {
+                this._offlineTimer = 0;
+                this._dialog?.close();
+                this._dialog = null; // this._approval is kept, to reopen on reconnect
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+        if (connected && !this._dialog && this._approval && this._state.waiting && this._state.approvalId === this._approval.approval_id)
+            this._showApproval(this._approval);
         const session = sid || 'none';
         if (connected && session !== this._readySid && this._core) {
             this._readySid = session;
@@ -458,6 +481,11 @@ export default class ArtemisWaterExtension extends Extension {
 
     _openApproval(approval) {
         this._closeApproval();
+        this._approval = approval;
+        this._showApproval(approval);
+    }
+
+    _showApproval(approval) {
         const aid = approval.approval_id;
         const hash = approval.approval_hash;
         const dialog = new ApprovalDialog(approval, {
@@ -470,6 +498,7 @@ export default class ArtemisWaterExtension extends Extension {
     _closeApproval() {
         const dialog = this._dialog;
         this._dialog = null;
+        this._approval = null;
         dialog?.close();
     }
 

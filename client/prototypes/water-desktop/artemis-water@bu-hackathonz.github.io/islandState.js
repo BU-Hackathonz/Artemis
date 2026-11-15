@@ -147,10 +147,13 @@ export function reduce(state, event) {
     }
 }
 
-/** The core went away (or came back). The task view is cleared: a new core has new sessions. */
+/**
+ * The stream dropped (false) or came back (true). The task view is kept: a reconnect to the same
+ * session replays only what was missed. A new session (a restarted core) starts from initial(true).
+ */
 export function setConnected(state, connected) {
     if (state.connected === connected) return state;
-    return {...initial(connected)};
+    return {...state, connected};
 }
 
 /** Done shown long enough (DONE_MS): back to idle, unless something newer is showing. */
