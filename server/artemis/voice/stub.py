@@ -17,6 +17,7 @@ class StubVoice:
         self.announcer = announcer or Announcer()
         self.prompt = ""
         self.listening = False
+        self.transcribing = False  # the stub's transcript is instant
 
     @property
     def busy_listening(self) -> bool:

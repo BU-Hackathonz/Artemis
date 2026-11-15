@@ -31,6 +31,9 @@ Errors outside the table: a missing or wrong token is `401 {error: "unauthorized
 | POST | `/speech` | `{action: "stop"\|"repeat"}` → `204` | Stop speaking / repeat the last announcement (the last one at `normal` or `high`). Any other action: `422 {detail: {error: "bad_action"}}` |
 | POST | `/sessions/{sid}/diagnostics` | `{code: "shortcut_registration_failed", shortcut?: "Control+Alt+Space"}` → `204` | A problem only the client can see. The core speaks a **fixed** sentence per code (`error` event, priority high), once per code and shortcut per session (the client announces an exact repeat itself); `shortcut` allows letters, digits and `+` only, 1 to 40 characters, and other fields are rejected (`422`). No free text is ever spoken. While `voice_ready` is true the client doesn't also announce it (§5.3) |
 | POST | `/sessions/{sid}/ready` | `{shortcut?: "Control+Shift+Space"}` → `204` | The native app finished setting up for this session (after its push-to-talk shortcut registered, or failed); the browser build does not call it. The core speaks one **fixed** line, once per session, as `agent.message` (`kind: "answer"`) with no `task_id` at priority normal: "Artemis is ready. Hold Control Shift Space and speak, or type a request." Without `shortcut` it names the Start listening button instead: "Artemis is ready. Use the Start listening button and speak, or type a request." `shortcut` allows letters, digits and `+` only, 1 to 40 characters, and other fields are rejected (`422`); no free text is ever spoken |
+| GET | `/settings/voice` | → `VoiceSettings` (§7) | **Proposed (Avery).** The effective voice settings: the saved file, with the environment on top, plus `active_engine` |
+| PATCH | `/settings/voice` | `VoiceSettingsPatch` (§7), only the fields to change → `200 VoiceSettings` | **Proposed (Avery).** Saves the file, applies it to the voice from the next line, and returns what is now in effect. `422 {error: "invalid_setting", field}` for a bad value, an unknown key or `active_engine`; `409 {error: "set_by_environment", field}` for a field an environment variable pins. Nothing is saved when either applies |
+| GET | `/voices` | → `{voices: [{engine, id, name}]}` | **Proposed (Avery).** The installed SAPI voices and, when `ELEVENLABS_API_KEY` is set, the ElevenLabs voices. No other field, and no key, leaves here |
 
 ## 2. Core → client: the event stream
 
@@ -65,7 +68,8 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 | `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}`, announced at high by the gateway (§4 samples 4 and 5). `exit_code` is null when the run timed out |
 | `security.findings` | `{op_id, tool: "bandit"\|"semgrep", findings: [{rule, severity, path, line, message}]}`, not announced: the findings are spoken in the approval summary that follows, or in `scan_project`'s own line. Sent only when there are findings. `tool` is always `"bandit"` today (Semgrep is not implemented) |
 | `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on. Announced at high as "message recovery", except a failed task's, which says "The task failed. <reason> You can try again." |
-| `voice.status` | `{voice_ready, screen_reader}`, emitted at session start and whenever either value changes (§5.3) |
+| `voice.status` | `{voice_ready, screen_reader, engine}`, emitted at session start and whenever either value changes (§5.3). `engine` (**Proposed (Avery)**, §7) is the speaker that would say the next line: `elevenlabs`, `nvda`, `sapi` or `none`; a settings change that alters it is also emitted |
+| `voice.activity` | `{state: "idle"\|"listening"\|"transcribing"\|"speaking", engine}` (approved by Avery, §8), not announced. Sent to every session when the voice's real state changes, never from timers: `listening` from the push-to-talk press until the mic closes (the listening earcon and any post-roll included), `transcribing` while Whisper turns the recording into text, `speaking` while Artemis's line is audible (`engine` says who: `elevenlabs` while its audio plays, `sapi` while SpVoice speaks, `nvda` for Artemis's own estimate, since NVDA can't report playback), `idle` otherwise. A session starts idle; one created while the voice is busy gets the current state once. State and engine only: no text, transcript or audio |
 
 ```jsonc
 // Approval
@@ -375,7 +379,7 @@ processes' command lines. Malware running as the same user is out of scope for t
 
 **Core (Avery)**
 - Requires `Authorization: Bearer <token>` on every route, the SSE stream included.
-- CORS allows only `http://tauri.localhost` and `http://127.0.0.1:1420`, methods `GET` and `POST`,
+- CORS allows only `http://tauri.localhost` and `http://127.0.0.1:1420`, methods `GET` and `POST`, and `PATCH` for `/settings/voice` (**Proposed (Avery)**, §7),
   headers `Authorization`, `Content-Type` and `Last-Event-ID`.
 - Origin check: a request **with no `Origin`** (the launcher's readiness probe, curl) is allowed
   when the token is valid; a **listed** Origin is allowed; **any other** Origin gets `403`,
@@ -395,3 +399,87 @@ processes' command lines. Malware running as the same user is out of scope for t
 - Settings come from `ARTEMIS_*` environment variables (and `ANTHROPIC_API_KEY`,
   `ANTHROPIC_WORKSPACE_ID` for the real agent). The full list, with defaults, is the docstring of
   `server/artemis/core/main.py`.
+
+## 7. Voice settings (Proposed (Avery))
+
+Status: **proposed**, not yet merged or reviewed by the area owners. Scope: voice only. Answer style
+(verbosity, focus), remembered preferences and the listening mode are not in this contract; see
+"Deferred" below.
+
+The settings are the voice profile (`server/artemis/voice/profile.py`): the file `ARTEMIS_VOICE_PROFILE`
+names, or `~/.artemis/voice.json`. Environment variables override the file. The core applies the
+effective profile at startup and after each change. The ElevenLabs key is never a setting: it stays in
+`ELEVENLABS_API_KEY` and never appears in a response, the file or a log.
+
+**Models** (`server/artemis/contracts/settings.py`). Both forbid extra keys. Each value goes through the
+profile's own checks (`_CHECKS`), so the ranges are defined once.
+
+```jsonc
+VoiceSettings {                                   // GET response
+  voice_engine:    "elevenlabs" | "nvda" | "sapi",
+  eleven_voice_id: string | null,                 // 1 to 64 letters, digits, "_" or "-"
+  eleven_speed:    number,                        // 0.7 to 1.2
+  sapi_voice:      string | null,                 // 1 to 128 characters
+  sapi_rate:       integer | null,                // -3 to 6; null keeps the Windows rate
+  working_cue:     boolean,                       // true: a soft tick instead of "Still working."
+  active_engine:   string                         // read-only: elevenlabs, nvda, sapi or none
+}
+VoiceSettingsPatch {                              // PATCH body: every field optional, no active_engine
+  voice_engine?, eleven_voice_id?, eleven_speed?, sapi_voice?, sapi_rate?, working_cue?
+}
+```
+
+Only the fields sent in a PATCH change; a sent `null` is a value, and only `eleven_voice_id`, `sapi_voice`
+and `sapi_rate` accept it.
+
+**Errors** (flat bodies, as in the table above):
+
+| Status | Body | When |
+|---|---|---|
+| `401` | `{error: "unauthorized"}` | No or a wrong Bearer token (every route, as in §1) |
+| `403` | `{error: "origin_not_allowed"}` | An unlisted `Origin`, including `null` (§6) |
+| `422` | `{error: "invalid_setting", field: "<name>"}` | A value out of range or the wrong type (rejected, not clamped), an unknown key, `active_engine`, or a body that is not a JSON object (`field: "body"`). `field` is the first failing field, in the order the patch lists them |
+| `409` | `{error: "set_by_environment", field: "<name>"}` | The patch sends a field that a valid environment variable pins: `ARTEMIS_VOICE_ENGINE`, `ARTEMIS_ELEVEN_VOICE_ID`, `ARTEMIS_ELEVEN_SPEED`, `ARTEMIS_SAPI_VOICE`, `ARTEMIS_SAPI_RATE` or `ARTEMIS_WORKING_CUE`. The environment variable is the one that is in force, so the change could not take effect and is not saved. An invalid environment value is ignored with a warning and pins nothing |
+
+A `422` or `409` saves nothing and applies nothing. A `GET` never writes the file.
+
+**Behaviour.**
+- `PATCH` writes the file with the fields that were sent and nothing else (the environment's values are
+  not written back), applies the effective profile to the voice, and returns the `VoiceSettings` now in effect.
+- A change that alters the engine emits `voice.status` with the new `engine` to every session.
+- An ElevenLabs line that cannot be spoken after three failures in a row is announced once, through the
+  bus, as `agent.message` (`kind: "answer"`, priority `normal`) with the fixed text
+  "My natural voice isn't reachable, so I'm using the Windows voice." The core re-attaches this after each change.
+- `GET /voices` returns `{voices: [{engine, id, name}]}`: installed SAPI voices and, when a key is set, the
+  ElevenLabs voices (`id` is the voice id for ElevenLabs and the name for SAPI, which `ARTEMIS_SAPI_VOICE` accepts).
+  The key is sent to ElevenLabs in a header only. A failed lookup is logged by type and gives no voices.
+- `working_cue` is read by the voice at each heartbeat, so a change applies to the next "Still working." beat.
+
+**Deferred** (not in this PR): answer verbosity and focus (`TaskContext.style`, which needs the
+conversation controller's `prefs` work), remembered preferences across launches, the listening mode,
+the push-to-talk shortcut (client-side), and reduced motion (client-side). A wider `Settings` model
+covering these was proposed in the settings audit and is not part of this section.
+
+## 8. Island states (approved by Avery; the notch and island)
+
+The island shows only what the core's events prove. Nothing is inferred from timers, and no new
+task contract is needed: `voice.activity` (§2) adds the voice's own states.
+
+| Island state | Shown when | Ends when |
+|---|---|---|
+| idle | no active task and `voice.activity` is `idle` | any row below starts |
+| listening | `voice.activity` `listening` | `transcribing` or `idle` |
+| thinking | `voice.activity` `transcribing`, or `task.state` `queued` or `working` with no `file.changed` yet in this task | the next row's event |
+| editing | `approval.requested` of kind `write_files` (waiting), then `file.changed` after it is approved | `task.state` `running`, `succeeded`, `failed` or `canceled` |
+| running | `task.state` `running` | `run.result` |
+| speaking | `voice.activity` `speaking`, on top of whichever task state holds | `voice.activity` leaves `speaking` |
+| done | `task.state` `succeeded` (the `run.result` exit code is 0 or there was no run) | the next request or about 3 s, client's choice |
+| error | `task.state` `failed`, an `error` event, or `run.result` with a non-zero exit code or `timed_out` | the next request |
+
+- `awaiting_approval` is not a separate island state: the approval dialog is focused (Enter guard,
+  §5) while the island keeps the state it had, marked as waiting.
+- `canceled` returns to idle after the spoken "Canceled.".
+- Speaking overlays the task states because Artemis talks while it works. Listening and
+  transcribing take priority over speaking, since push-to-talk stops speech (§5.1).
+- On Linux there is no NVDA estimate: `speaking` comes from the engine that plays the audio.
+  Orca's own speech is the screen reader's and is never reported.

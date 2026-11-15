@@ -27,10 +27,13 @@ import urllib.parse
 import urllib.request
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from artemis.contracts.events import Priority
 from artemis.policy.redact import redact
+
+if TYPE_CHECKING:  # profile.py imports this module, so the runtime import would be circular
+    from artemis.voice.profile import VoiceProfile
 
 log = logging.getLogger(__name__)
 
@@ -173,7 +176,7 @@ class SapiSpeaker:
             try:
                 self.set_rate(rate)
             except Exception as e:  # a COM hiccup here must never stop the core from starting
-                log.warning("Could not set the SAPI rate: %s", e)
+                log.warning("Could not set the SAPI rate: %s", type(e).__name__)
 
     def available(self) -> bool:
         return self._voice is not None
@@ -384,6 +387,10 @@ class ElevenLabsSpeaker:
 
     def busy(self) -> bool:
         return self._playing.is_set() or not self._queue.empty()
+
+    def speaking(self) -> bool:
+        """Audio is playing now (a queued or downloading line is not speech yet)."""
+        return self._playing.is_set()
 
     # Speed: "faster" and "slower"
 
@@ -826,10 +833,58 @@ class Announcer:
         self.eleven = eleven
         self.last: str | None = None
         self._warned = False
+        self.working_cue_earcon = False  # set by apply(); listen.py still reads ARTEMIS_WORKING_CUE (wired with the settings route)
 
     def _braille(self, text: str) -> None:
         if self.is_nvda_running() and self.nvda.available() and hasattr(self.nvda, "braille"):
             self.nvda.braille(text)
+
+    def apply(self, profile: "VoiceProfile") -> None:
+        """Switch Artemis's voice from the next line on. A line already playing is not cancelled.
+
+        Runs on the event-loop thread and does no network I/O: the ElevenLabs worker thread does the
+        requests. NVDA's voice and rate are never touched here.
+        """
+        self.engine = profile.engine
+        self.working_cue_earcon = profile.working_cue
+        if self.engine == "elevenlabs" and self.eleven is None:
+            eleven = ElevenLabsSpeaker(fallback=_Fallback(self))
+            if hasattr(eleven, "braille"):
+                eleven.braille = self._braille
+            self.eleven = eleven
+        if self.eleven is not None:
+            if profile.eleven_voice_id is not None:
+                self.eleven.voice_id = profile.eleven_voice_id
+            self.eleven.speed = clamp_speed(profile.eleven_speed)  # the cache key holds voice and speed: no flush
+        if self.sapi.available():
+            if profile.sapi_voice is not None:
+                try:
+                    self.sapi.choose_voice(profile.sapi_voice)
+                except Exception as e:  # a COM hiccup must not stop the voice change
+                    log.warning("Could not choose the SAPI voice: %s", type(e).__name__)
+            if profile.sapi_rate is not None:
+                try:
+                    self.sapi.set_rate(profile.sapi_rate)
+                except Exception as e:
+                    log.warning("Could not set the SAPI rate: %s", type(e).__name__)
+
+    def speaking_engine(self) -> str | None:
+        """Which speaker is audibly saying Artemis's line now, or None. ElevenLabs: its audio is playing.
+        SAPI: SpVoice is speaking. NVDA: only Artemis's own estimate, since NVDA can't report playback."""
+        eleven = self.eleven
+        if eleven is not None and getattr(eleven, "speaking", eleven.busy)():
+            return "elevenlabs"
+        for speaker in (self.sapi, self.nvda):
+            try:
+                if speaker.available() and speaker.busy():
+                    return speaker.name
+            except Exception:  # a speaker that can't be asked is not speaking
+                continue
+        return None
+
+    def active_engine(self) -> str:
+        """The name of the speaker that would speak the next line: elevenlabs, nvda, sapi or none."""
+        return self.current().name
 
     def current(self) -> Speaker:
         if self.engine == "elevenlabs" and self.eleven is not None and self.eleven.available():
