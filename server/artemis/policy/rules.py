@@ -4,6 +4,7 @@ There is no delete, network or install tool, and the one shell tool (run_command
 without the API keys. A tool that isn't in this table doesn't exist.
 """
 
+import sys
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -26,6 +27,7 @@ from artemis.contracts import (
     RunProgramArgs,
     ScanProjectArgs,
     WriteFilesArgs,
+    DESKTOP_TOOL_ARGS,
 )
 
 
@@ -64,3 +66,17 @@ RULES: dict[str, Rule] = {
     "type_text": Rule(TypeTextArgs, approval_kind="type"),
     "press_keys": Rule(PressKeysArgs, approval_kind="type"),
 }
+
+
+def desktop_supported() -> bool:
+    """The six desktop tools (contracts.md section 9) are built on bash, gtk-launch, gio and the XDG
+    folders, so they exist on Linux only. Elsewhere (Windows: SAPI/NVDA client) they are neither offered
+    to the model nor run; the plan stays."""
+    return sys.platform.startswith("linux")
+
+
+def rule_for(name: str) -> "Rule | None":
+    """The rule for a tool, or None when it doesn't exist here (a desktop tool off Linux)."""
+    if name in DESKTOP_TOOL_ARGS and not desktop_supported():
+        return None
+    return RULES.get(name)

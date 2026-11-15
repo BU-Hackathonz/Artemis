@@ -65,7 +65,7 @@ from .paths import (
     safe_resolve,
 )
 from .redact import redact, redact_obj
-from .rules import RULES
+from .rules import rule_for
 
 # Scans a folder and returns findings with paths relative to it. None until M2 (Bandit).
 # scan_project also passes a second argument: the one file or folder inside it to read.
@@ -222,7 +222,7 @@ class ToolGateway(DesktopTools):
         self._cued: dict = {}  # task id -> plan steps already cued
 
     async def call(self, task_id: str, name: str, args: dict) -> ToolResult:
-        rule = RULES.get(name)
+        rule = rule_for(name)
         if rule is None:
             return ToolResult(ok=False, error="not_found", message=f"There is no tool named {name}.")
         try:

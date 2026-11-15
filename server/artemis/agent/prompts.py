@@ -8,7 +8,8 @@ message (see context.py).
 import sys
 from typing import Any
 
-from artemis.contracts import TOOL_ARGS
+from artemis.contracts import DESKTOP_TOOL_ARGS, TOOL_ARGS
+from artemis.policy.rules import desktop_supported
 
 # The desktop the developer is on. Fixed per process, so the prompt still caches. The Ubuntu
 # demo (decisions.md §16) says Linux; on Windows the prompt is byte for byte main's.
@@ -236,8 +237,10 @@ LINUX_ONLY_TOOLS = frozenset({"open_app", "open_path", "run_command"})
 def tool_definitions(platform: str | None = None) -> list[dict]:
     """One strict tool per entry in the policy table, generated from the same Pydantic models
     the gateway validates against. Fixed per process (the platform does not change), so the
-    prompt cache still holds."""
+    prompt cache still holds. The desktop tools are left out unless this is Linux (the gate refuses
+    them there too)."""
     on_linux = (platform or sys.platform).startswith("linux")
+    hidden = set() if on_linux else set(DESKTOP_TOOL_ARGS) | LINUX_ONLY_TOOLS
     return [
         {
             "name": name,
@@ -246,5 +249,5 @@ def tool_definitions(platform: str | None = None) -> list[dict]:
             "input_schema": strict_schema(model.model_json_schema()),
         }
         for name, model in TOOL_ARGS.items()
-        if on_linux or name not in LINUX_ONLY_TOOLS
+        if name not in hidden
     ]

@@ -7,6 +7,7 @@ import asyncio
 import copy
 import json
 import os
+import sys
 import time
 
 import pytest
@@ -22,7 +23,7 @@ from artemis.agent.config import Config  # noqa: E402
 from artemis.agent.context import task_message, vocabulary  # noqa: E402
 from artemis.agent.prompts import DESKTOP, SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
 from artemis.agent.stub import StubAgent  # noqa: E402
-from artemis.contracts import TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
+from artemis.contracts import DESKTOP_TOOL_ARGS, TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
 from artemis.policy.gateway import ToolGateway  # noqa: E402
 from artemis.policy.testing import EventLog, FakeApprovals, FakeRunner  # noqa: E402
 
@@ -156,7 +157,8 @@ def test_request_shape(tmp_path):
     assert call["system"] == SYSTEM_PROMPT
     # Thinking is always on for this model, forced tool choice is a 400, and we don't stream.
     assert not {"thinking", "tool_choice", "stream", "temperature"} & set(call)
-    assert [t["name"] for t in call["tools"]] == list(TOOL_ARGS)
+    offered = [n for n in TOOL_ARGS if sys.platform.startswith("linux") or n not in DESKTOP_TOOL_ARGS]
+    assert [t["name"] for t in call["tools"]] == offered
 
 
 def test_model_and_effort_come_from_config(tmp_path):
@@ -472,10 +474,11 @@ def test_tool_schemas_are_strict(tmp_path):
         assert definition["strict"] is True and definition["description"]
         check(definition["input_schema"])
     names = [t["name"] for t in tools]
+    desktop = ["open_app", "open_path", "read_path", "run_command", "type_text", "press_keys"]
     assert names == [
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
         "inspect_page", "scan_project",
-        "open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "plan",
+        *(desktop if sys.platform.startswith("linux") else []), "plan",
     ]
     assert not {"shell", "delete_file", "ask_user", "scan", "install"} & set(names)
 
