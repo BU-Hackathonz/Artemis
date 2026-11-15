@@ -210,7 +210,7 @@ def test_a_risky_command_needs_the_override(home):
 
 # ----- open and read -----
 
-@pytest.mark.parametrize("name", ["evil.desktop", "run.sh", "tool.AppImage"])
+@pytest.mark.parametrize("name", ["evil.desktop", "run.sh", "tool.AppImage", "tool.py"])
 def test_open_never_runs_a_program(home, name):
     (home / "Documents" / name).write_text("x")
     g, _, approvals = gate(home, [Decision.approve])
@@ -495,6 +495,127 @@ def test_the_launcher_file_is_part_of_the_approval(home, monkeypatch):
     g, _, approvals = gate(home, [swap])
     assert run(g.call("t1", "open_app", {"app": "firefox"})).error == "invalidated"
     assert launched == [] and approvals.requests[0].desktop.sha256
+
+
+def _system_apps(home, monkeypatch, **files):
+    """Apps in a system folder, not the developer's own: their launchers are not a planted file."""
+    sysdir = home / "sysshare"
+    (sysdir / "applications").mkdir(parents=True, exist_ok=True)
+    for name, body in files.items():
+        (sysdir / "applications" / f"{name}.desktop").write_text("[Desktop Entry]\nType=Application\n" + body)
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / "userdata"))
+    monkeypatch.setenv("XDG_DATA_DIRS", str(sysdir))
+
+
+@pytest.fixture
+def launched(monkeypatch):
+    argvs = []
+
+    async def fake(argv):
+        argvs.append(argv)
+    monkeypatch.setattr("artemis.policy.desktop._spawn_detached", fake)
+    return argvs
+
+
+# ----- opening: no dialog unless it could run something -----
+
+def test_a_normal_app_opens_without_the_dialog(home, monkeypatch, launched):
+    _system_apps(home, monkeypatch, notes="Name=Notes\nExec=notes %U\n")
+    g, log, approvals = gate(home, [Decision.reject])
+    run(g.call("t1", "plan", {"goal": "Open notes", "steps": [{"say": "Opening Notes.", "action": "open", "target": "Notes"}]}))
+    assert run(g.call("t1", "open_app", {"app": "notes"})).ok
+    assert approvals.requests == [] and launched == [["gtk-launch", "notes.desktop"]]
+    assert "Opened Notes." in log.spoken()
+    assert [e.data for e in log.of("ring.cue")] == [{"step": 0, "action": "open", "target": "Notes"}]
+
+
+def test_vs_code_opens_without_the_dialog(home, monkeypatch, launched):
+    _system_apps(home, monkeypatch, code="Name=Visual Studio Code\nExec=/usr/bin/code %F\n")
+    g, log, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_app", {"app": "VS Code"})).ok
+    assert approvals.requests == [] and launched == [["gtk-launch", "code.desktop"]]
+    assert "Opened Visual Studio Code." in log.spoken()
+
+
+@pytest.mark.parametrize("app, entry", [
+    ("ptyxis", "Name=Terminal\nExec=ptyxis\n"),
+    ("tilix", "Name=Tilix\nExec=tilix -e %U\nTerminal=false\n"),
+    ("idle", "Name=IDLE\nExec=x\nTerminal=true\n"),
+    ("py", "Name=Py\nExec=python3 %F\n"),
+])
+def test_a_terminal_or_interpreter_asks_with_the_blocking_key(home, monkeypatch, launched, app, entry):
+    _system_apps(home, monkeypatch, **{app: entry})
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_app", {"app": app})).error == "scan_blocked"
+    assert approvals.requests[0].kind == "open" and approvals.requests[0].blocking is True
+    assert launched == []
+
+
+def test_an_approved_terminal_is_opened_only_after_the_decision(home, monkeypatch, launched):
+    _system_apps(home, monkeypatch, ptyxis="Name=Terminal\nExec=ptyxis\n")
+    g, _, approvals = gate(home, [Decision.approve])
+    assert run(g.call("t1", "open_app", {"app": "ptyxis"})).ok
+    assert approvals.requests[0].blocking is True and launched == [["gtk-launch", "ptyxis.desktop"]]
+
+
+def test_a_launcher_in_my_own_applications_folder_asks_even_for_a_normal_app(home, monkeypatch, launched):
+    _apps(home, monkeypatch, firefox="Name=Firefox\nExec=firefox\n")  # the user's folder: could be planted
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_app", {"app": "firefox"})).error == "scan_blocked"
+    assert approvals.requests[0].blocking is True and launched == []
+
+
+@pytest.mark.parametrize("folder", ["Documents", "Desktop", "Downloads", "Projects"])
+def test_a_document_in_my_own_folders_opens_without_the_dialog(home, launched, folder):
+    (home / folder).mkdir(exist_ok=True)
+    (home / folder / "notes.md").write_text("# hi")
+    g, log, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_path", {"path": f"~/{folder}/notes.md", "with_app": None})).ok
+    assert approvals.requests == [] and launched == [["gio", "open", str((home / folder / "notes.md").resolve())]]
+    assert "Opened notes.md." in log.spoken()
+
+
+def test_a_file_in_the_projects_folder_and_the_current_project_opens_without_the_dialog(home, launched):
+    g, _, approvals = gate(home, [Decision.reject])
+    project = home / "ArtemisProjects" / "calc"
+    project.mkdir(parents=True)
+    (project / "notes.md").write_text("x")
+    assert run(g.call("t1", "open_project", {"name": "calc"})).ok
+    assert run(g.call("t1", "open_path", {"path": "notes.md", "with_app": None})).ok
+    assert run(g.call("t1", "open_path", {"path": str(home / "ArtemisProjects" / "calc" / "notes.md"), "with_app": None})).ok
+    assert approvals.requests == [] and len(launched) == 2
+
+
+def test_a_file_outside_my_folders_asks_without_the_blocking_key(home, launched):
+    (home / "Music").mkdir()
+    (home / "Music" / "song.txt").write_text("la")
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_path", {"path": "~/Music/song.txt", "with_app": None})).error == "rejected_by_user"
+    assert approvals.requests[0].kind == "open" and approvals.requests[0].blocking is False and launched == []
+
+
+def test_an_approved_file_outside_my_folders_opens(home, launched):
+    (home / "Music").mkdir()
+    (home / "Music" / "song.txt").write_text("la")
+    g, _, approvals = gate(home, [Decision.approve])
+    assert run(g.call("t1", "open_path", {"path": "~/Music/song.txt", "with_app": None})).ok
+    assert len(approvals.requests) == 1 and launched == [["gio", "open", str((home / "Music" / "song.txt").resolve())]]
+
+
+def test_a_normal_app_for_a_document_opens_without_the_dialog(home, monkeypatch, launched):
+    _system_apps(home, monkeypatch, notes="Name=Notes\nExec=notes %U\n")
+    (home / "Documents" / "n.txt").write_text("hi")
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_path", {"path": "~/Documents/n.txt", "with_app": "notes"})).ok
+    assert approvals.requests == [] and launched == [["gtk-launch", "notes.desktop", str((home / "Documents" / "n.txt").resolve())]]
+
+
+def test_opening_with_a_planted_launcher_asks_with_the_blocking_key(home, monkeypatch, launched):
+    _apps(home, monkeypatch, notes="Name=Notes\nExec=notes %U\n")  # the user's folder
+    (home / "Documents" / "n.txt").write_text("hi")
+    g, _, approvals = gate(home, [Decision.reject])
+    assert run(g.call("t1", "open_path", {"path": "~/Documents/n.txt", "with_app": "notes"})).error == "scan_blocked"
+    assert approvals.requests[0].blocking is True and launched == []
 
 
 def test_open_with_a_terminal_or_interpreter_is_refused(home, monkeypatch):

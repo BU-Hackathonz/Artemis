@@ -1,7 +1,9 @@
 """Desktop tools (contracts.md §9) and the plan (§10), mixed into ToolGateway.
 
 Artemis may act on the whole desktop, but every action that changes something, and every read
-outside the project, waits for the guarded approval dialog. What the dialog shows is written from
+outside the project, waits for the guarded approval dialog. Opening waits only when it could run
+something (a terminal, an interpreter, a launcher the developer's own folder could have been planted
+in) or when the file is outside the developer's own folders. What the dialog shows is written from
 the arguments (never by the model), and the approval hash binds that exact action: the app, the
 resolved path and its content, the command and its folder, the text and the window it goes into.
 The gate checks the hash again after the decision, so a swapped file or a moved focus fails.
@@ -304,6 +306,9 @@ _ALIASES = {"vs code": "visual studio code", "vscode": "visual studio code", "co
 
 _MAX_DESKTOP_FILE = 256 * 1024
 
+# The developer's own folders under home: a document or folder there opens without the dialog.
+_OWN_FOLDERS = ("Documents", "Desktop", "Downloads", "Projects")
+
 
 def _find_app_file(query: str) -> tuple[Path, str, configparser.SectionProxy] | None:
     """(file, display name, entry) of the installed app that best matches `query`: an exact desktop
@@ -353,16 +358,31 @@ def app_digest(query: str) -> str | None:
     return file_sha256(found[0]) if found else None
 
 
-def app_runs_files(query: str) -> bool:
+def _runs_files(file: Path, name: str, entry: configparser.SectionProxy) -> bool:
     """True for an app that would execute a file it is given: a terminal, or an interpreter."""
-    found = _find_app_file(query)
-    if found is None:
-        return False
-    file, name, entry = found
     if entry.getboolean("Terminal", False) or _TERMINAL_APPS.search(file.stem) or _TERMINAL_APPS.search(name):
         return True
     words = entry.get("Exec", "").split()
     return any(_INTERPRETERS.match(os.path.basename(w)) for w in words[:2])
+
+
+def _in_user_apps(file: Path) -> bool:
+    """True for a launcher in the developer's own applications folder (~/.local/share/applications by
+    default): something could have been planted there, and it shadows a system app of the same name."""
+    return file.parent.resolve() == _app_dirs()[0].resolve()
+
+
+def _app_findings(found: tuple[Path, str, configparser.SectionProxy]) -> list[Finding]:
+    """High findings (the blocking key is then needed) for an app that may run what it is given, or
+    whose launcher may have been planted. An app with neither needs no approval to open."""
+    file, name, entry = found
+    reasons = []
+    if _runs_files(file, name, entry):
+        reasons.append("it is a terminal or runs the files it is given")
+    if _in_user_apps(file):
+        reasons.append("its launcher is in your own applications folder, where something could have been planted")
+    return [Finding(rule="desktop-app", severity="high", path="app", line=1,
+                    message=f"This app needs a second look: {reason}.") for reason in reasons]
 
 
 async def _spawn_detached(argv: list[str]) -> None:
@@ -596,17 +616,28 @@ class DesktopTools:
 
     # ----- the tools -----
 
+    def _own_place(self, real: Path) -> bool:
+        """True for a path in the developer's own folders (Documents, Desktop, Downloads, Projects), the
+        projects folder or the current project: opening there needs no approval."""
+        places = [home() / name for name in _OWN_FOLDERS] + list(self._roots())
+        if self._base():
+            places.append(self._base())
+        return any(real.is_relative_to(p.resolve()) for p in places)
+
     async def _open_app(self, task_id: str, a: OpenAppArgs) -> dict:
-        found = find_app(a.app)
+        found = _find_app_file(a.app)
         if found is None:
             raise self._tool_error("not_found", f"I couldn't find an app called {a.app}.")
-        app_id, name = found
+        app_id, name = found[0].name, found[1]
+        findings = _app_findings(found)  # decided now, before anything is launched
 
         def spec() -> DesktopSpec:
             # The launcher file's hash is bound too: swapped or shadowed, it would run something else.
             return DesktopSpec(action="open_app", target=app_id, sha256=app_digest(app_id))
 
-        await self._approve_desktop(task_id, "open", spec(), f"Open {name}.", "Nothing was opened.", still=spec)
+        if findings:  # only a terminal, an interpreter or a planted launcher is asked about
+            await self._approve_desktop(task_id, "open", spec(), f"Open {name}.", "Nothing was opened.",
+                                        findings=findings, still=spec)
         await self._cue(task_id, "open_app", name)
         try:
             await _spawn_detached(["gtk-launch", app_id])
@@ -617,19 +648,25 @@ class DesktopTools:
 
     async def _open_path(self, task_id: str, a: OpenPathArgs) -> dict:
         path = self._openable(a.path)
-        app = find_app(a.with_app) if a.with_app else None
-        if a.with_app and app is None:
+        found = _find_app_file(a.with_app) if a.with_app else None
+        if a.with_app and found is None:
             raise self._tool_error("not_found", f"I couldn't find an app called {a.with_app}.")
-        if app and app_runs_files(app[0]):
-            raise PathRejected(f"{app[1]} would run the file, not show it, so I won't open anything with it.")
+        if found and _runs_files(*found):
+            raise PathRejected(f"{found[1]} would run the file, not show it, so I won't open anything with it.")
+        app = (found[0].name, found[1]) if found else None
         where = f" in {app[1]}" if app else ""
+        findings = _app_findings(found) if found else []  # a planted launcher is blocking, as for open_app
+        # Asked when the app's launcher may be planted, or the file is outside the developer's own folders.
+        asked = bool(findings) or not self._own_place(path)
 
         def spec() -> DesktopSpec:
             p = self._openable(a.path)
             return DesktopSpec(action="open_path", target=str(p), text=app[0] if app else None,
                                sha256=file_sha256(p) if p.is_file() else None)
 
-        await self._approve_desktop(task_id, "open", spec(), f"Open {spoken_path(path)}{where}.", "Nothing was opened.", still=spec)
+        if asked:
+            await self._approve_desktop(task_id, "open", spec(), f"Open {spoken_path(path)}{where}.", "Nothing was opened.",
+                                        findings=findings, still=spec)
         await self._cue(task_id, "open_path", app[1] if app else path.name)
         try:
             await _spawn_detached(["gtk-launch", app[0], str(path)] if app else ["gio", "open", str(path)])

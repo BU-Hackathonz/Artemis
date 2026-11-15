@@ -541,14 +541,15 @@ task contract is needed: `voice.activity` (§2) adds the voice's own states.
 
 ## 9. Desktop tools (Proposed (David), for Avery to merge; Avery's review points 1–9 on #174)
 
-Artemis may act on the whole desktop, never without the guarded approval dialog. The models are in
+Artemis may act on the whole desktop, never without the guarded approval dialog, except that opening
+waits only when it could run something (see the open rows). The models are in
 `contracts/tools.py` (`DESKTOP_TOOL_ARGS`). Each tool joins `TOOL_ARGS`, and so becomes visible to
 the model, only when the policy gate handles it.
 
 | Tool | Args | Approval `kind` | What the dialog shows and says |
 |---|---|---|---|
-| `open_app` | `{app}` | `open` | "Open VS Code." |
-| `open_path` | `{path, with_app?}` | `open` | "Open notes.txt in Text Editor." |
+| `open_app` | `{app}` | `open`, only when dangerous: a terminal or interpreter, or a launcher in the developer's own applications folder (blocking, a high finding) | "Open VS Code." (no dialog for a normal app) |
+| `open_path` | `{path, with_app?}` | `open`, only when dangerous: outside the current project and the developer's own folders (Documents, Desktop, Downloads, Projects, the projects folder), or with a planted launcher (blocking) | "Open notes.txt in Text Editor." (no dialog inside those folders) |
 | `read_path` | `{path, start_line?, end_line?}` | `read_outside` | "Read ~/Documents/plan.md." (one approval per file) |
 | `run_command` | `{command, cwd?}` | `run_command` | The exact command and its folder, word for word |
 | `type_text` | `{text}` | `type` | The exact text, and the window it goes into |
