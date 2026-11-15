@@ -1,9 +1,10 @@
 // The Artemis top-edge island: a glowing pill hanging under the top bar, joined to a light line
 // along the bottom edge of the bar, with the ring, the "artemis." name, a waveform and a chevron.
-//   - the chevron (or the waveform) opens a panel: type a request, or stop the current one
-//   - the pill shows the core's state: setView() takes islandState.view() (contracts.md §8)
-//   - while the state is busy the waveform moves and a pulse of light runs along the edge; while
-//     an approval waits they move slowly
+//   - the chevron (or the waveform) opens a panel: type a request for the Artemis core, or Stop
+//   - while a request is in progress the pill says so, the waveform moves and a pulse of light runs
+//     along the edge; when it ends the ring shows a check for a few seconds
+//   - setView() takes islandState.view() (contracts.md §8). The look is the approved one: the eight
+//     states map onto its idle, working and done looks; any new look per state is Jun's call
 // The droplet that flies through a command is drawn by the extension (ringEffect); it leaves from
 // and returns to ringCenter(). The island reserves its strip at the top of the screen, so
 // maximized windows sit below it instead of under it.
@@ -16,23 +17,13 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
+const PURPLE = [0.66, 0.33, 0.97];
 const GAP = -4;          // logical px between the top bar and the top of the pill
 const SHOULDER = 46;     // logical px the edge line takes to curve into the pill
-const STATES = ['idle', 'listening', 'thinking', 'editing', 'running', 'speaking', 'done', 'error'];
-const BUSY = new Set(['listening', 'thinking', 'editing', 'running', 'speaking']); // waveform and pulse move
-const WAIT_SPEED = 0.25; // the waveform and pulse slow down while an approval is open
-const OFFLINE_STRENGTH = 0.4;
-// Edge colour per state: r, g, b, strength. Idle keeps the old purple, quieter.
-const EDGE = {
-    idle: [0.66, 0.33, 0.97, 0.5],
-    listening: [0.38, 0.65, 0.98, 1],
-    thinking: [0.66, 0.33, 0.97, 1],
-    editing: [0.98, 0.75, 0.14, 1],
-    running: [0.18, 0.83, 0.75, 1],
-    speaking: [0.96, 0.45, 0.71, 1],
-    done: [0.45, 0.93, 0.64, 0.85],
-    error: [0.97, 0.36, 0.36, 1],
-};
+const DONE_MS = 7000;    // how long "Done" stays
+
+// The core's states shown with the approved working look (the others look idle, or done).
+const WORKING = new Set(['listening', 'thinking', 'editing', 'running', 'speaking']);
 
 export class Island {
     /**
@@ -41,8 +32,6 @@ export class Island {
     constructor(opts) {
         this._opts = opts;
         this._state = 'idle';
-        this._waiting = false;
-        this._offline = false;
         this._phase = 0;
         this._scale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
 
@@ -65,8 +54,19 @@ export class Island {
         this._chevron = new St.Button({style_class: 'artemis-island-chevron', can_focus: true, accessible_name: 'Open Artemis', child: chevronIcon});
         this._chevron.connect('clicked', () => this.toggle());
         const sep = () => new St.Widget({style_class: 'artemis-island-sep', y_align: Clutter.ActorAlign.CENTER});
-        for (const child of [this._ring, sep(), this._waveButton, this._status, this._chevron]) this._pill.add_child(child);
+        for (const child of [this._ring, sep(), this._waveButton, this._chevron]) this._pill.add_child(child);
         Main.layoutManager.addChrome(this._pill, {trackFullscreen: true});
+        // The summary tab: what the last command did, beside the pill.
+        this._tab = new St.BoxLayout({style_class: 'artemis-island-tab', vertical: true, visible: false, reactive: true});
+        this._tabTitle = new St.Label({style_class: 'artemis-island-tab-title'});
+        this._tabText = new St.Label({style_class: 'artemis-island-tab-text'});
+        this._tabText.clutter_text.line_wrap = true;
+        this._tabStop = new St.Button({style_class: 'artemis-island-tab-stop', label: 'Stop', can_focus: true, x_align: Clutter.ActorAlign.START});
+        this._tabStop.connect('clicked', () => this._opts.onStop());
+        for (const c of [this._tabTitle, this._tabText, this._tabStop]) this._tab.add_child(c);
+        // The board is never put on screen (removed by request); kept only so old calls stay harmless.
+        try { this._tab.add_effect(new Shell.BlurEffect({mode: Shell.BlurMode.BACKGROUND, brightness: 0.75})); } catch { /* no blur */ }
+        this._tab.connect('notify::width', () => this._layout());
         // Frosted glass: blur what's behind the pill (like Windows acrylic), tinted by the CSS.
         try {
             const blur = new Shell.BlurEffect({mode: Shell.BlurMode.BACKGROUND, brightness: 0.75});
@@ -97,22 +97,24 @@ export class Island {
         this._pill.connect('notify::height', () => this._layout());
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._layout());
         this._panelId = Main.layoutManager.panelBox.connect('notify::height', () => this._layout());
-        if (opts.font) this._menu.actor.style = `font-family: "${opts.font}";`;
+        if (opts.font) for (const a of [this._tab, this._menu.actor]) a.style = `font-family: "${opts.font}";`;
         this._layout();
     }
 
     destroy() {
         if (this._timer) GLib.source_remove(this._timer);
-        this._timer = 0;
+        if (this._doneTimer) GLib.source_remove(this._doneTimer);
+        this._timer = this._doneTimer = 0;
         if (this._monitorsId) Main.layoutManager.disconnect(this._monitorsId);
         if (this._panelId) Main.layoutManager.panelBox.disconnect(this._panelId);
         this._menu?.destroy();
+        this._tab?.destroy();
         for (const actor of [this._pill, this._edge]) {
             if (!actor) continue;
             Main.layoutManager.removeChrome(actor);
             actor.destroy();
         }
-        this._menu = this._pill = this._edge = null;
+        this._menu = this._pill = this._edge = this._tab = null;
     }
 
     /** Where the ring sits (stage px): the droplet leaves from and returns to here. */
@@ -128,28 +130,47 @@ export class Island {
 
     toggle() { this._menu?.toggle(); }
 
-    /** Show islandState.view(): {state, waiting, connected, label, accessibleName, description}. */
-    setView(view) {
+    /** 'idle' | 'working' | 'done' */
+    setState(state, text = '', summary = '') {
         if (!this._pill || this._dead) return;
-        this._state = view.state;
-        this._waiting = !!view.waiting;
-        this._offline = !view.connected;
-        for (const actor of [this._ring, this._pill]) {
-            for (const pc of [...STATES, 'waiting', 'offline']) actor.remove_style_pseudo_class(pc);
-            actor.add_style_pseudo_class(view.state);
-            if (view.waiting) actor.add_style_pseudo_class('waiting');
-            if (!view.connected) actor.add_style_pseudo_class('offline');
+        if (this._doneTimer) { GLib.source_remove(this._doneTimer); this._doneTimer = 0; }
+        this._state = state;
+        for (const pc of ['working', 'done']) { this._ring.remove_style_pseudo_class(pc); this._pill.remove_style_pseudo_class(pc); }
+        if (state !== 'idle') { this._ring.add_style_pseudo_class(state); this._pill.add_style_pseudo_class(state); }
+        this._status.text = state === 'working' ? `Working · ${text}` : state === 'done' ? 'Done' : '';
+        this._status.visible = state !== 'idle';
+        this._pill.accessible_name = state === 'idle' ? 'Artemis' : `Artemis: ${this._status.text}`;
+        this._stopItem.visible = state === 'working';
+        // The board under the widget: what Artemis is doing, then what it did.
+        this._tabTitle.text = state === 'working' ? 'WORKING' : 'DONE';
+        this._tabText.text = state === 'working' ? text : summary;
+        this._tabStop.visible = state === 'working';
+        this._tab.visible = false; // no board: the widget goes straight back to its initial look
+        if (state === 'done') this._tab.add_style_pseudo_class('done'); else this._tab.remove_style_pseudo_class('done');
+        if (state === 'done') {
+            this._doneTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, DONE_MS, () => {
+                this._doneTimer = 0;
+                if (this._state === 'done') this.setState('idle');
+                return GLib.SOURCE_REMOVE;
+            });
         }
-        this._status.text = view.label;
-        this._status.visible = view.state !== 'idle' || !view.connected;
-        this._pill.accessible_name = view.accessibleName;
-        try { this._pill.get_accessible()?.set_description(view.description); } catch { /* no accessibility object */ }
-        this._animate(BUSY.has(view.state));
+        this._animate(state === 'working');
         this._wave.queue_repaint();
         this._edge.queue_repaint();
     }
 
-    /** The panel's Stop item: shown while a request runs. */
+    /** Show islandState.view() in the approved look, and name it for the screen reader. */
+    setView(view) {
+        if (!this._pill || this._dead) return;
+        const look = WORKING.has(view.state) ? 'working' : view.state === 'done' ? 'done' : 'idle';
+        if (look !== this._state || (look === 'working' && view.label !== this._label)) {
+            this._label = view.label;
+            this.setState(look, view.label);
+        }
+        this._pill.accessible_name = view.accessibleName;
+    }
+
+    /** The panel's Stop item: shown while a request is in progress. */
     setStopVisible(on) {
         if (this._stopItem) this._stopItem.visible = !!on;
     }
@@ -160,7 +181,7 @@ export class Island {
         const box = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
         const column = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'artemis-island-ask'});
         this._entry = new St.Entry({style_class: 'artemis-island-entry', hint_text: 'What would you like to do?', can_focus: true, x_expand: true});
-        this._entry.clutter_text.connect('activate', () => this._send());
+        this._entry.clutter_text.connect('activate', () => this._ask(this._entry.get_text()));
         this._hint = new St.Label({style_class: 'artemis-island-hint', text: ''});
         column.add_child(this._entry);
         column.add_child(this._hint);
@@ -172,24 +193,25 @@ export class Island {
         this._menu.addAction('Settings…', () => this._opts.onSettings());
     }
 
-    // Typed request: the entry is cleared before the core answers, so a second Enter cannot resend it.
-    async _send() {
-        const text = this._entry.get_text().trim();
+    // Typed request: sent to the core. The field is cleared before the core answers, so a stray
+    // second Enter can't send it again.
+    async _ask(raw) {
+        const text = raw.trim();
         if (!text) return;
         this._entry.set_text('');
         this._hint.text = 'Sending…';
         let res;
         try {
             res = await this._opts.onAsk(text);
-        } catch (e) {
-            res = {ok: false, message: e?.message};
+        } catch {
+            res = {ok: false, message: 'That request could not be sent. Try again.'};
         }
-        if (!this._menu || this._dead) return; // the island went away while the core answered
+        if (!this._menu) return;
         if (res?.ok) {
             this._hint.text = '';
             this._menu.close();
         } else {
-            this._hint.text = res?.message || 'Artemis could not take that request.';
+            this._hint.text = res?.message ?? 'That request could not be sent. Try again.';
         }
     }
 
@@ -205,6 +227,7 @@ export class Island {
         const px = Math.round(m.x + (m.width - this._idleWidth) / 2); // the ring's slot never moves
         const py = Math.round(panelBottom + GAP * s);
         this._pill.set_position(px, py);
+        if (this._tab) this._tab.set_position(px + Math.round((this._idleWidth - this._tab.width) / 2), py + this._pill.height + Math.round(8 * s)); // under the widget
         // The edge strip runs from the top of the screen (so it reserves space as a top strut) to
         // just below the pill; only the line along the bar's bottom edge is drawn in it.
         const h = Math.round(py + this._pill.height + 12 * s - m.y);
@@ -233,29 +256,28 @@ export class Island {
     _paintEdge(area) {
         const cr = area.get_context();
         if (this._geom && this._drawEdge) {
-            const [r, g, b, k] = EDGE[this._state] ?? EDGE.idle;
-            const rgb = [r, g, b];
-            const strength = this._offline ? OFFLINE_STRENGTH : k;
+            const s = this._scale;
+            const strength = this._state === 'working' ? 1 : 0.85;
             // glow: wide and faint to thin and bright
-            for (const [w, a] of [[16, 0.05], [9, 0.1], [5, 0.22], [2.5, 0.95]]) {
-                cr.setLineWidth(w * this._scale);
-                cr.setSourceRGBA(...rgb, a * strength);
+            for (const [w, a] of [[16, 0.05], [9, 0.1], [5, 0.22], [2.5, 0.95 * strength]]) {
+                cr.setLineWidth(w * s);
+                cr.setSourceRGBA(...PURPLE, a);
                 for (const side of ['left', 'right']) { this._edgePath(cr, side); cr.stroke(); }
             }
-            if (BUSY.has(this._state)) this._paintPulse(cr, rgb);
+            if (this._state === 'working') this._paintPulse(cr);
         }
         cr.$dispose();
     }
 
     // A bead of light running out along the edge while Artemis works.
-    _paintPulse(cr, rgb) {
+    _paintPulse(cr) {
         const g = this._geom, s = this._scale;
         const start = g.px + g.pw + SHOULDER * s, end = this._edge.width;
         const t = (this._phase * 0.35) % 1;
         const head = start + (end - start) * t;
         const tail = Math.max(start, head - 260 * s);
         const grad = new Cairo.LinearGradient(tail, 0, head, 0);
-        grad.addColorStopRGBA(0, ...rgb, 0);
+        grad.addColorStopRGBA(0, ...PURPLE, 0);
         grad.addColorStopRGBA(1, 0.95, 0.88, 1, 0.95);
         cr.setSource(grad);
         cr.setLineWidth(5 * s);
@@ -270,11 +292,11 @@ export class Island {
         }
     }
 
-    // Style B: mirrored bars. Short and quiet at rest; alive while busy.
+    // Style B: mirrored bars. Short and quiet at rest; alive while working.
     _paintWave(area) {
         const cr = area.get_context();
         const [w, h] = area.get_surface_size();
-        const active = BUSY.has(this._state);
+        const active = this._state === 'working';
         const n = 8, bw = 3 * this._scale, gap = (w - n * bw) / (n - 1);
         cr.setSourceRGBA(0.85, 0.75, 0.99, active ? 0.95 : 0.55);
         for (let i = 0; i < n; i++) {
@@ -296,7 +318,7 @@ export class Island {
             let last = GLib.get_monotonic_time();
             this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
                 const now = GLib.get_monotonic_time();
-                this._phase += (now - last) / 1e6 * (this._waiting ? WAIT_SPEED : 1);
+                this._phase += (now - last) / 1e6;
                 last = now;
                 this._wave?.queue_repaint();
                 this._edge?.queue_repaint();

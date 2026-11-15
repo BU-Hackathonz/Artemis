@@ -3,6 +3,7 @@
 // Escape always rejects. The rules live in approvalKeys.js; this file maps shell events to them.
 
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import {MessageDialogContent} from 'resource:///org/gnome/shell/ui/dialog.js';
@@ -70,6 +71,7 @@ export class ApprovalDialog {
     }
 
     open() {
+        this._openedAt = GLib.get_monotonic_time(); // µs; the reveal guard counts from here
         return this._dialog.open(global.get_current_time());
     }
 
@@ -139,7 +141,8 @@ export class ApprovalDialog {
             return Clutter.EVENT_PROPAGATE;
         if (this._busy)
             return Clutter.EVENT_STOP;
-        const decision = keyDecision(key, this._focus, this._approval);
+        const sinceOpenMs = this._openedAt ? (GLib.get_monotonic_time() - this._openedAt) / 1000 : 0;
+        const decision = keyDecision(key, this._focus, this._approval, sinceOpenMs);
         if (decision)
             this._send(decision);
         return Clutter.EVENT_STOP;
