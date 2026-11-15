@@ -413,7 +413,7 @@ export default class ArtemisWaterExtension extends Extension {
             if (!launch.arrived || launch.win === undefined) return;
             const win = launch.win;
             this._endLaunch();
-            if (!win) return; // never came: the droplet stays at the dock until the next cue
+            if (!win || !win.get_compositor_private()) return; // never came, or closed already: stay at the dock
             const r = win.get_frame_rect();
             this._agentFlyTo({x: r.x + r.width / 2, y: r.y + r.height / 2}, LAUNCH_FLY_MS);
         };
@@ -421,7 +421,15 @@ export default class ArtemisWaterExtension extends Extension {
         after(CUE_FLY_MS, () => {
             this._clickPulse();
             if (this._interface.enable_animations) pressIcon(spot);
-            after(LAUNCH_DWELL_MS, () => { launch.arrived = true; onto(); });
+            after(LAUNCH_DWELL_MS, () => {
+                launch.arrived = true;
+                // The window may have opened before we started waiting (a fast app): look again.
+                if (launch.win === undefined) {
+                    const open = app.get_windows().find((w) => w.get_window_type() === Meta.WindowType.NORMAL);
+                    if (open) launch.win = open;
+                }
+                onto();
+            });
         });
         launch.cancel = waitForWindow(app, target, LAUNCH_WAIT_MS, (win) => {
             if (this._launch !== launch) return;

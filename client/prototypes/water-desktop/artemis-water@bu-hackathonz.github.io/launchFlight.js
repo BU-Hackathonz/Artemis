@@ -103,20 +103,28 @@ export function waitForWindow(app, target, timeoutMs, callback) {
         ((app && tracker.get_window_app(win) === app) || appMatches(target, {id: win.get_wm_class() ?? '', name: win.get_title() ?? ''}));
     // A new window has no size or tracker app for a moment: check it a few times before giving up on it.
     const watch = (win) => {
+        // Menus, tooltips and popups are never the app's window: skip them before polling.
+        if (!win || win.get_window_type() !== Meta.WindowType.NORMAL) return;
         let tries = 0;
+        let unmanaged = false;
+        const unmanagedId = win.connect('unmanaged', () => { unmanaged = true; });
+        const stop = (id) => { polls.delete(id); if (!unmanaged) win.disconnect(unmanagedId); };
         const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+            if (unmanaged) { polls.delete(id); return GLib.SOURCE_REMOVE; } // closed mid-poll
             const r = win.get_frame_rect();
             if (ours(win) && r.width > 0 && win.get_compositor_private()?.visible) {
-                polls.delete(id);
+                stop(id);
                 finish(win);
                 return GLib.SOURCE_REMOVE;
             }
-            if (++tries > 30) { polls.delete(id); return GLib.SOURCE_REMOVE; }
+            if (++tries > 30) { stop(id); return GLib.SOURCE_REMOVE; }
             return GLib.SOURCE_CONTINUE;
         });
         polls.add(id);
     };
     createdId = global.display.connect('window-created', (_d, win) => watch(win));
+    // A fast app may already have a new window (tracked late, or created before the cue arrived).
+    for (const win of app?.get_windows?.() ?? []) if (!before.has(win)) watch(win);
     timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, timeoutMs, () => { timer = 0; finish(null); return GLib.SOURCE_REMOVE; });
     return cleanup; // canceled: no callback
 }
