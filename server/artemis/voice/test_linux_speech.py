@@ -162,7 +162,8 @@ def test_a_high_line_cancels_only_our_messages_and_the_cancel_lands_first():
     spd, fake = speechd()
     spd.speak("A long answer.", interrupt=False)
     spd.speak("main.py failed with exit code 1.", interrupt=True)
-    assert fake.commands[-3:] == ["SPEAK", "CANCEL self", "SPEAK"]  # answered before the next line goes in
+    # the cancel is answered before the next line goes in, and the high line goes out as 'message'
+    assert fake.commands[-4:] == ["SPEAK", "CANCEL self", "SET self PRIORITY message", "SPEAK"]
     assert "CANCEL all" not in fake.commands  # Orca and every other client keep talking
     assert fake.spoken[-1] == "main.py failed with exit code 1."
 
@@ -178,6 +179,49 @@ def test_cancel_and_push_to_talk_stop_only_artemis():
     asyncio.run(a.stop_speech())  # what WhisperVoice.start_listening does before the listening earcon
     assert fake.commands[-1] == "CANCEL self" and not spd.busy() and not spd.speaking()
 
+
+
+def test_each_artemis_priority_maps_to_its_speechd_level_and_is_set_only_on_change():
+    spd, fake = speechd()
+    a = Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=lambda: False, eleven=eleven(offline_opener))
+    a.eleven.gave_up = True
+
+    asyncio.run(a.announce("Created main.py, 1 line.", "normal"))
+    asyncio.run(a.announce("Created utils.py, 2 lines.", "normal"))  # same level: no second SET
+    asyncio.run(a.announce("Running main.py.", "low"))  # dropped: Artemis is still talking (busy)
+    for msg_id in ("1", "2"):
+        fake.event("702", msg_id, "END")
+    wait_for(lambda: not spd.busy())
+    asyncio.run(a.announce("Running main.py.", "low"))  # quiet now: goes out as 'notification'
+    asyncio.run(a.announce("main.py failed with exit code 1.", "high"))
+    levels = [c for c in fake.commands if c.startswith("SET self PRIORITY")]
+    assert levels == ["SET self PRIORITY text", "SET self PRIORITY notification", "SET self PRIORITY message"]
+    assert fake.spoken == ["Created main.py, 1 line.", "Created utils.py, 2 lines.", "Running main.py.",
+                           "main.py failed with exit code 1."]
+
+
+def test_windows_speakers_never_get_a_priority_argument():
+    said = []
+
+    class TwoArgs:
+        name = "sapi"
+
+        def available(self):
+            return True
+
+        def speak(self, text, interrupt):  # no priority parameter: must still work, unchanged
+            said.append((text, interrupt))
+
+        def cancel(self):
+            pass
+
+        def busy(self):
+            return False
+
+    a = Announcer(nvda=NoNvda(), sapi=TwoArgs(), is_nvda_running=lambda: False, eleven=eleven(offline_opener))
+    a.eleven.gave_up = True
+    asyncio.run(a.announce("Hello.", "high"))
+    assert said == [("Hello.", True)]
 
 def test_a_dot_line_is_escaped():
     spd, fake = speechd()

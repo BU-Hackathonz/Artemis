@@ -578,6 +578,13 @@ def orca_running(proc: Path = Path("/proc")) -> bool:
     return False
 
 
+
+# Artemis's priorities as speech-dispatcher levels (approved by Avery). high speaks over Orca and Orca can't
+# cut it; normal shares Orca's level, so each cuts the other; low never interrupts Orca and is dropped if
+# anything else speaks.
+SSIP_PRIORITY = {"high": "message", "normal": "text", "low": "notification"}
+
+
 class SpeechDispatcherSpeaker:
     """Offline Linux voice: speech-dispatcher (ships with Ubuntu and Orca), spoken to directly over its
     SSIP socket with the standard library, no new dependency.
@@ -589,6 +596,7 @@ class SpeechDispatcherSpeaker:
     """
 
     name = "speechd"  # what Announcer.speaking_engine() reports (#141, the wake word)
+    TAKES_PRIORITY = True  # the Announcer passes the line's priority (contracts.md 2) to speak()
     REPLY_TIMEOUT_S = 1.0
     RETRY_S = 5.0  # after a failed connect, don't try again on every announce
 
@@ -602,6 +610,7 @@ class SpeechDispatcherSpeaker:
         self._queued: set[str] = set()  # message ids speech-dispatcher still has for us
         self._playing = threading.Event()
         self._state = threading.Lock()
+        self._level: str | None = None  # the SSIP priority last set on this connection
 
     # connection
 
@@ -626,6 +635,7 @@ class SpeechDispatcherSpeaker:
 
     def _drop(self) -> None:
         sock, self._sock = self._sock, None
+        self._level = None  # a new connection starts at speech-dispatcher's default again
         with self._state:
             self._queued.clear()
         self._playing.clear()
@@ -690,11 +700,12 @@ class SpeechDispatcherSpeaker:
     def available(self) -> bool:
         return self._ensure() is not None
 
-    def speak(self, text: str, interrupt: bool) -> None:
+    def speak(self, text: str, interrupt: bool, priority: Priority | None = None) -> None:
         if self._ensure() is None:
             return
         # SSIP data: one line per line; a line that starts with "." gets a second "." (dot-stuffing).
         lines = [("." + line) if line.startswith(".") else line for line in text.replace("\r", "").split("\n")]
+        level = SSIP_PRIORITY.get(priority or ("high" if interrupt else "normal"), "text")
         try:
             with self._send_lock:
                 if interrupt:
@@ -703,6 +714,10 @@ class SpeechDispatcherSpeaker:
                     with self._state:
                         self._queued.clear()
                     self._playing.clear()
+                if level != self._level:  # one round trip only when the level changes
+                    self._send(f"SET self PRIORITY {level}")
+                    self._reply()
+                    self._level = level
                 self._send("SPEAK")
                 self._reply()  # 230 OK RECEIVING DATA
                 self._send(*lines, ".")
@@ -872,7 +887,10 @@ class Announcer:
             return  # contracts.md: low may be dropped while speech is busy
         if priority != "low":
             self.last = text
-        speaker.speak(text, interrupt=priority == "high")
+        if getattr(speaker, "TAKES_PRIORITY", False):  # speech-dispatcher: the level decides who may cut whom
+            speaker.speak(text, interrupt=priority == "high", priority=priority)
+        else:  # NVDA, SAPI, ElevenLabs: unchanged
+            speaker.speak(text, interrupt=priority == "high")
 
     async def stop_speech(self) -> None:
         self.current().cancel()
