@@ -8,6 +8,7 @@
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude    # real agent (needs ANTHROPIC_API_KEY)
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -AppPath C:\path\artemis-client.exe
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly        # just the core
+  powershell -ExecutionPolicy Bypass -File infra\start.ps1 -VoiceEngine nvda # NVDA speaks Artemis's lines
 #>
 [CmdletBinding()]
 param(
@@ -17,6 +18,9 @@ param(
     [ValidateSet("stub", "claude")][string]$Agent = "stub",
     [ValidateSet("whisper", "stub")][string]$Voice = "whisper",
     [switch]$Conversation,  # ARTEMIS_CONVERSATION=on: built-in phrases and follow-ups (contracts.md 5.4)
+    # Artemis's own voice (decisions.md 5a). "" keeps the environment's choice (default elevenlabs, which
+    # needs ELEVENLABS_API_KEY; without it NVDA, else SAPI). nvda or sapi: NVDA first, as before #134.
+    [ValidateSet("", "elevenlabs", "nvda", "sapi")][string]$VoiceEngine = "",
     [int]$HealthTimeoutS = 120
 )
 
@@ -78,7 +82,7 @@ function Start-Child([string]$FileName, [string]$Arguments, [string]$WorkingDire
 }
 
 # Only the core talks to Claude; the desktop app never gets the key.
-$coreOnlySecrets = @("ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID")
+$coreOnlySecrets = @("ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID", "ELEVENLABS_API_KEY")
 
 # ----- preflight -----
 
@@ -132,14 +136,17 @@ try {
     # ----- core -----
     $conversationMode = "off"
     if ($Conversation) { $conversationMode = "on" }
-    Write-Host "Starting the Artemis core on $url (agent: $Agent, voice: $Voice, conversation: $conversationMode)..."
+    $engineShown = if ($VoiceEngine) { $VoiceEngine } elseif ($env:ARTEMIS_VOICE_ENGINE) { $env:ARTEMIS_VOICE_ENGINE } else { "default" }
+    Write-Host "Starting the Artemis core on $url (agent: $Agent, voice: $Voice, speech: $engineShown, conversation: $conversationMode)..."
     $coreArgs = "/d /c uv run --project `"$Server`"$groups uvicorn artemis.core.main:app --host 127.0.0.1 --port $port > `"$CoreLog`" 2>&1"
-    $core = Start-Child "cmd.exe" $coreArgs $Server @{
+    $coreEnv = @{
         "ARTEMIS_TOKEN" = $token
         "ARTEMIS_AGENT" = $Agent
         "ARTEMIS_VOICE" = $Voice
         "ARTEMIS_CONVERSATION" = $conversationMode
     }
+    if ($VoiceEngine) { $coreEnv["ARTEMIS_VOICE_ENGINE"] = $VoiceEngine }
+    $core = Start-Child "cmd.exe" $coreArgs $Server $coreEnv
 
     $headers = @{ "Authorization" = "Bearer $token" }
     $ready = $false

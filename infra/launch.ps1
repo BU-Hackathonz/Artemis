@@ -14,8 +14,17 @@
   Saving it in Windows Credential Manager is a separate, optional step (infra\README.md).
   Press Enter at the prompt to use the scripted stub agent instead.
 
+  Voice: -VoiceDemo makes ElevenLabs Artemis's voice for this run. Artemis stops sending its own
+  lines to NVDA's speech (they still reach the braille display), and NVDA keeps reading the screen:
+  the screen reader itself and the app's accessibility are not changed. The ElevenLabs key is read
+  the same way as the Anthropic key (hidden prompt, this process only, never saved or logged).
+  -NvdaVoice switches back: NVDA speaks Artemis's lines, as before. With neither, the environment
+  decides (ElevenLabs only if ELEVENLABS_API_KEY is already set). Undo is simply the next launch.
+
 .EXAMPLE
   infra\Artemis.cmd                      # double-click, or run from any shell
+  infra\Artemis.cmd -VoiceDemo           # demo: ElevenLabs narrates (asks for the ElevenLabs key, hidden)
+  infra\Artemis.cmd -NvdaVoice           # NVDA speaks Artemis's lines again (no ElevenLabs)
   powershell -ExecutionPolicy Bypass -File infra\launch.ps1 -Agent stub -NoPause
 #>
 [CmdletBinding()]
@@ -26,6 +35,8 @@ param(
     [switch]$NoConversation,  # turn the built-in spoken phrases and follow-ups off (start.ps1 itself defaults to off)
     [ValidateSet("whisper", "stub")][string]$Voice = "whisper",  # "stub" skips the mic and Whisper
     [switch]$ForgetKey,  # delete the key and workspace ID saved in Windows Credential Manager, then exit
+    [switch]$VoiceDemo,  # ElevenLabs narrates this run; Artemis's lines stop going to NVDA's speech
+    [switch]$NvdaVoice,  # NVDA speaks Artemis's lines (NVDA first, no ElevenLabs): the way back
     [switch]$NoPause  # for scripts and tests: never wait for Enter
 )
 
@@ -101,6 +112,9 @@ if (-not $exe) {
 $secure = $null
 $bstr = [IntPtr]::Zero
 $keyFromPrompt = $false
+$elevenSecure = $null
+$elevenBstr = [IntPtr]::Zero
+$elevenFromPrompt = $false
 $workspaceFromPrompt = $false
 try {
     $chosen = $Agent
@@ -166,12 +180,33 @@ try {
         Write-Host "Saving is not available on this laptop ($script:CredStoreError). You will be asked again next time."
     }
 
+    # ----- voice -----
+
+    $voiceEngine = ""
+    if ($VoiceDemo -and $NvdaVoice) { Finish 1 "Artemis could not start: choose -VoiceDemo or -NvdaVoice, not both." }
+    if ($NvdaVoice) { $voiceEngine = "nvda" }
+    if ($VoiceDemo) {
+        $voiceEngine = "elevenlabs"
+        if (-not $env:ELEVENLABS_API_KEY) {
+            if ($NoPause) { Finish 1 "Artemis could not start: -VoiceDemo needs ELEVENLABS_API_KEY, and -NoPause can't ask for it." }
+            $elevenSecure = Read-Host "ElevenLabs API key for the demo voice (hidden; not saved)" -AsSecureString
+            if ($elevenSecure.Length -eq 0) { Finish 1 "Artemis could not start: -VoiceDemo needs an ElevenLabs key." }
+            $elevenBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($elevenSecure)
+            $env:ELEVENLABS_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($elevenBstr)
+            $elevenFromPrompt = $true
+        }
+        Write-Host "Demo voice: ElevenLabs speaks Artemis's lines. NVDA keeps reading the screen and the braille display."
+    } elseif ($NvdaVoice) {
+        Write-Host "NVDA voice: NVDA speaks Artemis's lines (ElevenLabs is not used)."
+    }
+
     # ----- run -----
 
     Write-Host "Starting Artemis (agent: $chosen). Close the Artemis window to stop everything."
     $startArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Here "start.ps1"),
         "-Agent", $chosen, "-Voice", $Voice, "-AppPath", $exe)
     if (-not $NoConversation) { $startArgs += "-Conversation" }  # on by default here (contracts.md 5.4)
+    if ($voiceEngine) { $startArgs += @("-VoiceEngine", $voiceEngine) }
     # start.ps1 exit codes: 0 normal close, 1 could not start, 2 the core stopped while the app ran,
     # 3 the app exited with an error code.
     # Anything but 0 keeps the window open: a double-click user must be able to read why it stopped.
@@ -181,6 +216,9 @@ try {
     if ($code -ne 0) { Finish $code "Artemis stopped with an error (exit code $code). The lines above say why." }
 } finally {
     if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    if ($elevenBstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($elevenBstr) }
+    if ($elevenSecure) { $elevenSecure.Dispose() }
+    if ($elevenFromPrompt) { Remove-Item Env:\ELEVENLABS_API_KEY -ErrorAction SilentlyContinue }
     if ($secure) { $secure.Dispose() }
     if ($keyFromPrompt) { Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue }
     if ($workspaceFromPrompt) { Remove-Item Env:\ANTHROPIC_WORKSPACE_ID -ErrorAction SilentlyContinue }

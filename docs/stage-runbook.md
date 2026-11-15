@@ -29,6 +29,9 @@ Work from one PowerShell window in the repo root. Core log: `%LOCALAPPDATA%\Arte
 - **Ready** = focus in the request field and "Artemis is ready. Hold Control Shift Space and speak, or type a request."
   If it says "Use the Start listening button" instead, the shortcut is taken: use **Start listening** or type.
 - `-NoConversation` keeps demo.md's lines (Artemis.cmd turns conversation mode on; start.ps1 defaults to off).
+- Voice: the tested stage voice is the default above (no ElevenLabs key on this laptop). Only if the
+  ElevenLabs demo voice passed its hardware check, add `-VoiceDemo` and paste the ElevenLabs key at
+  its hidden prompt. If it misbehaves, close Artemis and relaunch with `-NvdaVoice` (or with neither).
   No built app: set the key as in demo.md setup step 7, then run
   `powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude` (the first build takes minutes).
 

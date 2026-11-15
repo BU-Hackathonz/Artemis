@@ -175,6 +175,16 @@ class WhisperVoice:
             return  # never over speech; the next heartbeat tries again
         self._earcon("working")
 
+    @property
+    def busy_listening(self) -> bool:
+        """True for the whole push-to-talk cycle, from the press until the mic is closed.
+
+        Wider than `listening` (the mic stream is open): it also covers the listening earcon before
+        the mic opens, and the opt-in post-roll after release, when the mic is still recording. The
+        core must not play a sound in that window, or it would land in the request.
+        """
+        return self._wanted or self._stream is not None or self._tail is not None
+
     def warm(self) -> None:
         """Load the model now (about 3 s, longer on first download) instead of on the first request."""
         if self._model is None:
