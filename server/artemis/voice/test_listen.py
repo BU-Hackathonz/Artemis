@@ -531,3 +531,15 @@ def test_transcribing_is_true_only_while_whisper_runs():
 
     asyncio.run(run())
     assert seen == [True] and not v.transcribing
+
+
+def test_warm_initialises_audio_so_the_first_press_is_fast(monkeypatch):
+    # Measured on Ubuntu: import sounddevice takes 1.5 s (PortAudio probes the devices). warm() runs at
+    # core startup, so after it the first push-to-talk doesn't pay that cost.
+    import sys
+
+    pytest.importorskip("sounddevice")
+    monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
+    v, _, _ = make(1)
+    v.warm()
+    assert "sounddevice" in sys.modules
