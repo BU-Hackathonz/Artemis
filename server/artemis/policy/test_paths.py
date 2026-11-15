@@ -133,6 +133,64 @@ def test_link_that_points_outside(root, tmp_path):
     assert "outside the project" in rejected(root, "link/x.py")
 
 
+def link_dir(target, link):
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+def link_file(target, link):
+    try:
+        os.symlink(target, link)
+    except OSError:  # Windows without Developer Mode can't make file symlinks
+        pytest.skip("file symlinks need Developer Mode on Windows")
+
+
+# Issue #158: a link inside the project must not reach .env or .git under another name.
+
+def test_a_file_link_to_an_env_file_is_rejected(root):
+    (root / ".env.local").write_text("SYNTHETIC_FIXTURE")
+    link_file(root / ".env.local", root / "public.txt")
+    assert ".env" in rejected(root, "public.txt")
+    assert ".env" in rejected(root, "public.txt", for_write=True)  # nor overwritten through it
+
+
+def test_a_folder_link_into_git_is_rejected(root):
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("SYNTHETIC_FIXTURE")
+    link_dir(root / ".git", root / "docs")
+    assert ".git" in rejected(root, "docs/config")
+    assert ".git" in rejected(root, "docs\\config")
+
+
+def test_a_link_reached_through_another_link_is_rejected(root):
+    (root / "conf").mkdir()
+    (root / "conf" / ".env").write_text("SYNTHETIC_FIXTURE")
+    link_dir(root / "conf", root / "a")
+    link_file(root / "a" / ".env", root / "conf" / "settings.txt")
+    assert ".env" in rejected(root, "a/settings.txt")
+
+
+def test_ordinary_links_inside_the_project_still_work(root):
+    (root / "src").mkdir()
+    (root / "src" / "main.py").write_text("x")
+    link_dir(root / "src", root / "code")
+    assert safe_resolve(root, "code/main.py") == root.resolve() / "src" / "main.py"
+
+
+def test_project_files_leaves_out_links_to_protected_files(root):
+    (root / "main.py").write_text("x")
+    (root / ".env.local").write_text("SYNTHETIC_FIXTURE")
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("SYNTHETIC_FIXTURE")
+    link_file(root / ".env.local", root / "public.txt")
+    link_file(root / ".git" / "config", root / "notes.txt")
+    assert project_files(root) == ["main.py"]
+
+
 @pytest.mark.parametrize("rel", ["main.py:stream", "a/b.txt::$DATA"])
 def test_alternate_data_stream(root, rel):
     assert "colon" in rejected(root, rel)

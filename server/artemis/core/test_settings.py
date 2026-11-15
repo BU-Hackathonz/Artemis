@@ -315,9 +315,15 @@ async def test_an_invalid_environment_value_pins_nothing(core, profile_path, mon
 
 
 async def test_voices_with_no_key_and_no_sapi_is_an_empty_list(core, monkeypatch):
+    from artemis.voice import voices as voices_module
+
+    # No SAPI, whatever this machine has installed: a Windows box with SAPI voices failed this test.
+    asked = []
+    monkeypatch.setattr(voices_module, "list_sapi_voices", lambda: asked.append(True) or [])
     async with serve(core) as client:
         r = await client.get("/voices", headers=AUTH)
     assert r.status_code == 200 and r.json() == {"voices": []}
+    assert asked == [True]  # the route really asked the (patched) SAPI list
 
 
 async def test_voices_returns_only_engine_id_and_name_and_no_key(core, monkeypatch):
