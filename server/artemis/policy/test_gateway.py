@@ -103,7 +103,8 @@ def test_happy_path_event_order(tmp_path):
     assert w.runner.runs == [("main.py", [], 10)]
 
     requested = w.log.of("approval.requested")[0]
-    assert requested.announce.priority == "high" and requested.announce.text == write_approval.summary
+    assert requested.announce.priority == "normal"
+    assert requested.announce.text == f"Approval needed. {write_approval.summary}"
     result = w.log.of("run.result")[0]
     assert result.announce.priority == "high"
     assert result.announce.text == "main.py ran successfully. It printed: Hello, World!"

@@ -75,6 +75,7 @@ MAX_LIST_ENTRIES = 200
 MAX_SCAN_FINDINGS = 50
 SPOKEN_OUTPUT_CHARS = 200
 _SEVERITY_ORDER = ("high", "medium", "low")
+APPROVAL_PREFIX = "Approval needed."  # said before every approval's summary
 
 
 class _ToolError(Exception):
@@ -511,7 +512,11 @@ class ToolGateway(DesktopTools):
                 ),
             )
         await self._state(task_id, "awaiting_approval")
-        await self._emit(task_id, "approval.requested", approval, approval.summary, "high")
+        # Normal, not high: the approval waits for the sentence Artemis is saying instead of cutting it
+        # off, and says plainly that it is an approval (contracts.md §3).
+        # A blocked one already starts with "Blocked:", which is warning enough.
+        spoken = approval.summary if approval.blocking else f"{APPROVAL_PREFIX} {approval.summary}"
+        await self._emit(task_id, "approval.requested", approval, spoken, "normal")
         # What the core holds is redacted too, as the events are; the hash stays the one computed from the real content.
         held = Approval.model_validate(
             {**redact_obj(approval.model_dump(mode="json")), "approval_hash": approval.approval_hash}

@@ -45,7 +45,7 @@ async def test_an_approval_left_open_is_said_again_once(tmp_path):
     approval = s.approvals.pending()[0]
     await until(lambda: reminders(voice))
     await asyncio.sleep(0.2)
-    assert reminders(voice) == [("high", f"Still waiting for your approval. {approval.summary}")]
+    assert reminders(voice) == [("normal", f"Still waiting for your approval. {approval.summary}")]
     s.approvals.resolve(approval.approval_id, "reject", approval.approval_hash)
     await until(lambda: not task.active)
 

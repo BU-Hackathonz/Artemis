@@ -54,7 +54,8 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 ```
 
 `priority`: `low` (progress, may be dropped if speech is busy), `normal` (queued), `high`
-(interrupts: approval requests, run results, errors, cancel). The agent's final answer is `normal`.
+(interrupts: run results, errors, cancel). Approval requests are `normal`: they wait for the line
+being said instead of cutting it off (**Proposed (David)**). The agent's final answer is `normal`.
 `repeat` says the last `normal` or `high` line again.
 
 | `type` | `data` |
@@ -62,7 +63,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 | `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal unless it starts a task (then it is silent and "Working on: …" says the same words once, §5.1); an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
 | `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
 | `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`, then 6 s, then every 9 s while nothing else is said) is `progress` at `low`. A sentence the agent writes beside a tool call is said as `progress` at `low` |
-| `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval`. Still open 10 s later, it is said once more, when Artemis is quiet, as an `agent.message` `progress` at high: "Still waiting for your approval. <summary>" (**Proposed (David)**) |
+| `approval.requested` | `Approval` (below), announced at normal, after whatever Artemis is saying, as "Approval needed. <summary>" (a blocking one says only its summary, which starts "Blocked:"), right after `task.state` `awaiting_approval`. Still open 10 s later, it is said once more, when Artemis is quiet, as an `agent.message` `progress` at normal: "Still waiting for your approval. <summary>" (**Proposed (David)**) |
 | `approval.resolved` | `{approval_id, decision: "approve"\|"reject", by: "user"\|"invalidated"}`, not announced. An invalidated one (files changed, or the task was canceled) carries `"reject"` |
 | `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}`, announced "Created main.py, 1 line." at normal. No tool deletes, so `deleted` is never sent today |
 | `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}`, announced at high by the gateway (§4 samples 4 and 5). `exit_code` is null when the run timed out |
