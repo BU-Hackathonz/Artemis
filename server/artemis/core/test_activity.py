@@ -150,3 +150,23 @@ def test_start_wake_without_whisper_keeps_push_to_talk(tmp_path, caplog):
     core = make_core(Voice(Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False)), tmp_path)
     core.start_wake()  # the fake voice has no _transcribe, like the stub voice
     assert core.wake is None and "needs the Whisper voice" in caplog.text
+
+
+async def test_a_failed_send_is_retried_not_recorded_as_sent(tmp_path):
+    announcer = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False, eleven=Eleven())
+    voice = Voice(announcer)
+    core = make_core(voice, tmp_path)
+    async with serve(core) as client:
+        sid = (await client.post("/sessions", headers={"Authorization": f"Bearer {TOKEN}"})).json()["session_id"]
+        session = core.sessions[sid]
+        real, calls = session.voice_activity, {"n": 0}
+
+        async def flaky(state, engine):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("one bad emit")
+            await real(state, engine)
+
+        session.voice_activity = flaky
+        voice.busy_listening = True
+        await wait_until(lambda: any(s == "listening" for s, _ in activity(core)), 1)
