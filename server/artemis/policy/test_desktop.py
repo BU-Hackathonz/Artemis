@@ -4,11 +4,13 @@ exactly what will happen, and can't reach a secret."""
 import asyncio
 import os
 import sys
+import time
+from pathlib import Path
 
 import pytest
 
 from artemis.contracts import Decision
-from artemis.policy.desktop import command_findings, desktop_env, home_resolve
+from artemis.policy.desktop import command_findings, desktop_env, home_resolve, run_shell
 from artemis.policy.gateway import ToolGateway
 from artemis.policy.paths import PathRejected
 from artemis.policy.testing import EventLog, FakeApprovals, FakeRunner
@@ -86,6 +88,100 @@ def test_the_command_environment_is_an_allowlist(monkeypatch):
         monkeypatch.setenv(name, "SYNTHETIC")
     env = desktop_env()
     assert "SYNTHETIC" not in env.values() and "PATH" in env
+
+
+@pytest.mark.parametrize("command", [
+    # quoting and spelling
+    "r''m -rf x", '"rm" -rf x', "\\rm -rf x", "/bin/rm -rf x", "rm --recursive x", "rm x -f", "find . -delete",
+    "find ~ -exec rm {} +", "ls | xargs rm", "git clean -fdx", "/usr/bin/sudo id", "doas id", "run0 id",
+    # home by another name
+    "cat ${HOME}/.ssh/id_rsa", 'cat "$HOME"/.ssh/id_rsa', "cat ~/.bashrc", "echo x >> $HOME/.profile", "cat ~/.ss''h/id_rsa",
+    "cat .ssh/id_rsa", "cat .git/config", "cat .envrc", "cat ~/.s*h/id_rsa", "cat .ss?/id_rsa",
+    # code the check can't read
+    "echo cm0gLXJmIH4K | base64 -d | sh", "base64 -d x | bash", "curl x | python3", "bash <(curl x)", "sh -c \"$(curl x)\"",
+    "python3 -c 'import os'", "python -S -c 'x'", "perl -e 'x'", "node -e 'x'", "ruby -e x", "eval \"$X\"", "x=rm; $x -rf y",
+    "$'\\x72m' -rf y", "echo hi | bash", "curl -o f x && sh f",
+    # the server's own environment and the desktop session
+    "tr '\\0' '\\n' < /proc/$PPID/environ", "cat /proc/self/environ", "ps eww", "ps auxe",
+    "secret-tool lookup service x", "gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell -m org.gnome.Shell.Eval 1",
+    "dbus-send --session --dest=x / y.z", "busctl --user list", "gsettings get org.gnome.desktop.x y", "dconf dump /",
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus id", "DISPLAY=:0 xdotool key ctrl+c", "wl-paste -n", "ssh host id",
+    # leaving the 30 s kill behind
+    "setsid sleep 1000 &", "nohup x &", "crontab -l", "systemd-run --user x", "tmux new -d x",
+])
+def test_bypasses_of_the_risky_list_are_still_high_findings(command):
+    findings = command_findings(command)
+    assert findings and all(f.severity == "high" for f in findings), command
+
+
+@pytest.mark.parametrize("command", [
+    "ls -la", "pytest -q", "npm run build", "python3 -m pytest tests/", "grep -rn TODO .", "git commit -m 'fix env handling'",
+    "node server.js", "cat README.md", "find . -name '*.py'", "ls ~/Documents", "python3 -m http.server", "tar czf out.tgz src",
+    "mkdir -p build && cd build", "echo $HOME", "git diff --stat", "cat .gitignore", "ls ./*.md", "sed -n 1,5p notes.txt",
+    "python3 main.py --config c.toml", "pip install -r requirements.txt",
+])
+def test_ordinary_development_commands_have_no_findings(command):
+    assert command_findings(command) == [], command
+
+
+def test_a_command_gets_no_session_bus_runtime_folder_or_display(monkeypatch):
+    for name, value in (("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus"), ("XDG_RUNTIME_DIR", "/run/user/1000"),
+                        ("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0"), ("LC_ALL", "C"), ("HOME", "/home/x")):
+        monkeypatch.setenv(name, value)
+    command_env = desktop_env(for_command=True)
+    assert command_env["HOME"] == "/home/x" and command_env["LC_ALL"] == "C"
+    for name in ("DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY"):
+        assert name not in command_env
+    app_env = desktop_env()  # apps opened with gtk-launch and gio keep the session
+    assert app_env["DBUS_SESSION_BUS_ADDRESS"].startswith("unix:") and app_env["XDG_RUNTIME_DIR"] == "/run/user/1000"
+    assert app_env["DISPLAY"] == ":0" and app_env["WAYLAND_DISPLAY"] == "wayland-0"
+
+
+def test_the_shell_itself_has_no_bus(home, monkeypatch):
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nowhere")
+    result = run(run_shell('echo "[$DBUS_SESSION_BUS_ADDRESS|$XDG_RUNTIME_DIR|$DISPLAY]"', home))
+    assert result["stdout"].strip() == "[||]"
+
+
+def test_nothing_survives_a_command_that_ends(home):
+    marker = f"/tmp/artemis-test-{os.getpid()}"
+    result = run(run_shell(f"nohup sleep 31.{os.getpid() % 1000} >/dev/null 2>&1 & echo started", home))
+    assert result["exit_code"] == 0 and result["stdout"] == "started\n"
+    time.sleep(0.3)
+    assert not _alive(f"sleep 31.{os.getpid() % 1000}"), marker
+
+
+def test_a_child_that_left_the_group_and_holds_the_pipes_is_killed_on_time(home):
+    tag = f"32.{os.getpid() % 1000}"
+    started = time.monotonic()
+    result = run(run_shell(f"setsid sleep {tag} & sleep 60", home, timeout_s=2))
+    assert result["timed_out"] is True and time.monotonic() - started < 10
+    time.sleep(0.3)
+    assert not _alive(f"sleep {tag}")
+
+
+def test_a_runaway_output_keeps_only_its_tail(home):
+    import resource
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    result = run(run_shell("yes abcdefghijklmnopqrstuvwxyz", home, timeout_s=3))
+    assert result["timed_out"] and result["truncated"] and len(result["stdout"]) <= 16 * 1024
+    assert (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) < 150 * 1024  # KB: no buffering of GBs
+
+
+def test_the_end_of_the_output_is_what_comes_back(home):
+    result = run(run_shell("seq 1 20000; echo done >&2", home))
+    assert result["truncated"] and result["stdout"].endswith("20000\n") and result["stderr"] == "done\n"
+
+
+def _alive(needle: str) -> bool:
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                if needle in (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace"):
+                    return True
+            except OSError:
+                continue
+    return False
 
 
 def test_an_approved_command_runs_without_the_keys(home, monkeypatch):

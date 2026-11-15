@@ -9,8 +9,9 @@ The gate checks the hash again after the decision, so a swapped file or a moved 
 - Paths: under the home folder (or the projects folder) only, links resolved, and a denylist no
   approval overrides: every dot-entry at the top of home, .env and .git anywhere, the runtime folder.
 - Opening never runs anything: executables, .desktop files, scripts and AppImages are refused.
-- Commands: one `bash -c` line, 30 s, capped output, an allowlisted environment (no keys, no ssh
-  agent). The denylist can't bind what a command does, so risky commands are high findings and
+- Commands: one `bash -c` line, 30 s, the tail of the output, an allowlisted environment (no keys, no
+  ssh agent, no session bus, runtime folder or display: only apps get those), and nothing it started
+  outlives it. The denylist can't bind what a command does, so risky commands are high findings and
   need the blocking key (Shift+Enter).
 - Typing: only the GNOME shell can type on Wayland. The island reports the focused window, the
   developer approves typing into that window, and the island types only while it has the focus.
@@ -73,26 +74,65 @@ _TERMINALS = re.compile(r"ptyxis|gnome-terminal|org\.gnome\.terminal|org\.gnome\
 # Keys that open a launcher or a shell rather than act in the focused window.
 _LAUNCHER_KEYS = re.compile(r"^((ctrl|shift|alt)\+)*(super|super_l|super_r|meta)$|super\+|"
                             r"^alt\+f2$|^ctrl\+alt\+(t|delete|backspace)$|^(ctrl\+)?alt\+f[1-9]$", re.I)
-# What a command may not do without the blocking key.
+# What a command may not do without the blocking key. A heuristic, not a boundary: a shell can name
+# anything in a way no pattern reads, so every rule is checked on the line as written and on the line
+# with its quotes and backslashes removed (r''m, "rm", \rm). The environment and the group kill in
+# run_shell are the other layers.
+_B = r"(?:^|[^\w.-])"  # start of a word: also after / so that /usr/bin/sudo counts
+_SHELL = r"(?:\S*/)?(?:ba|z|da|k|c|fi|a)?sh"
+_INTERP = r"(?:\S*/)?(?:python[\d.]*|perl|ruby|node|nodejs|php|lua|deno|bun)"
+_HOME_DOT = r"(?:~|\$HOME|\$\{HOME\}|/home/[^/\s]+|/Users/[^/\s]+|/root)/+\."
 _RISKY = [
-    (re.compile(r"(^|[\s;&|(])(sudo|su|pkexec|doas)\b"), "it asks for administrator rights"),
-    (re.compile(r"\b(curl|wget|fetch)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|da)?sh\b"), "it runs a script straight from the internet"),
-    (re.compile(r"\brm\s+(-[a-zA-Z]*[rRf][a-zA-Z]*\s+)"), "it deletes files"),
-    (re.compile(r"\b(dd|mkfs(\.\w+)?|shred|wipefs)\b"), "it can overwrite a disk"),
-    (re.compile(r"(^|[\s;&|])(chmod|chown)\s+-R\b"), "it changes permissions on many files"),
-    (re.compile(r"(^|[\s'\"=:/])~?/?\.(ssh|gnupg|aws|kube|docker|netrc|password-store|pki|mozilla|config|local|artemis)\b"),
+    (re.compile(_B + r"(sudo|su|pkexec|doas|run0)\b"), "it asks for administrator rights"),
+    (re.compile(r"\b(curl|wget|fetch)\b[^;&]*(\|\s*(sudo\s+)?(" + _SHELL + "|" + _INTERP + r")\b|<\()|"
+                r"\b(curl|wget)\b.*(&&|;)\s*(sudo\s+)?(" + _SHELL + r"|chmod\s+\+?[ugoa]*x)\b|\$\(\s*(curl|wget)\b"),
+     "it runs a script straight from the internet"),
+    (re.compile(r"\|\s*(sudo\s+|env\s+|exec\s+)*(" + _SHELL + "|" + _INTERP + r")\b|(^|[\s;&|])(source|\.)\s+<\(|"
+                + _SHELL + r"\s+<\(|" + _B + r"eval\b|" + _B + _SHELL + r"\s+(-[a-zA-Z]*c|<)"),
+     "it feeds text to a shell or interpreter, so the check can't read what runs"),
+    (re.compile(_B + _INTERP + r"(\s+-[A-Za-z-]+)*\s+(-[A-Za-z]*[ceErp]\b|--eval|--print)"), "it runs code the check can't read"),
+    (re.compile(r"\b(base64|base32)\s+(-\w*[dD]|--decode)|\bxxd\s+-\w*r|\bopenssl\s+(enc|base64)\b[^;&|]*-d\b|\$'[^']*\\[xuU0-7]"),
+     "it hides what it runs"),
+    (re.compile(r"(^|[;&|(]\s*|&&\s*)(\$\{?[A-Za-z_]\w*\}?|\$\(|`)|\{\s*(rm|sudo|su|dd)\s*,"), "it runs a command it builds at run time"),
+    (re.compile(_B + r"rm\b[^;&|]*?\s(-[a-zA-Z]*[rRf][a-zA-Z]*|--recursive|--force|--no-preserve-root)(\s|$)|"
+                r"\bfind\b[^;&|]*(-delete\b|-exec(dir)?\s+rm\b)|\bxargs\b[^;&|]*\brm\b|\bgit\s+clean\b|"
+                r"\brsync\b[^;&|]*--(delete|remove-source)"), "it deletes files"),
+    (re.compile(r"\b(dd|mkfs(\.\w+)?|shred|wipefs|fdisk|sfdisk|parted|cryptsetup)\b|/dev/(sd|nvme|mmc|vd|loop)"), "it can overwrite a disk"),
+    (re.compile(r"(^|[\s;&|])(chmod|chown)\s+(-\w+\s+)*(-R|--recursive)\b"), "it changes permissions on many files"),
+    (re.compile(r"(^|[\s'\"=:/])~?/?\.(ssh|gnupg|aws|kube|docker|netrc|password-store|pki|mozilla|config|local|artemis|"
+                r"bash\w*|profile|zsh\w*|npmrc|pypirc|gitconfig|git-credentials|cargo|gem|mc|var|cache|thunderbird)\b|" + _HOME_DOT +
+                r"|(^|[\s/])\.[^\s/]*[*?\[]"),
      "it names a private folder"),
-    (re.compile(r"\.env\b|/\.git\b|launch\.json|XDG_RUNTIME_DIR|/run/user/"), "it names a secret or private file"),
-    (re.compile(r"\b(printenv|env)\b\s*($|[|;&>])"), "it prints the environment"),
+    (re.compile(r"\.env|(^|[\s'\"=:/])\.git\b|launch\.json|XDG_RUNTIME_DIR|/run/user/|/var/run/user/"), "it names a secret or private file"),
+    (re.compile(r"/proc/(?!(cpuinfo|meminfo|version|loadavg|uptime|stat|sys/))|\bps\s+[a-zA-Z]*e[a-zA-Z]*\b"),
+     "it can read other programs' memory and environment"),
+    (re.compile(r"\b(printenv|env|export\s+-p|declare\s+-[xp]+)\b\s*($|[|;&>])"), "it prints the environment"),
+    (re.compile(_B + r"(secret-tool|gdbus|dbus-send|dbus-monitor|dbus-run-session|busctl|qdbus\d*|gsettings|dconf|keyctl|"
+                r"gnome-keyring(-daemon)?|kwallet\w*|seahorse|loginctl)\b|(DBUS_SESSION_BUS_ADDRESS|DISPLAY|WAYLAND_DISPLAY)="),
+     "it talks to the desktop session, keyring or settings"),
+    (re.compile(_B + r"(xdotool|ydotool|dotool|wtype|xte|xclip|xsel|wl-copy|wl-paste|wmctrl|xinput|grim|scrot|gnome-screenshot|import)\s"),
+     "it can type, read the clipboard or watch the screen without the typing approval"),
+    (re.compile(_B + r"(ssh|scp|sftp|ssh-add|ssh-keygen|ssh-agent|gpg2?|aws|gcloud|az|kubectl|helm|doctl|flyctl|heroku)\s"),
+     "it uses saved keys or logins"),
+    (re.compile(_B + r"(setsid|nohup|disown|daemonize|crontab|systemd-run|systemctl|machinectl|launchctl|batch)\b|(^|[;&|(]\s*|&&\s*)(at|tmux|screen)\s"),
+     "it can keep running, or come back, after Artemis stops it"),
 ]
-# The only variables a command gets (Avery's review point 3): no keys, tokens or ssh agent.
-_ENV_ALLOW = ("PATH", "HOME", "LANG", "LANGUAGE", "TERM", "USER", "LOGNAME", "SHELL", "XDG_RUNTIME_DIR",
-              "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "DBUS_SESSION_BUS_ADDRESS")
+# The variables a command gets (Avery's review point 3): no keys, tokens or ssh agent, and no way to
+# the desktop session: no session bus, no runtime folder (where the bus and the Wayland socket live)
+# and no display, so a command can't reach the keyring, GNOME Shell or the screen.
+_ENV_COMMAND = ("PATH", "HOME", "LANG", "LANGUAGE", "TERM", "USER", "LOGNAME", "SHELL")
+# Apps Artemis opens (gtk-launch, gio) do need the session.
+_ENV_APP = ("XDG_RUNTIME_DIR", "DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
+            "DBUS_SESSION_BUS_ADDRESS")
+_ENV_ALLOW = _ENV_COMMAND + _ENV_APP
+RUN_MARKER = "ARTEMIS_RUN_ID"  # in a command's environment, to find what it left behind
 
 
-def desktop_env() -> dict[str, str]:
-    """The allowlisted environment for commands and the apps Artemis opens."""
-    env = {k: v for k, v in os.environ.items() if k in _ENV_ALLOW or k.startswith("LC_")}
+def desktop_env(for_command: bool = False) -> dict[str, str]:
+    """The allowlisted environment: for the apps Artemis opens (with the session's bus and display)
+    or, with `for_command`, for a shell command (without them)."""
+    allow = _ENV_COMMAND if for_command else _ENV_ALLOW
+    env = {k: v for k, v in os.environ.items() if k in allow or k.startswith("LC_")}
     env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
     return env
 
@@ -149,9 +189,10 @@ def file_sha256(path: Path) -> str:
 
 def command_findings(command: str) -> list[Finding]:
     """High-severity findings for a command line (the blocking key is then needed to approve it)."""
+    plain = re.sub(r"""['"\\]""", "", command)
     found = []
     for pattern, why in _RISKY:
-        if pattern.search(command):
+        if pattern.search(command) or pattern.search(plain):
             found.append(Finding(rule="desktop-command", severity="high", path="command", line=1,
                                  message=f"This command needs a second look: {why}."))
     return found
@@ -219,30 +260,89 @@ async def _spawn_detached(argv: list[str]) -> None:
 
 # ----- commands -----
 
+class _Tail:
+    """The last `cap` bytes of a stream and how many bytes there were: memory stays bounded however
+    much a command prints."""
+
+    def __init__(self, cap: int = MAX_COMMAND_OUTPUT) -> None:
+        self.cap, self.total, self.data = cap, 0, b""
+
+    async def drain(self, stream: asyncio.StreamReader) -> None:
+        while chunk := await stream.read(65536):
+            self.total += len(chunk)
+            self.data = (self.data + chunk)[-self.cap:]
+
+
+def _marked(run_id: str) -> list[int]:
+    """Processes that carry this run's marker, wherever they went (setsid, nohup, a daemon)."""
+    needle = f"{RUN_MARKER}={run_id}".encode() + b"\0"
+    found = []
+    for entry in os.scandir("/proc"):
+        if entry.name.isdigit() and int(entry.name) != os.getpid():
+            try:
+                with open(f"/proc/{entry.name}/environ", "rb") as f:
+                    if needle in f.read():
+                        found.append(int(entry.name))
+            except OSError:
+                continue
+    return found
+
+
+def _kill_run(pgid: int, run_id: str) -> None:
+    """Kill the command's group, then whatever still carries its marker (a child that left the group
+    with setsid). Children of children that are racing to fork get a few passes."""
+    for _ in range(4):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            left = _marked(run_id)
+        except OSError:  # no /proc: the group kill is all there is
+            return
+        if not left:
+            return
+        for pid in left:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
 async def run_shell(command: str, cwd: Path, timeout_s: int = COMMAND_TIMEOUT_S) -> dict:
+    """`bash -c command`: a timeout, the last 16 KB of each stream kept (never the whole output), and
+    nothing the command started survives it: when the shell ends or is stopped, its group and anything
+    that left it with setsid are killed, and the pipes are not waited on, so a child that keeps them
+    open can't hold the tool past its time."""
+    run_id = uuid.uuid4().hex
+    env = desktop_env(for_command=True)
+    env[RUN_MARKER] = run_id
     proc = await asyncio.create_subprocess_exec(
         "bash", "-c", command, cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env=desktop_env(), start_new_session=True)
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, start_new_session=True)
+    out, err = _Tail(), _Tail()
+    readers = [asyncio.ensure_future(out.drain(proc.stdout)), asyncio.ensure_future(err.drain(proc.stderr))]
     timed_out = False
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
-        timed_out = isinstance(exc, asyncio.TimeoutError)
+        await asyncio.wait_for(proc.wait(), timeout=timeout_s)
+        await asyncio.wait(readers, timeout=0.5)  # the last of the output, if nobody holds the pipes
+    except asyncio.TimeoutError:
+        timed_out = True
+    finally:  # also when cancelled
+        await asyncio.to_thread(_kill_run, proc.pid, run_id)
         try:
-            os.killpg(proc.pid, signal.SIGKILL)  # the whole group: a command's children go too
-        except ProcessLookupError:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
             pass
-        out, err = await proc.communicate()
-        if not timed_out:
-            raise
-    truncated = len(out) > MAX_COMMAND_OUTPUT or len(err) > MAX_COMMAND_OUTPUT
+        await asyncio.wait(readers, timeout=2)
+        for reader in readers:
+            reader.cancel()
     return {
         "exit_code": proc.returncode,
         "timed_out": timed_out,
-        "stdout": out[-MAX_COMMAND_OUTPUT:].decode(errors="replace"),
-        "stderr": err[-MAX_COMMAND_OUTPUT:].decode(errors="replace"),
-        "truncated": truncated,
+        "stdout": out.data.decode(errors="replace"),
+        "stderr": err.data.decode(errors="replace"),
+        "truncated": out.total > MAX_COMMAND_OUTPUT or err.total > MAX_COMMAND_OUTPUT,
     }
 
 
