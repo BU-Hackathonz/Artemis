@@ -8,11 +8,21 @@ import pytest
 
 from artemis.agent.stub import StubAgent
 from artemis.conversation.controller import NVDA_RATE_LINE
-from artemis.contracts import Approval, Decision, EventDraft, Failed
+from artemis.contracts import (
+    AgentMessageData,
+    Announce,
+    Approval,
+    Decision,
+    EventDraft,
+    Failed,
+    RunResult,
+    TaskRequest,
+)
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
-from artemis.core.session import normalize
+from artemis.core.session import Session, normalize, spoken_error
+from artemis.voice.stub import StubVoice
 from artemis.policy.testing import FakeRunner
 
 TOKEN = "test-token"
@@ -222,6 +232,63 @@ async def test_cancel_while_awaiting_approval(client, core):
     assert session.approvals.pending() == []
 
 
+async def test_cancel_report_is_not_cut_off_by_a_second_canceled(client, core, voice):
+    """High priority interrupts: a "Canceled." right after the gateway's "Canceled. Nothing was
+    written." left only "Canceled." audible, losing what was (not) applied (contracts.md §1)."""
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "hello"})).json()["task_id"]
+    await wait_for(session, lambda s: pending(s) is not None)
+    await client.post(f"/tasks/{tid}/cancel", headers=AUTH)
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    assert voice.spoken[-1] == ("high", "Canceled. Nothing was written.")
+    assert ("high", "Canceled.") not in voice.spoken
+    final = [e for e in session.bus.history if e.type == "task.state"][-1]
+    assert final.data["state"] == "canceled" and final.announce is None
+
+
+async def test_cancel_with_nothing_to_report_says_canceled(client, core, voice):
+    agent = SlowAgent()
+    core.make_agent = lambda: agent
+    sid, session = await start(client, core)
+    tid = (await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                             json={"client_request_id": "cr_1", "source": "keyboard", "text": "x"})).json()["task_id"]
+    await wait_for(session, lambda s: s.tasks[tid].state == "working")
+    await client.post(f"/tasks/{tid}/cancel", headers=AUTH)
+    await wait_for(session, lambda s: not s.tasks[tid].active)
+    assert voice.spoken[-1] == ("high", "Canceled.")
+    # The next request is accepted.
+    second = await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                               json={"client_request_id": "cr_2", "source": "keyboard", "text": "y"})
+    assert second.status_code == 200
+    agent.release.set()
+    await wait_for(session, lambda s: s.active_task is None)
+
+
+async def test_cancel_before_the_task_starts_says_canceled_and_ends_clean(client, core, voice):
+    """A cancel that lands before the job's first step: _run never runs, so nothing said
+    "Canceled." and the task stayed queued, refusing every later request (failure-paths review)."""
+    agent = SlowAgent()
+    core.make_agent = lambda: agent
+    sid, session = await start(client, core)
+    task = await session.submit(TaskRequest(client_request_id="cr_1", source="keyboard", text="x"))
+    assert await session.cancel(task.task_id)  # no await in between: the job has not started
+    assert task.state == "canceled" and session.active_task is None
+    assert voice.spoken[-2:] == [("normal", "Working on: x"), ("high", "Canceled.")]
+    assert [e.data["state"] for e in session.bus.history if e.type == "task.state"] == ["queued", "canceled"]
+    assert session.history[-1].outcome == "canceled"
+    assert await session.cancel(task.task_id) is False  # already over: nothing more is said
+    await asyncio.sleep(0)
+    assert task.heartbeat.cancelled()
+    # The next request is accepted and runs.
+    second = await client.post(f"/sessions/{sid}/tasks", headers=AUTH,
+                               json={"client_request_id": "cr_2", "source": "keyboard", "text": "y"})
+    assert second.status_code == 200
+    agent.release.set()
+    await wait_for(session, lambda s: s.active_task is None)
+    assert session.tasks[second.json()["task_id"]].state == "succeeded"
+
+
 async def test_agent_crash_is_spoken_not_silent(client, core, voice):
     class Boom:
         async def run(self, task, tools, emit):
@@ -315,6 +382,19 @@ async def test_speech_controls(client, voice):
 def test_normalize():
     assert normalize("Cancel that!") == "cancel that"
     assert normalize("  NEVER   mind. ") == "never mind"
+
+
+@pytest.mark.parametrize("message, recovery, line", [
+    ("Claude is busy", "Try again.", "Claude is busy. Try again."),  # no stop: one is added
+    ("Claude is busy.", "Try again.", "Claude is busy. Try again."),  # already ends with .
+    ("Is Claude busy?", "Try again.", "Is Claude busy? Try again."),  # keeps its own ?
+    ("Claude is busy!", "Try again.", "Claude is busy! Try again."),  # keeps its own !
+    ("Claude is busy", "", "Claude is busy."),  # empty recovery: no stray space or second stop
+    ("", "Try again.", "Try again."),  # no message: the recovery alone
+])
+def test_spoken_error_ends_each_sentence_once(message, recovery, line):
+    assert spoken_error(message, recovery) == line
+    assert ".." not in line
 
 
 # ----- SSE replay -----
@@ -653,6 +733,14 @@ async def test_ready_line_names_the_chord_and_is_spoken_once(client, core):
     assert lines[0].announce.text == "Artemis is ready. Hold Control Shift Space and speak, or type a request."
 
 
+async def test_ready_line_speaks_exactly_the_chord_the_client_sent(client, core):
+    sid, session = await start(client, core)
+    body = {"shortcut": "Control+Alt+Space"}
+    assert (await client.post(f"/sessions/{sid}/ready", headers=AUTH, json=body)).status_code == 204
+    [line] = [e for e in session.bus.history if e.type == "agent.message"]
+    assert line.announce.text == "Artemis is ready. Hold Control Alt Space and speak, or type a request."
+
+
 async def test_ready_line_without_a_chord_points_to_start_listening(client, core):
     sid, session = await start(client, core)
     assert (await client.post(f"/sessions/{sid}/ready", headers=AUTH, json={})).status_code == 204
@@ -736,7 +824,7 @@ async def test_voice_errors_are_spoken_and_bad_actions_rejected(client, core, vo
     assert [e["code"] for e in errors] == ["mic_error", "mic_error"]
     assert errors[0]["message"] == "No input device"
     assert errors[1]["message"] == "The microphone didn't work."
-    assert (("high", "No input device Check the microphone, or type the request.")) in voice.spoken
+    assert (("high", "No input device. Check the microphone, or type the request.")) in voice.spoken
     assert not [e for e in session.bus.history if e.type == "transcript.final"]  # no transcript came back
     assert not session.tasks
 
@@ -793,3 +881,158 @@ def test_installed_scanner_is_used_quietly(core_main, monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="artemis.core.main"):
         assert core_main.make_scan() is scan.scan
     assert "not installed" not in caplog.text
+
+
+# ----- result earcons (ARTEMIS_RESULT_EARCONS, contracts.md 5.5) -----
+
+
+class ListeningVoice(FakeVoice):
+    listening = False
+
+
+def run_draft(exit_code, timed_out=False, text="The program ran successfully."):
+    result = RunResult(
+        op_id="op_t", preset="python", exit_code=exit_code, timed_out=timed_out,
+        duration_ms=5, stdout_tail="", stderr_tail="", truncated=False,
+    )
+    return EventDraft(type="run.result", announce=Announce(text=text, priority="high"),
+                      data=result.model_dump(mode="json"))
+
+
+def approval_draft(text="Write three files. Approve?"):
+    approval = Approval(approval_id="apr_t", kind="write_files", approval_hash="sha256:t", summary=text)
+    return EventDraft(type="approval.requested", announce=Announce(text=text, priority="high"),
+                      data=approval.model_dump(mode="json"))
+
+
+def session_with(tmp_path, voice, played, **kwargs):
+    def earcon(name):
+        played.append(name)
+        return 0.0
+
+    return Session("ses_t", voice=voice, runner=None, agent=None, projects_dir=tmp_path,
+                   earcon=earcon, **kwargs)
+
+
+async def test_result_earcons_are_off_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("ARTEMIS_RESULT_EARCONS", raising=False)
+    voice, played = ListeningVoice(), []
+    session = session_with(tmp_path, voice, played)
+    await session.emit(run_draft(0))
+    await session.emit(approval_draft())
+    assert played == []
+    assert [text for _, text in voice.spoken] == ["The program ran successfully.", "Write three files. Approve?"]
+
+
+async def test_env_turns_result_earcons_on_at_startup(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARTEMIS_RESULT_EARCONS", "on")
+    voice, played = ListeningVoice(), []
+    session = session_with(tmp_path, voice, played, result_earcons=None)
+    await session.emit(run_draft(0))
+    assert played == ["success"]
+
+
+async def test_each_result_and_approval_plays_its_own_earcon_before_the_words(tmp_path):
+    voice, played = ListeningVoice(), []
+    session = session_with(tmp_path, voice, played, result_earcons=True)
+    await session.emit(run_draft(0))
+    await session.emit(run_draft(1, text="The program failed with exit code 1."))
+    await session.emit(run_draft(None, timed_out=True, text="The program was stopped after 30 seconds."))
+    await session.emit(approval_draft())
+    assert played == ["success", "failure", "failure", "approval"]
+    assert [text for _, text in voice.spoken] == [
+        "The program ran successfully.",
+        "The program failed with exit code 1.",
+        "The program was stopped after 30 seconds.",
+        "Write three files. Approve?",
+    ]
+
+
+async def test_no_earcon_for_other_events_or_for_silent_results(tmp_path):
+    voice, played = ListeningVoice(), []
+    session = session_with(tmp_path, voice, played, result_earcons=True)
+    progress = EventDraft(type="agent.message", announce=Announce(text="Still working.", priority="low"),
+                          data=AgentMessageData(text="Still working.", kind="progress").model_dump())
+    await session.emit(progress)
+    silent = EventDraft(type="run.result", data=run_draft(0).data)  # a result with nothing to say
+    await session.emit(silent)
+    assert played == []
+    assert [text for _, text in voice.spoken] == ["Still working."]
+
+
+async def test_no_earcon_while_push_to_talk_is_listening_but_the_words_are_still_said(tmp_path):
+    voice, played = ListeningVoice(), []
+    voice.listening = True
+    session = session_with(tmp_path, voice, played, result_earcons=True)
+    await session.emit(run_draft(0))
+    await session.emit(approval_draft())
+    assert played == []
+    assert len(voice.spoken) == 2
+
+
+async def test_the_tone_finishes_before_the_line_is_emitted(tmp_path):
+    import time
+
+    class TimedVoice(ListeningVoice):
+        def __init__(self):
+            super().__init__()
+            self.line_at = None
+
+        async def announce(self, text, priority):
+            self.line_at = time.monotonic()
+            await super().announce(text, priority)
+
+    voice, cue_at = TimedVoice(), []
+
+    def tone(name):
+        cue_at.append(time.monotonic())
+        return 0.2
+
+    session = Session("ses_t", voice=voice, runner=None, agent=None, projects_dir=tmp_path,
+                      earcon=tone, result_earcons=True)
+    await session.emit(run_draft(0))
+    assert len(cue_at) == 1 and voice.line_at is not None
+    # The core waits the tone's 0.2 s; Windows' timer (about 15.6 ms ticks) can wake asyncio a tick early.
+    assert voice.line_at - cue_at[0] >= 0.2 - 0.05
+    assert [text for _, text in voice.spoken] == ["The program ran successfully."]
+
+
+@pytest.mark.parametrize("returned", [5.0, float("nan"), -1.0, "0.2", None, True])
+async def test_the_wait_is_capped_and_bad_durations_are_ignored(tmp_path, returned):
+    from artemis.core.session import _cue_wait
+
+    assert 0.0 <= _cue_wait(returned) <= 0.3
+    voice = ListeningVoice()
+    session = Session("ses_t", voice=voice, runner=None, agent=None, projects_dir=tmp_path,
+                      earcon=lambda name: returned, result_earcons=True)
+    await session.emit(run_draft(0))
+    assert [text for _, text in voice.spoken] == ["The program ran successfully."]
+
+
+async def test_no_earcon_during_the_whole_push_to_talk_cycle(tmp_path):
+    voice, played = ListeningVoice(), []
+    voice.busy_listening = True  # rising tone, mic open, or post-roll; listening itself is False
+    session = session_with(tmp_path, voice, played, result_earcons=True)
+    await session.emit(run_draft(0))
+    await session.emit(approval_draft())
+    assert played == []
+    assert len(voice.spoken) == 2
+
+
+async def test_a_failing_earcon_never_stops_the_spoken_line(tmp_path):
+    voice = ListeningVoice()
+
+    def broken(name):
+        raise RuntimeError("no audio device")
+
+    session = Session("ses_t", voice=voice, runner=None, agent=None, projects_dir=tmp_path,
+                      earcon=broken, result_earcons=True)
+    await session.emit(run_draft(1, text="The program failed with exit code 1."))
+    assert [text for _, text in voice.spoken] == ["The program failed with exit code 1."]
+
+
+async def test_stub_voice_with_result_earcons_on_does_not_fail(tmp_path):
+    session = Session("ses_t", voice=StubVoice(), runner=None, agent=None, projects_dir=tmp_path,
+                      result_earcons=True)
+    await session.emit(run_draft(0))
+    await session.emit(approval_draft())

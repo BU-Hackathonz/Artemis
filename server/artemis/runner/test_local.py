@@ -72,10 +72,38 @@ async def test_no_secrets_no_stdin_no_stray_tilde(runner, monkeypatch):
     assert not (Path(ref.root) / "~").exists()
 
 
-async def test_output_is_capped(runner):
-    ref = project(runner, {"main.py": "import sys\nsys.stdout.write('x' * 300000)\n"})
+# Windows writes CRLF, Linux LF. The child writes bytes so both are tested on every OS.
+EOLS = ["\n", "\r\n"]
+
+
+@pytest.mark.parametrize("eol", EOLS)
+async def test_output_is_capped(runner, eol):
+    payload = ("x" * 99 + eol) * 3000
+    ref = project(runner, {"main.py": f"import sys\nsys.stdout.buffer.write({payload!r}.encode())\n"})
     result = await runner.run(ref, "main.py", [])
-    assert result.truncated and len(result.stdout_tail) == 64 * 1024
+    assert result.truncated and 64 * 1024 - 100 < len(result.stdout_tail) <= 64 * 1024
+    lines = result.stdout_tail.splitlines()
+    assert lines[0] == ""  # the cut-off line is dropped, whatever its line ending
+    assert set(lines[1:]) == {"x" * 99}
+
+
+@pytest.mark.parametrize("eol", EOLS)
+async def test_a_secret_the_cut_goes_through_leaves_no_piece(runner, eol):
+    """Only the last 64 KB is kept. If the cut lands inside a secret, the rest of it no longer
+    matches the secret, so redaction would miss it: the runner drops that cut-off word."""
+    key = "sk-ant-api03-FAKEcutthrough0123456789abcdefghijklmnopqrstuvwxyz"
+    header = key + " tail" + eol
+    # Total output is 64 KB + 25 bytes, so the kept tail starts 25 bytes into the key.
+    filler = "w" * (64 * 1024 + 25 - len(header.encode()))
+    code = (
+        "import sys\n"
+        f"sys.stdout.buffer.write({header!r}.encode())\n"
+        f"sys.stdout.buffer.write({filler!r}.encode())\n"
+    )
+    result = await runner.run(project(runner, {"main.py": code}), "main.py", [])
+    assert result.truncated
+    assert not any(key[i : i + 12] in result.stdout_tail for i in range(len(key) - 11))
+    assert result.stdout_tail.splitlines()[0] == " tail"
 
 
 def test_writes_stay_inside_and_report_changes(runner):
@@ -119,6 +147,25 @@ def test_is_core_python_refuses_core_interpreter_and_venv(tmp_path, monkeypatch)
     # Outside a venv only the exact interpreter is refused, not everything under the prefix.
     monkeypatch.setattr(local.sys, "base_prefix", str(core_venv))
     assert not local._is_core_python(core_venv / "lib" / "helper.py")
+
+
+@pytest.mark.skipif(local.IS_WINDOWS, reason="symlinked venvs are the Linux and macOS layout")
+def test_symlinked_venv_python_does_not_make_the_system_python_ours(tmp_path, monkeypatch):
+    # Ubuntu: a uv venv's bin/python is a symlink to /usr/bin/python3.12 (David's laptop).
+    base = tmp_path / "usr" / "bin"
+    base.mkdir(parents=True)
+    system_python = base / "python3.12"
+    system_python.write_text("")
+    core_venv = tmp_path / "core" / ".venv"
+    (core_venv / "bin").mkdir(parents=True)
+    core_python = core_venv / "bin" / "python"
+    core_python.symlink_to(system_python)
+    monkeypatch.setattr(local.sys, "executable", str(core_python))
+    monkeypatch.setattr(local.sys, "prefix", str(core_venv))
+    monkeypatch.setattr(local.sys, "base_prefix", str(tmp_path / "usr"))
+    assert not local._is_core_python(system_python)  # the system Python runs user code
+    assert local._is_core_python(core_python)  # the venv's own python never does
+    assert local._is_core_python(core_venv / "bin" / "python3")
 
 
 def test_is_core_python_fails_closed_when_a_path_cannot_resolve(tmp_path, monkeypatch):
@@ -207,6 +254,7 @@ class _FakeProc:
 
 def test_windows_tree_kill_uses_taskkill_not_killpg(monkeypatch):
     monkeypatch.setattr(local, "IS_WINDOWS", True)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-FAKEtaskkill")
     ran = []
 
     def fake_run(cmd, **kwargs):
@@ -222,6 +270,7 @@ def test_windows_tree_kill_uses_taskkill_not_killpg(monkeypatch):
     local._kill_tree(proc)
     assert ran[0][0] == ["taskkill", "/T", "/F", "/PID", "4242"]
     assert ran[0][1]["stdin"] == subprocess.DEVNULL
+    assert "ANTHROPIC_API_KEY" not in ran[0][1]["env"] and "PATH" in ran[0][1]["env"]  # never os.environ
     assert proc.killed == 1
 
 
@@ -281,7 +330,7 @@ def _gone(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat") as f:
             return f.read().rsplit(")", 1)[1].split()[0] == "Z"
-    except FileNotFoundError:
+    except OSError:  # gone: the entry can vanish between open and read (ProcessLookupError), or before it
         return True
 
 

@@ -19,3 +19,8 @@ regexes = ['''PRIVATE KEY-----\\nMIIEow''']
 description = "Windows Credential Manager target names in the launcher (infra/credstore.ps1), not secrets"
 targetRules = ["generic-api-key"]
 regexes = ['''^Artemis/Anthropic(ApiKey|WorkspaceId)$''']
+
+[[allowlists]]
+description = "Superseded branch infra/ubuntu-launcher (replaced by infra/ubuntu-launch, #142): its start.sh initialised an empty TOKEN, which generic-api-key reads as a key. No secret; the CI scan reads every branch."
+targetRules = ["generic-api-key"]
+commits = ["78279e2471b0de23dadbb823240f376ac5f61664"]

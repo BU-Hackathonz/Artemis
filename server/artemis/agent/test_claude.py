@@ -20,7 +20,7 @@ from artemis.agent import claude as claude_module  # noqa: E402
 from artemis.agent.claude import ClaudeAgent  # noqa: E402
 from artemis.agent.config import Config  # noqa: E402
 from artemis.agent.context import task_message, vocabulary  # noqa: E402
-from artemis.agent.prompts import SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
+from artemis.agent.prompts import DESKTOP, SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
 from artemis.agent.stub import StubAgent  # noqa: E402
 from artemis.contracts import TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
 from artemis.policy.gateway import ToolGateway  # noqa: E402
@@ -217,7 +217,7 @@ def test_refusal(tmp_path):
     w = World(tmp_path, [refused])
     outcome = asyncio.run(w.run())
     assert outcome == Failed(code="refused", message="I can't help with that request.")
-    assert w.log.spoken() == ["I can't help with that request."]
+    assert w.log.spoken() == []  # the core speaks the Failed outcome, once
     assert w.agent.messages == []  # the refused request is not replayed on the next task
     assert w.approvals.requests == []
 
@@ -234,7 +234,7 @@ def test_max_tokens(tmp_path):
     w = World(tmp_path, [cut_off])
     outcome = asyncio.run(w.run())
     assert outcome == Failed(code="too_long", message="That got too long. Try a smaller request.")
-    assert w.log.spoken() == ["That got too long. Try a smaller request."]
+    assert w.log.spoken() == []
 
 
 def test_max_tokens_with_a_cut_off_tool_call_runs_nothing(tmp_path):
@@ -415,7 +415,7 @@ def test_busy_twice_fails(tmp_path):
     w = World(tmp_path, [api_error(anthropic.RateLimitError, 429), api_error(anthropic.RateLimitError, 429)])
     outcome = asyncio.run(w.run())
     assert outcome.code == "busy" and len(w.client.calls) == 2
-    assert w.log.spoken() == ["Claude is busy, retrying.", "Claude is still busy. Try again in a minute."]
+    assert w.log.spoken() == ["Claude is busy, retrying."]
 
 
 def test_connection_error(tmp_path):
@@ -428,7 +428,25 @@ def test_connection_error(tmp_path):
 def test_other_api_errors_fail_without_a_retry(tmp_path):
     w = World(tmp_path, [api_error(anthropic.BadRequestError, 400)])
     outcome = asyncio.run(w.run())
-    assert outcome.code == "api_error" and len(w.client.calls) == 1
+    assert outcome == Failed(code="api_error", message="Claude returned an error.")
+    assert len(w.client.calls) == 1
+
+
+@pytest.mark.parametrize("error", [
+    lambda: anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")),
+    lambda: api_error(anthropic.AuthenticationError, 401),
+    lambda: api_error(anthropic.PermissionDeniedError, 403),
+    lambda: anthropic.AnthropicError("Could not resolve authentication method"),
+], ids=["offline", "bad_key", "forbidden", "no_key"])
+@pytest.mark.parametrize("mid_task", [False, True])
+def test_an_api_failure_is_left_to_the_core_to_speak(tmp_path, error, mid_task):
+    """The core speaks every Failed once, as "The task failed. <message> You can try again."
+    (high). The agent saying the message too put it in the log twice, the first time at normal
+    priority, cut off at once by the high one (failure-paths review)."""
+    w = World(tmp_path, (hello_script()[:1] if mid_task else []) + [error()])
+    outcome = asyncio.run(w.run())
+    assert isinstance(outcome, Failed)
+    assert w.log.spoken() == (["Starting project hello-world."] if mid_task else [])
 
 
 # ----- prompts, schemas, context -----
@@ -470,22 +488,35 @@ def test_strict_schema_keeps_a_property_named_like_a_keyword():
 
 
 def test_system_prompt_is_frozen_and_covers_the_rules():
-    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network"]:
+    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network",
+                   "what it does as a whole", "never speak symbols", "in the log"]:
         assert phrase in SYSTEM_PROMPT
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
-# sha256 of main's SYSTEM_PROMPT before contracts.md §5.4: with ARTEMIS_CONVERSATION off the
+# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last for how code is
+# explained aloud) as it is on Windows: with ARTEMIS_CONVERSATION off the
 # agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "fc08c24151eb7ce889b6459025678a8e90ae5494258f2bb2c3ee839a874664a5"
+MAIN_SYSTEM_PROMPT_SHA256 = "e3e412c80c62ed76cc5cb9f10c671485ed7127939332b50ba6e2bd14d9978dbe"
 
 
 def test_flag_off_system_prompt_is_mains():
     import hashlib
 
     assert system_prompt() == system_prompt(False) == SYSTEM_PROMPT
-    assert hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest() == MAIN_SYSTEM_PROMPT_SHA256
+    # Off Windows only the desktop's name differs from main's prompt.
+    as_on_windows = SYSTEM_PROMPT.replace(f"developer on {DESKTOP}.", "developer on Windows.", 1)
+    assert hashlib.sha256(as_on_windows.encode()).hexdigest() == MAIN_SYSTEM_PROMPT_SHA256
     assert "How to read a spoken request" not in SYSTEM_PROMPT
+
+
+def test_system_prompt_names_the_desktop_it_runs_on():
+    import sys
+
+    expected = {"win32": "Windows", "darwin": "macOS"}.get(sys.platform, "Linux")
+    assert DESKTOP == expected
+    assert f"blind software developer on {expected}." in SYSTEM_PROMPT
+    assert ("Windows" in SYSTEM_PROMPT) == (sys.platform == "win32")
 
 
 def test_flag_on_system_prompt_adds_the_spoken_request_paragraph():
@@ -829,3 +860,18 @@ def test_task_message_and_vocabulary_do_not_follow_a_link_out_of_the_project(tmp
     text_ = task_message(TaskContext(task_id="t", request="r", project=project))
     assert "main.py" in text_ and "secret" not in text_
     assert "launch_codes" not in vocabulary(project) and "secret" not in vocabulary(project)
+
+
+@pytest.mark.parametrize("error", [
+    lambda: anthropic.APIConnectionError(request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")),
+    lambda: api_error(anthropic.AuthenticationError, 401),
+    lambda: api_error(anthropic.PermissionDeniedError, 403),
+    lambda: anthropic.AnthropicError("Could not resolve authentication method"),
+], ids=["offline", "bad_key", "forbidden", "no_key"])
+def test_a_failure_before_any_answer_does_not_leave_the_request_in_the_conversation(tmp_path, error):
+    """The core now speaks the failure; the agent must still forget the request nobody answered,
+    or the next task would replay it together with its own."""
+    w = World(tmp_path, [error()])
+    outcome = asyncio.run(w.run())
+    assert isinstance(outcome, Failed)
+    assert w.agent.messages == []

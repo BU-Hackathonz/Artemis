@@ -12,24 +12,33 @@ ISO 8601 UTC, and workspace paths are always **relative** to the project root.
 Every request sends `Authorization: Bearer <launch token>`. `infra/start.ps1` generates the token
 and passes it to both processes (§6).
 
+Errors outside the table: a missing or wrong token is `401 {error: "unauthorized"}` and an unlisted
+`Origin` is `403 {error: "origin_not_allowed"}` (§6). An unknown id is `404` in FastAPI's
+`HTTPException` shape, `{detail: {error: "session_not_found"}}` (or `"task_not_found"`,
+`"approval_not_found"`), and a body that fails its model is `422` with FastAPI's
+`{detail: [...]}`. The `409` and `501` bodies in the table are flat, as written.
+
 | Method | Path | Body → Response | Notes |
 |---|---|---|---|
 | GET | `/health` | → `{ok, version, voice_ready, screen_reader}` | `screen_reader`: `"nvda"` or `null` |
 | POST | `/sessions` | `{}` → `{session_id}` | One session per app launch |
-| GET | `/sessions/{sid}/events` | SSE stream of `Event` (§2) | Resumes from `Last-Event-ID` |
-| POST | `/sessions/{sid}/tasks` | `{client_request_id, source: "voice"\|"keyboard", text}` → `{task_id}`, or `409 {error: "task_active", task_id}` | Idempotent per `client_request_id`; one active task per session (§5.2) |
-| POST | `/tasks/{tid}/reply` | `{text, source}` → `501 {error: "not_supported"}` | **Reserved, unused in the MVP.** The agent asks a question by ending its turn; the user's next request is the answer |
-| POST | `/approvals/{aid}` | `{decision: "approve"\|"reject", approval_hash}` → `204`, `409` if stale | The hash must match the one that was offered |
-| POST | `/tasks/{tid}/cancel` | `{}` → `204` | Stops active work; the event reports what was already applied |
-| POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events |
-| POST | `/speech` | `{action: "stop"\|"repeat"}` → `204` | Stop speaking / repeat the last announcement |
-| POST | `/sessions/{sid}/diagnostics` | `{code: "shortcut_registration_failed", shortcut?: "Control+Alt+Space"}` → `204` | A problem only the client can see. The core speaks a **fixed** sentence per code (`error` event, priority high), once per code and shortcut per session (the client announces an exact repeat itself); `shortcut` allows letters, digits and `+` only. No free text is ever spoken. While `voice_ready` is true the client doesn't also announce it (§5.3) |
-| POST | `/sessions/{sid}/ready` | `{shortcut?: "Control+Shift+Space"}` → `204` | The native app finished setting up for this session (after its push-to-talk shortcut registered, or failed); the browser build does not call it. The core speaks one **fixed** line, once per session, as `agent.message` with no `task_id` at priority normal: "Artemis is ready. Hold Control Shift Space and speak, or type a request." Without `shortcut` it names the Start listening button instead. `shortcut` allows letters, digits and `+` only; no free text is ever spoken |
+| GET | `/sessions/{sid}/events` | SSE stream of `Event` (§2) | Replays every kept event after `Last-Event-ID` (the last 5000; none or not a number replays from the start), then live |
+| POST | `/sessions/{sid}/tasks` | `{client_request_id, source: "voice"\|"keyboard", text}` → `{task_id}`, or `409 {error: "task_active", task_id}` | Idempotent per `client_request_id` (a repeat gets the same `task_id`, even while that task is active); one active task per session (§5.2) |
+| POST | `/tasks/{tid}/reply` | `{text, source}` → `501 {error: "not_supported"}` for a known task (the body is not read) | **Reserved, unused in the MVP.** The agent asks a question by ending its turn; the user's next request is the answer |
+| POST | `/approvals/{aid}` | `{decision: "approve"\|"reject", approval_hash}` → `204`, or `409 {error: "stale"}` | The hash must match the one that was offered. Stale: a different hash (the approval stays open), or one already decided, canceled or invalidated |
+| POST | `/tasks/{tid}/cancel` | `{}` → `204`, also for a task that already ended | Stops active work, including a running program (its whole process tree is killed). An `agent.message` at high says what was already applied ("Canceled. Already written: main.py."), then `task.state` `canceled` |
+| POST | `/voice/listen` | `{action: "start"\|"stop"}` → `204` | Push-to-talk down/up; `start` stops current speech first (§5.1); the transcript arrives as events. Always the newest session (one per app launch): `409 {detail: {error: "no_session"}}` before there is one, `422 {detail: {error: "bad_action"}}` for any other action. A microphone failure is an `error` event with code `mic_error` |
+| POST | `/speech` | `{action: "stop"\|"repeat"}` → `204` | Stop speaking / repeat the last announcement (the last one at `normal` or `high`). Any other action: `422 {detail: {error: "bad_action"}}` |
+| POST | `/sessions/{sid}/diagnostics` | `{code: "shortcut_registration_failed", shortcut?: "Control+Alt+Space"}` → `204` | A problem only the client can see. The core speaks a **fixed** sentence per code (`error` event, priority high), once per code and shortcut per session (the client announces an exact repeat itself); `shortcut` allows letters, digits and `+` only, 1 to 40 characters, and other fields are rejected (`422`). No free text is ever spoken. While `voice_ready` is true the client doesn't also announce it (§5.3) |
+| POST | `/sessions/{sid}/ready` | `{shortcut?: "Control+Shift+Space"}` → `204` | The native app finished setting up for this session (after its push-to-talk shortcut registered, or failed); the browser build does not call it. The core speaks one **fixed** line, once per session, as `agent.message` (`kind: "answer"`) with no `task_id` at priority normal: "Artemis is ready. Hold Control Shift Space and speak, or type a request." Without `shortcut` it names the Start listening button instead: "Artemis is ready. Use the Start listening button and speak, or type a request." `shortcut` allows letters, digits and `+` only, 1 to 40 characters, and other fields are rejected (`422`); no free text is ever spoken |
+| GET | `/settings/voice` | → `VoiceSettings` (§7) | **Proposed (Avery).** The effective voice settings: the saved file, with the environment on top, plus `active_engine` |
+| PATCH | `/settings/voice` | `VoiceSettingsPatch` (§7), only the fields to change → `200 VoiceSettings` | **Proposed (Avery).** Saves the file, applies it to the voice from the next line, and returns what is now in effect. `422 {error: "invalid_setting", field}` for a bad value, an unknown key or `active_engine`; `409 {error: "set_by_environment", field}` for a field an environment variable pins. Nothing is saved when either applies |
+| GET | `/voices` | → `{voices: [{engine, id, name}]}` | **Proposed (Avery).** The installed SAPI voices and, when `ELEVENLABS_API_KEY` is set, the ElevenLabs voices. No other field, and no key, leaves here |
 
 ## 2. Core → client: the event stream
 
 One envelope for everything. The client renders every event's `announce.text` in the log
-region. **Speech happens in the core** (`announce()` → NVDA or SAPI), so the client's live region
+region. **Speech happens in the core** (`announce()` → ElevenLabs when a key is set, else NVDA, else SAPI), so the client's live region
 stays silent while the core can speak, and turns on whenever it can't (§5.3).
 
 ```jsonc
@@ -39,34 +48,36 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
   "task_id": "tsk_7",              // null for session-level events
   "type": "task.state",            // see the table below
   "at": "2026-11-14T15:02:11Z",
-  "announce": { "text": "Waiting for your approval to create main.py.", "priority": "high" },  // or null
+  "announce": { "text": "Working on: create a Python program that prints Hello World", "priority": "normal" },  // or null
   "data": { }                      // type-specific, below
 }
 ```
 
 `priority`: `low` (progress, may be dropped if speech is busy), `normal` (queued), `high`
-(interrupts: approvals, failures, completion).
+(interrupts: approval requests, run results, errors, cancel). The agent's final answer is `normal`.
+`repeat` says the last `normal` or `high` line again.
 
 | `type` | `data` |
 |---|---|
-| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is always the raw transcript; `intent` is set on `transcript.final` when the conversation controller is on (§5.4) |
-| `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP |
-| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}` |
-| `approval.requested` | `Approval` (below) |
-| `approval.resolved` | `{approval_id, decision, by: "user"\|"invalidated"}` |
-| `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}` |
-| `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}` |
-| `security.findings` | `{op_id, tool: "bandit"\|"semgrep", findings: [{rule, severity, path, line, message}]}` |
-| `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on |
-| `voice.status` | `{voice_ready, screen_reader}`, emitted at session start and whenever either value changes (§5.3) |
+| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal (an empty one is silent). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
+| `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
+| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`) is `progress` at `low` |
+| `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval` |
+| `approval.resolved` | `{approval_id, decision: "approve"\|"reject", by: "user"\|"invalidated"}`, not announced. An invalidated one (files changed, or the task was canceled) carries `"reject"` |
+| `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}`, announced "Created main.py, 1 line." at normal. No tool deletes, so `deleted` is never sent today |
+| `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}`, announced at high by the gateway (§4 samples 4 and 5). `exit_code` is null when the run timed out |
+| `security.findings` | `{op_id, tool: "bandit"\|"semgrep", findings: [{rule, severity, path, line, message}]}`, not announced: the findings are spoken in the approval summary that follows, or in `scan_project`'s own line. Sent only when there are findings. `tool` is always `"bandit"` today (Semgrep is not implemented) |
+| `error` | `{code, message, recovery}`, where `recovery` is one sentence the user can act on. Announced at high as "message recovery", except a failed task's, which says "The task failed. <reason> You can try again." |
+| `voice.status` | `{voice_ready, screen_reader, engine}`, emitted at session start and whenever either value changes (§5.3). `engine` (**Proposed (Avery)**, §7) is the speaker that would say the next line: `elevenlabs`, `nvda`, `sapi` or `none`; a settings change that alters it is also emitted |
+| `voice.activity` | `{state: "idle"\|"listening"\|"transcribing"\|"speaking", engine}` (approved by Avery, §8), not announced. Sent to every session when the voice's real state changes, never from timers: `listening` from the push-to-talk press until the mic closes (the listening earcon and any post-roll included), `transcribing` while Whisper turns the recording into text, `speaking` while Artemis's line is audible (`engine` says who: `elevenlabs` while its audio plays, `sapi` while SpVoice speaks, `nvda` for Artemis's own estimate, since NVDA can't report playback), `idle` otherwise. A session starts idle; one created while the voice is busy gets the current state once. State and engine only: no text, transcript or audio |
 
 ```jsonc
 // Approval
 {
   "approval_id": "apr_3",
   "kind": "write_files",          // or "run_program"
-  "approval_hash": "sha256:…",    // over diff + base file hashes + workspace id (or preset + args)
-  "summary": "Create project hello-world with one file, main.py, 1 line.",
+  "approval_hash": "sha256:…",    // see "What the hash binds" below
+  "summary": "Create project hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject.",
   "files": [{ "path": "main.py", "action": "created", "lines_added": 1, "lines_removed": 0 }],
   "diff": "--- /dev/null\n+++ main.py\n@@ -0,0 +1 @@\n+print(\"Hello, World!\")\n",
   "run": null,                    // for run_program: {"preset": "python", "entry": "main.py", "timeout_s": 10}
@@ -75,13 +86,26 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 }
 ```
 
-When `blocking` is true the summary starts with "Blocked: …", the client's default action is
-Reject, and approving needs a distinct key (not plain Enter), so a risky write or run is never
-approved by reflex. The user can still override: Artemis doesn't overrule the developer.
+The summary is written by the gateway, not the model. Without a scanner installed it says "Not
+scanned: the security scanner isn't installed." instead of "No security findings."
+When `blocking` is true the summary starts with "Blocked: …" and ends "Escape to reject, or use
+the override key to approve anyway.", the client's default action is Reject, and approving needs a
+distinct key (not plain Enter), so a risky write or run is never approved by reflex. The user can
+still override: Artemis doesn't overrule the developer.
+
+What the hash binds (`policy/hashing.py`): `"sha256:"` + SHA-256 of canonical JSON (sorted keys,
+no spaces) of `{kind, workspace_id, payload}`, where `workspace_id` is the project slug. For
+`write_files` and `edit_file` the payload is, per file and sorted, `[path, sha256(bytes on disk, or
+empty for a new file), sha256(new content)]`; for `run_program` it is `[entry, args,
+sha256(entry file bytes)]`. The diff and the run preset are not hashed: the diff follows from the
+two content hashes, and the preset from the entry.
 
 Rules: the core never sends two events with the same `seq`; the client drops any `seq` it has
-already seen. If the files under an approval change, the core emits `approval.resolved` with
-`by: "invalidated"` and a fresh `approval.requested`.
+already seen. When the user approves, the gateway recomputes the hash from the disk. If the files
+under the approval changed meanwhile, it emits `approval.resolved` with `decision: "reject"`,
+`by: "invalidated"` and a fresh `approval.requested`; a second change fails the tool call with
+`invalidated` and nothing is applied. A reject is not rechecked. Canceling the task while an
+approval is open also resolves it with `by: "invalidated"`.
 
 ## 3. Inside the core (Python interfaces, not HTTP)
 
@@ -117,7 +141,8 @@ class ToolGateway(Protocol):
 `call()` validates `args` against the tool's Pydantic model, checks policy, and if the tool needs
 approval it emits `approval.requested` and **awaits** the user's decision (an `asyncio.Future`
 resolved by `POST /approvals/{aid}`). Then it validates again and executes. A rejection returns
-`ToolResult(ok=False, error="rejected_by_user")`, which the agent explains instead of retrying.
+`ToolResult(ok=False, error="rejected_by_user")` (`"scan_blocked"` when the rejected approval was
+blocking), which the agent explains instead of retrying.
 A security scan runs inside the gateway before each write approval (on the proposed files, in a
 temp folder outside the workspace) and again before each run approval; its findings go into the
 `Approval`.
@@ -130,9 +155,9 @@ temp folder outside the workspace) and again before each run approval; its findi
 | `read_file` | `{path, start_line?, end_line?}` | no | yes |
 | `write_files` | `{files: [{path, content}]}`: one approval for the whole batch. Overwrites only in a project created this session | yes, after a scan | yes |
 | `run_program` | `{entry, args?: [str]}`; the preset comes from the file type | yes, after a scan | yes |
-| `edit_file` | `{path, edits: [{old, new}]}` | yes | after MVP |
+| `edit_file` | `{path, edits: [{old, new}]}`: each `old` must match exactly once; works in any project, not only one created this session. Approved as a `write_files` approval | yes, after a scan | after MVP (built) |
 | `inspect_page` | `{path}`: an `.html` or `.htm` file in the project | no: read-only | Echo Check |
-| `scan_project` | `{path?}`: a file or folder in the project; omitted scans all of it | no: read-only | after MVP |
+| `scan_project` | `{path?}`: a file or folder in the project; omitted scans all of it | no: read-only | after MVP (built) |
 
 There is no shell, delete, network or install tool, and the agent can't apply anything without
 approval. `ask_user` is not a model tool: a question is the agent's final answer. The scan
@@ -148,15 +173,18 @@ Paths are rejected unless `Path(root / p).resolve()` stays under `root`.
 ```python
 class Voice(Protocol):
     async def start_listening(self) -> None: ...
-    async def stop_listening(self, client_request_id: str) -> str: ...   # final transcript; partials go via emit
+    async def stop_listening(self, client_request_id: str) -> str: ...   # final transcript, wake word stripped; no partials
     def set_vocabulary(self, words: list[str]) -> None: ...               # file names and symbols for the prompt
-    async def announce(self, text: str, priority: Priority) -> None: ...  # NVDA if running, else SAPI
+    async def announce(self, text: str, priority: Priority) -> None: ...  # ElevenLabs if configured (even with NVDA), else NVDA if running, else SAPI
     async def stop_speech(self) -> None: ...
     async def repeat_last(self) -> None: ...
 ```
 
 The event bus calls `announce()` for every event that has an `announce` field, so no other
-component speaks directly.
+component speaks directly. The core also uses these when a voice has them (none are required):
+`warm()` (load the speech model at startup), `announcer` (`status()` for `voice_ready` and
+`screen_reader`, `watch()` for `voice.status` changes, `current().busy()`), `set_rate(delta)`
+(§5.3) and `working_cue()` (replaces the "Still working." line; no voice has one yet).
 
 ### 3.4 Runner (Avery, infrastructure)
 
@@ -168,33 +196,51 @@ class Runner(Protocol):
 ```
 
 `run()`:
-- finds the interpreter once at startup: `ARTEMIS_RUN_PYTHON` if set, else `uv python find --system`
-  or `--no-project`, else `py -3` on Windows, else `python3` or `python` on PATH; never the core's
-  own Python (`sys.executable`); if none is found, fails with a spoken message;
+- finds the interpreter once per runner, on first use (the core probes it in the background when
+  the first session starts and speaks `error` `no_interpreter` if there is none): `ARTEMIS_RUN_PYTHON`
+  if set, else `uv python find --system` or `--no-project`, else `py -3` on Windows, else `python3`
+  or `python` on PATH; never the core's own Python (`sys.executable`) or anything in its venv; if
+  none is found, fails with a spoken message;
 - uses a fixed argv `[python_exe, "-I", "-X", "utf8", entry, *args]`, `shell=False`,
   `cwd=project.root`, `stdin=DEVNULL` (an `input()` call gets end-of-file instead of hanging);
 - passes an explicit env, never `os.environ`: `PYTHONIOENCODING=utf-8` and `PATH` (interpreter dir,
   then System32 on Windows or `/usr/bin` and `/bin` elsewhere); on Windows also `SYSTEMROOT`, and
   `USERPROFILE`, `LOCALAPPDATA`, `APPDATA`, `TEMP`, `TMP` when set; elsewhere `HOME` and `TMPDIR`
   when set; no API keys;
-- has a 10 s timeout, kills the whole process tree, and caps captured output at 64 KB;
-- runs `subprocess.run` inside `asyncio.to_thread`, not `asyncio.create_subprocess_exec` (on
-  Windows, uvicorn's `--reload` event loop can't start subprocesses).
+- has a 10 s timeout, kills the whole process tree (`taskkill /T /F` on Windows, the process group
+  elsewhere), and keeps the last 64 KB of each of stdout and stderr;
+- kills the whole process tree too when the task is canceled during the run, before the cancel
+  is reported;
+- runs `subprocess.Popen` on a worker thread (`asyncio.to_thread`), not
+  `asyncio.create_subprocess_exec` (on Windows, uvicorn's `--reload` event loop can't start
+  subprocesses).
+
+Child processes the core starts for itself (`git init`, the interpreter probe, Playwright's
+browser for Echo Check) get `os.environ` without any secret-named variable: a name starting
+`ANTHROPIC_` or ending `_TOKEN`, `_KEY` or `_SECRET` (`artemis/childenv.py`). Bandit gets only
+`SYSTEMROOT`, `TEMP`, `TMP`, `USERPROFILE`, `LOCALAPPDATA` and `APPDATA`. Playwright's Node driver
+has no `env` option, so those variables are taken out of `os.environ` only while it starts, then
+put back.
 
 ## 4. Sample payloads (the first fixtures)
 
 1. **Typed request:** `POST /sessions/ses_1/tasks`
    `{"client_request_id":"cr_1","source":"keyboard","text":"create a Python program that prints Hello World"}`
 2. **Write approval:** the `Approval` example above, then `POST /approvals/apr_3 {"decision":"approve","approval_hash":"sha256:…"}`
-3. **Rejection:** the same with `"reject"`. Expect `approval.resolved`, then `agent.message` "Okay, I didn't create anything.", then `task.state` `succeeded`, and no `file.changed` event.
+3. **Rejection:** the same with `"reject"`. Expect `approval.resolved` (`by: "user"`), `task.state` `working`, then `agent.message` "Okay, I didn't create anything.", then `task.state` `succeeded`, and no `file.changed` event. (The fixture lists the three events the client acts on, without `working`.)
 4. **Failed run:**
    ```json
-   {"type":"run.result","announce":{"text":"main.py failed with exit code 1. NameError: name 'pritn' is not defined, line 1.","priority":"high"},
+   {"type":"run.result","announce":{"text":"main.py failed with exit code 1. NameError: name 'pritn' is not defined.","priority":"high"},
     "data":{"op_id":"op_9","preset":"python","exit_code":1,"timed_out":false,"duration_ms":81,
             "stdout_tail":"","stderr_tail":"Traceback (most recent call last):\n  File \"main.py\", line 1 ...\nNameError: name 'pritn' is not defined","truncated":false}}
    ```
+   The announce is the exit code and the last line of `stderr_tail`, verbatim (on Python 3.12 that
+   line also ends "Did you mean: 'print'?").
 5. **Successful run:** `exit_code` 0, `stdout_tail` `"Hello, World!\n"`, announce "main.py ran successfully. It printed: Hello, World!"
-6. **Security block (Phase 4):** `security.findings` with `{"rule":"B602","severity":"high","path":"main.py","line":4,"message":"subprocess call with shell=True"}`, then `approval.requested` for `run_program` listing that finding.
+6. **Security block (Phase 4):** `security.findings` (not announced) with `{"rule":"B602","severity":"high","path":"main.py","line":4,"message":"subprocess call with shell=True"}`, then `task.state` `awaiting_approval`, then `approval.requested` for `run_program` listing that finding, `blocking: true`, announced "Blocked: 1 high-severity issue, main.py line 4, subprocess call with shell=True. Run main.py with Python. Escape to reject, or use the override key to approve anyway."
+
+`contracts/test_samples.py` checks that the spoken text in samples 2, 4, 5 and 6 is what the
+gateway writes for that data.
 
 ## 5. Turn-taking rules (voice and tasks)
 
@@ -218,13 +264,13 @@ not the task, and a spoken request during a task waits its turn).
   stays in the editable field) but doesn't create a task. It emits `error`
   `{code: "task_active", message, recovery}` with `announce` at `high`:
   "Still working on the last request. Say cancel to stop it, or wait."
-- **Spoken control words.** The core checks the final transcript after stripping the wake word,
-  lowercasing and removing punctuation. Only a whole-utterance match counts, and no model is
+- **Spoken control words.** The core checks the final transcript (the voice has already stripped a
+  leading wake word) after lowercasing and replacing punctuation with spaces. Only a whole-utterance match counts, and no model is
   involved:
 
   | Utterance | While a task is active | No active task |
   |---|---|---|
-  | `cancel`, `stop`, `cancel that`, `never mind` | same as `POST /tasks/{id}/cancel` | "Nothing to cancel." |
+  | `cancel`, `stop`, `cancel that`, `never mind`, `nevermind` | same as `POST /tasks/{id}/cancel` | "Nothing to cancel." |
   | `repeat`, `say that again` | same as `POST /speech {action: "repeat"}` | same |
   | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | not applied; announce "Use the keyboard to decide: Enter on the dialog to approve, Escape to reject." | treated as a normal request |
 
@@ -243,13 +289,25 @@ NVDA itself was saying, and Artemis can't change NVDA's speaking rate: "slower" 
 pointer to NVDA's own rate setting. The controller knows which applies from `voice.status`.
 On SAPI the rate is the user's Windows setting unless `ARTEMIS_SAPI_RATE` replaces it, clamped to
 -3..6. Conversation's "faster" and "slower" change only the SAPI rate, one step at a time, and say
-so when a limit is reached.
+so when a limit is reached. **Proposed (Yaovi, needs Avery; issue #134):** ElevenLabs is Artemis's
+voice by default when `ELEVENLABS_API_KEY` is set (the voice is Artemis's own, `ARTEMIS_ELEVEN_VOICE_ID` overrides it), even while NVDA runs
+(`ARTEMIS_VOICE_ENGINE`, decisions.md §5a); NVDA then gets Artemis's lines on braille only and is
+never cancelled by Artemis, and `screen_reader` is "nvda" only when Artemis speaks through NVDA.
+Without a key, or with `ARTEMIS_VOICE_ENGINE=nvda` or `sapi`, the order above is unchanged. With
+ElevenLabs speaking, "faster" and "slower" step its speed by 0.1 within 0.7..1.2 and return the same
+statuses, so the core's lines are unchanged. When
+ElevenLabs gives up for the session, the voice calls the core's hook once with the fixed line "My
+natural voice isn't reachable, so I'm using the Windows voice.", which the core says as an
+`agent.message` at normal (core wiring is a follow-up; until then it is only logged).
 
 ### 5.4 Conversation (behind `ARTEMIS_CONVERSATION=on`, default off)
 With the flag off, §5.1 and §5.2 apply exactly as written above. With it on, every final
 transcript goes to `artemis.conversation.Controller.decide()`, which is deterministic (no model,
-no audio) and returns what the core should do. `transcript.final` always carries the raw
-transcript, plus `intent`: `"request"` or the name of the built-in phrase.
+no audio) and returns what the core should do. `transcript.final` always carries the transcript
+as the voice returned it, plus `intent`: `"request"` or the built-in phrase's name (`cancel`,
+`stop_speaking`, `repeat`, `status`, `changed_files`, `brief`, `detailed`, `normal`, `visual`,
+`code`, `slower`, `faster`, `approval_word`, or `wake_word`); `intent` is null for an empty
+transcript.
 
 - **Built-in phrases.** Matched only when the phrase is the whole utterance, after the wake word,
   fillers and "please" are stripped from the edges: "stop the server from crashing" goes to the
@@ -266,7 +324,7 @@ transcript, plus `intent`: `"request"` or the name of the built-in phrase.
   | `slower`, `faster` | See §5.3 |
   | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | Never applied: "Use the keyboard to decide…" as in §5.2 |
   | `approve`, `yes`, `reject`, `no` with no approval open | If no task is active and the agent's last answer was a question: the answer to it, sent as the next request (design A4; anything it leads to is still approved on the keyboard). Otherwise "There's nothing to approve right now.", never a task or a follow-up |
-  | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high` (`intent` is `wake_word` for the wake word) |
+  | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high`. The voice already strips "Artemis" and "Hey/OK Artemis", so those arrive empty (`intent` null); `wake_word` is the intent for a form only the controller strips, such as "Hi Artemis" |
 
   No phrase can approve a write or a run, hide a warning, or run code.
 - **A spoken request while a task is active** is kept as the one waiting follow-up ("I'll do that
@@ -287,6 +345,28 @@ transcript, plus `intent`: `"request"` or the name of the built-in phrase.
   is unchanged.
 - **A clarifying question ends the task** (design A4 stands): the developer's next utterance is a
   new task in the same agent conversation. `/tasks/{tid}/reply` and `awaiting_reply` stay reserved.
+
+### 5.5 Result earcons (behind `ARTEMIS_RESULT_EARCONS=on`, default off)
+With the flag on, the core plays one earcon just before the spoken line of: a `run.result` with exit
+code 0 (`"success"`), a `run.result` with a non-zero exit or a timeout (`"failure"`), and an
+`approval.requested` (`"approval"`). The line is still spoken in full; the tone is never a substitute.
+No earcon plays while the voice reports `listening`, and the flag is read once at startup. With the
+flag off, nothing plays. The voice `stub` never fails on these cues: `earcons.play` returns 0 when
+there is no output device, and the run goes on.
+
+### 5.6 Wake word (opt-in: `ARTEMIS_LISTEN_MODE=wake`)
+
+"Hey Artemis, <request>" in one breath, or "Hey Artemis", a beep, then the request within 8 s.
+The request is handled exactly like a push-to-talk transcript: `transcript.final`, then a task.
+It starts nothing that typing couldn't, and every write and run still needs a keyboard approval.
+- Artemis doesn't hear itself: microphone audio is dropped unheard while any of its speakers is
+  busy (ElevenLabs downloading or playing, SAPI speaking, Artemis's NVDA estimate), for 0.4 s
+  after, and while push-to-talk owns the microphone. NVDA reading the screen is invisible to
+  Artemis, so use a headset when NVDA speaks through the laptop speakers.
+- Speech that doesn't start with the wake phrase is never kept or logged; only its word count is.
+- `voice.activity` is `listening` from a bare "Hey Artemis" until the request or the window's end,
+  never while it is only waiting for the phrase.
+- Push-to-talk keeps working alongside. Without the variable nothing changes.
 
 ## 6. Launcher and launch token (decided 2026-11-14)
 
@@ -313,9 +393,107 @@ processes' command lines. Malware running as the same user is out of scope for t
 
 **Core (Avery)**
 - Requires `Authorization: Bearer <token>` on every route, the SSE stream included.
-- CORS allows only `http://tauri.localhost` and `http://127.0.0.1:1420`.
+- CORS allows only `http://tauri.localhost` and `http://127.0.0.1:1420`, methods `GET` and `POST`, and `PATCH` for `/settings/voice` (**Proposed (Avery)**, §7),
+  headers `Authorization`, `Content-Type` and `Last-Event-ID`.
 - Origin check: a request **with no `Origin`** (the launcher's readiness probe, curl) is allowed
   when the token is valid; a **listed** Origin is allowed; **any other** Origin gets `403`,
   including `Origin: null` (sandboxed frames, `file:` pages), which counts as unlisted. That way
   a website open in the user's browser can't drive the local core.
 - The token is never logged, spoken, put in a URL, or included in an event.
+- Redaction (`policy/redact.py`) replaces secrets with `[redacted]` in every event the tool gateway
+  emits (announce text and data), every tool result sent to the model, and every log record (its
+  message, arguments, traceback and stack) through a filter on each handler that exists when the
+  core starts. Secrets are: the value (6 or more characters) of any environment variable whose
+  name starts `ANTHROPIC_` or ends `_TOKEN`, `_KEY` or `_SECRET`; `sk-ant-…` keys; the value after
+  `Bearer` or `Authorization: bearer`; PEM private-key blocks; and the value after `api_key`
+  (`apikey`, `api-key`), `token`, `password`, `passwd` or `secret` followed by `:` or `=` when it is
+  quoted or looks like a literal (code such as `token = get_token()` is left alone). Events the core
+  emits itself (`transcript.final`, `task.state`, its fixed `error` lines) and the agent's own
+  `agent.message` text are not passed through it.
+- Settings come from `ARTEMIS_*` environment variables (and `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_WORKSPACE_ID` for the real agent). The full list, with defaults, is the docstring of
+  `server/artemis/core/main.py`.
+
+## 7. Voice settings (Proposed (Avery))
+
+Status: **proposed**, not yet merged or reviewed by the area owners. Scope: voice only. Answer style
+(verbosity, focus), remembered preferences and the listening mode are not in this contract; see
+"Deferred" below.
+
+The settings are the voice profile (`server/artemis/voice/profile.py`): the file `ARTEMIS_VOICE_PROFILE`
+names, or `~/.artemis/voice.json`. Environment variables override the file. The core applies the
+effective profile at startup and after each change. The ElevenLabs key is never a setting: it stays in
+`ELEVENLABS_API_KEY` and never appears in a response, the file or a log.
+
+**Models** (`server/artemis/contracts/settings.py`). Both forbid extra keys. Each value goes through the
+profile's own checks (`_CHECKS`), so the ranges are defined once.
+
+```jsonc
+VoiceSettings {                                   // GET response
+  voice_engine:    "elevenlabs" | "nvda" | "sapi",
+  eleven_voice_id: string | null,                 // 1 to 64 letters, digits, "_" or "-"
+  eleven_speed:    number,                        // 0.7 to 1.2
+  sapi_voice:      string | null,                 // 1 to 128 characters
+  sapi_rate:       integer | null,                // -3 to 6; null keeps the Windows rate
+  working_cue:     boolean,                       // true: a soft tick instead of "Still working."
+  active_engine:   string                         // read-only: elevenlabs, nvda, sapi or none
+}
+VoiceSettingsPatch {                              // PATCH body: every field optional, no active_engine
+  voice_engine?, eleven_voice_id?, eleven_speed?, sapi_voice?, sapi_rate?, working_cue?
+}
+```
+
+Only the fields sent in a PATCH change; a sent `null` is a value, and only `eleven_voice_id`, `sapi_voice`
+and `sapi_rate` accept it.
+
+**Errors** (flat bodies, as in the table above):
+
+| Status | Body | When |
+|---|---|---|
+| `401` | `{error: "unauthorized"}` | No or a wrong Bearer token (every route, as in §1) |
+| `403` | `{error: "origin_not_allowed"}` | An unlisted `Origin`, including `null` (§6) |
+| `422` | `{error: "invalid_setting", field: "<name>"}` | A value out of range or the wrong type (rejected, not clamped), an unknown key, `active_engine`, or a body that is not a JSON object (`field: "body"`). `field` is the first failing field, in the order the patch lists them |
+| `409` | `{error: "set_by_environment", field: "<name>"}` | The patch sends a field that a valid environment variable pins: `ARTEMIS_VOICE_ENGINE`, `ARTEMIS_ELEVEN_VOICE_ID`, `ARTEMIS_ELEVEN_SPEED`, `ARTEMIS_SAPI_VOICE`, `ARTEMIS_SAPI_RATE` or `ARTEMIS_WORKING_CUE`. The environment variable is the one that is in force, so the change could not take effect and is not saved. An invalid environment value is ignored with a warning and pins nothing |
+
+A `422` or `409` saves nothing and applies nothing. A `GET` never writes the file.
+
+**Behaviour.**
+- `PATCH` writes the file with the fields that were sent and nothing else (the environment's values are
+  not written back), applies the effective profile to the voice, and returns the `VoiceSettings` now in effect.
+- A change that alters the engine emits `voice.status` with the new `engine` to every session.
+- An ElevenLabs line that cannot be spoken after three failures in a row is announced once, through the
+  bus, as `agent.message` (`kind: "answer"`, priority `normal`) with the fixed text
+  "My natural voice isn't reachable, so I'm using the Windows voice." The core re-attaches this after each change.
+- `GET /voices` returns `{voices: [{engine, id, name}]}`: installed SAPI voices and, when a key is set, the
+  ElevenLabs voices (`id` is the voice id for ElevenLabs and the name for SAPI, which `ARTEMIS_SAPI_VOICE` accepts).
+  The key is sent to ElevenLabs in a header only. A failed lookup is logged by type and gives no voices.
+- `working_cue` is read by the voice at each heartbeat, so a change applies to the next "Still working." beat.
+
+**Deferred** (not in this PR): answer verbosity and focus (`TaskContext.style`, which needs the
+conversation controller's `prefs` work), remembered preferences across launches, the listening mode,
+the push-to-talk shortcut (client-side), and reduced motion (client-side). A wider `Settings` model
+covering these was proposed in the settings audit and is not part of this section.
+
+## 8. Island states (approved by Avery; the notch and island)
+
+The island shows only what the core's events prove. Nothing is inferred from timers, and no new
+task contract is needed: `voice.activity` (§2) adds the voice's own states.
+
+| Island state | Shown when | Ends when |
+|---|---|---|
+| idle | no active task and `voice.activity` is `idle` | any row below starts |
+| listening | `voice.activity` `listening` | `transcribing` or `idle` |
+| thinking | `voice.activity` `transcribing`, or `task.state` `queued` or `working` with no `file.changed` yet in this task | the next row's event |
+| editing | `approval.requested` of kind `write_files` (waiting), then `file.changed` after it is approved | `task.state` `running`, `succeeded`, `failed` or `canceled` |
+| running | `task.state` `running` | `run.result` |
+| speaking | `voice.activity` `speaking`, on top of whichever task state holds | `voice.activity` leaves `speaking` |
+| done | `task.state` `succeeded` (the `run.result` exit code is 0 or there was no run) | the next request or about 3 s, client's choice |
+| error | `task.state` `failed`, an `error` event, or `run.result` with a non-zero exit code or `timed_out` | the next request |
+
+- `awaiting_approval` is not a separate island state: the approval dialog is focused (Enter guard,
+  §5) while the island keeps the state it had, marked as waiting.
+- `canceled` returns to idle after the spoken "Canceled.".
+- Speaking overlays the task states because Artemis talks while it works. Listening and
+  transcribing take priority over speaking, since push-to-talk stops speech (§5.1).
+- On Linux there is no NVDA estimate: `speaking` comes from the engine that plays the audio.
+  Orca's own speech is the screen reader's and is never reported.

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -31,10 +32,17 @@ def _is_core_python(path: Path) -> bool:
         resolved = path.resolve()
     except OSError:
         return True
-    if resolved == Path(sys.executable).resolve():
-        return True
-    venv = Path(sys.prefix).resolve()
-    return sys.prefix != sys.base_prefix and venv in resolved.parents
+    in_venv = sys.prefix != sys.base_prefix
+    if in_venv:
+        # In a venv the core's interpreter is the venv's python, and on Linux and macOS that is a
+        # symlink to the base interpreter (/usr/bin/python3.12). Resolving it would make the system
+        # Python count as "ours" and refuse every candidate, so compare the venv paths as given and
+        # resolved, but never the base interpreter the link points at.
+        if _is_core_venv_path(path):
+            return True
+        return Path(sys.prefix).resolve() in resolved.parents or resolved == Path(sys.prefix).resolve()
+    # No venv: the core runs on the system interpreter itself, which user code must not share.
+    return resolved == Path(sys.executable).resolve()
 
 
 def _is_core_venv_path(path: Path) -> bool:
@@ -127,7 +135,12 @@ class _Tail:
 
     def text(self, wait_s: float = 2.0) -> str:
         self._thread.join(wait_s)
-        return bytes(self.buf).decode("utf-8", errors="replace")
+        text = bytes(self.buf).decode("utf-8", errors="replace")
+        if self.truncated:
+            # The cut can go through a secret, and the piece left after it no longer matches,
+            # so redaction would miss it. Drop the cut-off word (secrets have no whitespace).
+            text = re.sub(r"^\S*", "", text)
+        return text
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -140,6 +153,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
                 capture_output=True,
                 timeout=10,
                 stdin=subprocess.DEVNULL,
+                env=child_environ(),  # no API key, workspace ID or launch token in taskkill either
             )
         else:
             os.killpg(proc.pid, signal.SIGKILL)

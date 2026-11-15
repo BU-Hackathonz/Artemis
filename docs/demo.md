@@ -157,6 +157,10 @@ before/after comparison is kept in memory for the session.
     `hello-world-2`, `-3` …) with `main.py`; files and the run are still real, but say the agent
     is scripted. It ends with "I created hello-world with main.py and ran it. It printed Hello,
     World!" (with that project name)
+  - Key missing or wrong ("The task failed. The Claude API key is missing or invalid. You can
+    try again."): trying again won't help. Close Artemis, set the key again in a new PowerShell
+    window (setup step 7) and start it again. Any other API error is "The task failed. Claude
+    returned an error. You can try again."
   - App won't connect: `infra\start.ps1` prints the reason and the end of `core.log`.
 
 ### 2. A failed run, explained and fixed
@@ -273,8 +277,8 @@ version is not in the project, so the agent has to make the fix.
   - Agent or API unavailable: show the merged CLI on the fixture pair (prints the outline, the
     findings and the spoken lines; NVDA reads the console):
     `cd server; uv run --group echo python -m artemis.echo ..\fixture\echo-page\before.html ..\fixture\echo-page\after.html`
-  - Claude says Echo Check isn't installed or needs a browser *(model)*: re-run step 2 of the
-    setup. (The core hands that error to Claude; it has no fixed spoken line of its own.)
+  - "Echo Check needs a browser. Nothing was checked." (or "Echo Check isn't installed. Nothing
+    was checked."), high priority, then Claude's explanation *(model)*: re-run step 2 of the setup.
 
 ## Pass/fail sheet (demo readiness)
 
@@ -286,7 +290,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 |---|---|---|---|---|---|
 | 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | pass, Sat Nov 14, verified on Yaovi's and David's laptops (registration only; the NVDA line was not checked) |
 | 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
-| 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` is "create a Python program that prints Hello World, and run it" word for word (the wake word is stripped), or the misses are posted | Yaovi | not run |
+| 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` has the words of "create a Python program that prints Hello World, and run it" (the wake word is stripped; punctuation and capitals are ignored, Whisper never writes the comma before "and"), or the misses are posted. Try `ARTEMIS_WHISPER_PROMPT=natural` too (8/10 vs 5/10 on Yaovi's laptop) | Yaovi | not run on the demo laptop; David's laptop failed with the defaults |
 | 4 | Keyboard path to Start listening | NVDA on, no task running, clear the request field (a transcript from rows 2 and 3 stays in it), then Tab from it | Reaches **Start listening** after **Repeat last speech**, **Stop speech** and the activity log, in that order. **Send request** (disabled while the field is empty) and **Cancel task** (disabled with no task) are skipped; with text in the field, Send is the first stop | Yaovi | not run |
 | 5 | Start listening toggle | On **Start listening**, press Enter, speak, press Enter again | Same result as hold-to-talk. The microphone stays on until the second press, and focus stays on the button, which reads **Stop listening** while the microphone is on | Yaovi | not run |
 | 6 | Demo 1 with `-Agent claude` | Run demo 1 end to end | Both approvals spoken, "Hello, World!" printed and spoken | key holder | not run |
@@ -312,7 +316,9 @@ the agent is scripted.
 
 Monitor off, NVDA on (or exactly as it will be on stage), one person at the keyboard, one watching
 the log and timing. Run all five demos twice, then once with a forced failure (Wi-Fi off for the
-API error, Escape on every approval).
+API error, Escape on every approval). With Wi-Fi off, "Working on: ..." (and perhaps "Still
+working.") is followed by "The task failed. No internet connection to Claude. You can try again.",
+said once, and the next request is accepted.
 
 - [ ] Every state change is spoken: request taken ("Working on: ..."), each approval, each file
       written, "Running main.py.", every result, every error, cancel.
@@ -323,7 +329,10 @@ API error, Escape on every approval).
       "Reject" for a blocked one). Enter on a blocked approval's Approve button does nothing.
 - [ ] Escape rejects every dialog, nothing is written or run, and Artemis says so *(model)*.
 - [ ] Cancel works: start a request, Tab to **Cancel task**, Enter: "Canceled." and nothing else
-      happens. During an approval, Escape is the way out.
+      happens. Cancel during a run stops the program (it and anything it started) and then says
+      "Canceled while running main.py." instead; nothing more is written. During an approval,
+      Escape is the way out; a spoken "cancel" there says "Canceled. Nothing was written." (or
+      "Nothing was run.").
 - [ ] **Repeat last speech** repeats the last line; **Stop speech** stops it.
 - [ ] Silence longer than 3 seconds: there should be none. While Artemis works, a quiet "Still
       working." comes after about 3 s; note any silence that has no cue.
