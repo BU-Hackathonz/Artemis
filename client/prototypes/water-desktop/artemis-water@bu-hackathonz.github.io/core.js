@@ -5,7 +5,12 @@ import Gio from 'gi://Gio';
 import Soup from 'gi://Soup?version=3.0';
 
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
-const URL_PATTERN = /^http:\/\/127\.0\.0\.1:\d{1,5}$/;
+const URL_PATTERN = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/;
+// A bearer token (RFC 6750 b64token). start.sh makes 43 base64url characters; anything else, such as
+// a space or a line break, would be refused by Soup with a warning that prints the header.
+const TOKEN_PATTERN = /^[A-Za-z0-9._~+/-]+=*$/;
+const MAX_TOKEN = 512;
+const MAX_LAUNCH_BYTES = 64 * 1024; // read on the shell's main thread, so keep it small
 const MAX_BLOCK_LINES = 10000;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -96,7 +101,7 @@ function randomHex() {
 
 function statLaunch(file) {
     return file.query_info(
-        'standard::type,unix::uid,unix::mode,unix::inode',
+        'standard::type,standard::size,unix::uid,unix::mode,unix::inode',
         Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
 }
 
@@ -116,6 +121,8 @@ function readLaunch(path) {
         return reject('launch file belongs to another user');
     if ((before.get_attribute_uint32('unix::mode') & 0o777) !== 0o600)
         return reject('launch file mode is not 0600');
+    if (before.get_size() > MAX_LAUNCH_BYTES)
+        return reject('launch file is too large');
 
     let bytes;
     try {
@@ -133,8 +140,11 @@ function readLaunch(path) {
     }
     if (after.get_file_type() !== Gio.FileType.REGULAR ||
         after.get_attribute_uint64('unix::inode') !== before.get_attribute_uint64('unix::inode') ||
+        after.get_attribute_uint32('unix::uid') !== before.get_attribute_uint32('unix::uid') ||
         (after.get_attribute_uint32('unix::mode') & 0o777) !== 0o600)
         return reject('launch file changed while it was read');
+    if (bytes.length > MAX_LAUNCH_BYTES)
+        return reject('launch file is too large');
 
     let json;
     try {
@@ -144,7 +154,10 @@ function readLaunch(path) {
     }
     if (!json || typeof json !== 'object' || typeof json.token !== 'string' || json.token === '')
         return reject('launch file has no token');
-    if (typeof json.url !== 'string' || !URL_PATTERN.test(json.url))
+    if (json.token.length > MAX_TOKEN || !TOKEN_PATTERN.test(json.token))
+        return reject('launch file token is not a valid bearer token');
+    const port = typeof json.url === 'string' ? URL_PATTERN.exec(json.url)?.[1] : null;
+    if (!port || Number(port) > 65535)
         return reject('launch file url is not a 127.0.0.1 address');
     return {ok: true, url: json.url, token: json.token, sig: sha256(bytes)};
 }
