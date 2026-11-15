@@ -92,6 +92,20 @@ def test_steady_background_noise_raises_the_bar_instead_of_holding_the_mic_open(
     assert len(run(segmenter, speech(1.5) + quiet(1.5, level=0.003))) == 1
 
 
+
+def test_normal_speech_on_a_quiet_headset_mic_is_heard():
+    # Measured on Yaovi's EarPods mic: room 0.0001-0.0008, normal speech 0.0017-0.0046.
+    # Under the old 0.004 bar this was missed; once the room is known, 0.0025 speech is an utterance.
+    found = run(Segmenter(), quiet(1, level=0.0004) + speech(1.5, level=0.0025) + quiet(1.5, level=0.0004))
+    assert len(found) == 1
+
+
+def test_until_the_room_is_known_the_stricter_bar_applies():
+    # The first frames could be a steady noisy room: they are learned as the floor, never heard as speech.
+    segmenter = Segmenter()
+    assert run(segmenter, speech(1.5, level=0.0025) + quiet(4, level=0.0004)) == []
+    assert segmenter.threshold < 0.004  # a few seconds of real quiet later, the lower bar applies
+
 def test_an_utterance_that_never_goes_quiet_is_cut_at_the_cap():
     segmenter = Segmenter(max_s=4.0)
     found = run(segmenter, quiet(1) + speech(6))

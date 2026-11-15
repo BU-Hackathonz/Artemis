@@ -50,12 +50,17 @@ class Segmenter:
     def __init__(
         self,
         *,
-        min_rms: float = 0.004,  # never treat anything quieter than this as speech
+        # Never treat anything quieter than this as speech. Measured on Yaovi's EarPods mic (2026-11-15):
+        # room 0.0001-0.0008, normal speech 0.0017-0.0046, so 0.004 missed most of it. The floor * over_floor
+        # rule still lifts the bar in a noisy room.
+        min_rms: float = 0.0015,
         over_floor: float = 3.0,  # speech must be this many times the noise floor
         end_silence_s: float = 0.8,
         min_s: float = 0.4,  # shorter is a click or a cough
         max_s: float = 12.0,
         pre_roll_s: float = 0.3,  # kept from before the start, so the "H" of "Hey" isn't lost
+        start_rms: float = 0.004,  # the stricter bar until the room is known, so steady noise is learned, not heard
+        learn_s: float = 1.0,  # quiet heard before min_rms applies
     ) -> None:
         self.min_rms = min_rms
         self.over_floor = over_floor
@@ -63,6 +68,8 @@ class Segmenter:
         self.min_frames = max(1, round(min_s * RATE / FRAME))
         self.max_frames = max(1, round(max_s * RATE / FRAME))
         self.floor = 0.0
+        self.start_rms = start_rms
+        self._to_learn = max(0, round(learn_s * RATE / FRAME))
         self._pre: deque[np.ndarray] = deque(maxlen=max(1, round(pre_roll_s * RATE / FRAME)))
         self._chunks: list[np.ndarray] = []
         self._voiced = 0
@@ -71,7 +78,8 @@ class Segmenter:
 
     @property
     def threshold(self) -> float:
-        return max(self.min_rms, self.floor * self.over_floor)
+        bar = self.start_rms if self._to_learn else self.min_rms
+        return max(bar, self.floor * self.over_floor)
 
     @property
     def in_speech(self) -> bool:
@@ -90,6 +98,7 @@ class Segmenter:
             if not loud:
                 # Quiet and not in speech: this is what the room sounds like.
                 self.floor = level if self.floor == 0.0 else 0.95 * self.floor + 0.05 * level
+                self._to_learn = max(0, self._to_learn - 1)
                 self._pre.append(frame)
                 return None
             self._chunks = [*self._pre, frame]
@@ -306,7 +315,7 @@ class WakeListener:
         self._stream.start()
         self._thread = threading.Thread(target=self._run, name="artemis-wake", daemon=True)
         self._thread.start()
-        log.info("Wake word on: say \"Hey Artemis\" and the request")
+        log.warning("Wake word on: say \"Hey Artemis\" and the request")  # warning so core.log shows it
 
     def stop(self) -> None:
         self._stop.set()
