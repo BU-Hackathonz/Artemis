@@ -864,16 +864,39 @@ class TalkingFallback(FakeSpeaker):
 def test_busy_while_the_local_voice_says_a_line_handed_to_it():
     """Yaovi's #196 review: a line that fell back to the local voice is still Artemis talking, so the
     approval reminder and the voice-approval guard wait for it."""
+    import time as _time
     local = TalkingFallback()
     e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=local)
-    assert not e.busy()
     local.talking = True
-    assert e.busy()  # off any loop: asked directly
+    assert not e.busy()  # nothing was handed over: the local voice is not asked at all
+    e._handed_at, e._handed_s = _time.monotonic(), 5.0  # a line just fell back
+    assert e.busy()  # speechd answers from any thread
 
     async def on_loop():
         e._loop = asyncio.get_running_loop()
-        return e.busy()  # on the loop's own thread: asked directly, no wait on the loop
+        return e.busy()
 
     assert asyncio.run(on_loop())
     local.talking = False
-    assert not e.busy()
+    assert not e.busy() and e._handed_at is None  # finished: back to never asking
+
+
+class NeverAskMe(FakeSpeaker):
+    def busy(self):
+        raise AssertionError("SAPI must not be asked off its loop")
+
+
+def test_busy_never_waits_on_the_loop_and_never_asks_sapi_off_it():
+    """busy() runs on the wake word's mic thread every 32 ms: it must never block on a loop round trip."""
+    import time as _time
+    sapi = NeverAskMe("sapi")
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=sapi)
+    e._handed_at, e._handed_s = _time.monotonic(), 5.0
+    started = _time.monotonic()
+    assert e.busy()  # fresh hand-off: counts as talking, by estimate
+    e._handed_at = _time.monotonic() - 6.0
+    assert not e.busy()  # past the estimate
+    assert _time.monotonic() - started < 0.05
+    e._handed_at = _time.monotonic()
+    e.cancel()
+    assert not e.busy()  # push-to-talk stopped it
