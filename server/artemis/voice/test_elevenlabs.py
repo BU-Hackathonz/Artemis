@@ -798,3 +798,55 @@ def test_hold_for_fallback_without_a_loop_asks_directly():
     e._handed.set()
     e._hold_for_fallback(e._gen)
     assert seen == [1]
+
+
+# ----- interrupts on Linux: the stream is aborted only by the thread that writes it -----
+
+
+class ThreadOutput(FakeOutput):
+    """Records which thread aborted it. ALSA breaks when another thread aborts a stream mid-write."""
+
+    def __init__(self, per_write_s=0.0):
+        super().__init__(per_write_s)
+        self.writer = self.aborter = None
+
+    def write(self, chunk):
+        self.writer = threading.get_ident()
+        super().write(chunk)
+
+    def abort(self):
+        self.aborter = threading.get_ident()
+        super().abort()
+
+
+def test_an_interrupt_aborts_the_stream_on_the_worker_thread_not_the_caller():
+    outputs = []
+
+    def output():
+        outputs.append(ThreadOutput(0.02))
+        return outputs[-1]
+
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=FakeSpeaker("sapi"),
+                          opener=Opener(lambda: FakeResponse([b"x" * 2] * 50)), output=output)
+    e.speak("A long answer that takes a while.", interrupt=False)
+    wait_for(lambda: outputs and outputs[0].written)
+    e.speak("Write main.py? Enter to approve, Escape to reject.", interrupt=True)
+    assert e.wait_idle(5)
+    first = outputs[0]
+    assert first.aborted and first.aborter == first.writer != threading.get_ident()
+    assert len(outputs) == 2 and len(outputs[1].written) == 50  # the approval played whole
+
+
+class BrokenOutput(FakeOutput):
+    def write(self, chunk):
+        raise OSError("ALSA: mmap error")
+
+
+def test_a_line_whose_playback_fails_is_said_by_the_local_voice_not_dropped():
+    sapi = FakeSpeaker("sapi")
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=sapi,
+                          opener=ok_opener(), output=BrokenOutput)
+    e.speak("Write main.py? Enter to approve, Escape to reject.", interrupt=True)
+    assert e.wait_idle(3)
+    wait_for(lambda: sapi.said)
+    assert sapi.said == [("Write main.py? Enter to approve, Escape to reject.", False)]
