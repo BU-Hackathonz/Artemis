@@ -34,6 +34,18 @@ export class CommandRunner {
         this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
         this._job = null;
         this._held = new Set();
+        this.onStep = null; // (label) => void: each step of the running command, for the island's process tree
+        this.onProgress = null; // (detail) => void: live detail of the current step (cursor travel, text typed so far)
+    }
+
+    /** Live detail of the step in progress ('' clears it). */
+    progress(detail) {
+        try { this.onProgress?.(detail); } catch (e) { logError(e, 'Artemis progress'); }
+    }
+
+    /** Report the step Artemis is starting now. */
+    step(label) {
+        try { this.onStep?.(label); } catch (e) { logError(e, 'Artemis step'); }
     }
 
     destroy() {
@@ -114,8 +126,10 @@ export class CommandRunner {
             const t = easeInOut(i / steps);
             const u = 1 - t;
             this._body.moveTo(u * u * a.x + 2 * u * t * c.x + t * t * x, u * u * a.y + 2 * u * t * c.y + t * t * y);
+            if (i % 3 === 0 || i === steps) this.progress(`cursor \u2192 ${Math.round(x)}, ${Math.round(y)}  ${Math.round(100 * i / steps)}%`);
             await this.sleep(STEP_MS);
         }
+        this.progress('');
     }
 
     /** A ring in the water at the sphere. */
@@ -138,6 +152,7 @@ export class CommandRunner {
     async type(text, guard, perChar = 85) {
         // While typing there's no ball or liquid: it disappears and comes back when it moves again.
         this._body.setTyping?.(true);
+        let typed = '';
         try {
         for (const ch of text) {
             if (guard && !guard()) throw new Error('something else took the keyboard, so typing stopped');
@@ -145,9 +160,12 @@ export class CommandRunner {
             this._press(keyval);
             await this.sleep(35);
             this._release(keyval);
+            typed += ch === '\n' ? '\u23CE' : ch;
+            this.progress(`typed \u201c${typed.length > 30 ? '\u2026' + typed.slice(-30) : typed}\u201d`);
             await this.sleep(perChar + Math.round((Math.random() - 0.5) * perChar * 0.6));
         }
         } finally {
+            this.progress('');
             this._body.setTyping?.(false);
         }
     }
@@ -213,6 +231,7 @@ const windowsMatching = (re) => global.display.list_all_windows()
 
 /** Launch argv and wait for a new window whose class matches re. */
 async function openWindow(r, argv, re, what, timeout = 25000) {
+    r.step(`Open a ${what} window`);
     const before = new Set(windowsMatching(re));
     try {
         Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
@@ -225,6 +244,8 @@ async function openWindow(r, argv, re, what, timeout = 25000) {
 
 /** Fly to the app's dock icon (or a point on the way) and ring the water there. */
 async function visitIcon(r, appId) {
+    const app = Shell.AppSystem.get_default().lookup_app(appId);
+    r.step(`Find ${app?.get_name() ?? 'the app'} in the dock`);
     const {w, h} = r.screen();
     const icon = findAppIcon(appId) ?? {x: w * 0.3, y: h * 0.6};
     await r.fly(icon.x, icon.y, 650, 0.22);
@@ -242,7 +263,9 @@ const safeFor = (win) => () => Main.modalCount === 0 && global.display.focus_win
 
 async function typeInto(r, win, text, settleMs = 900) {
     const safe = safeFor(win);
+    r.step('Wait for the window to take focus');
     await r.waitFor(safe, 6000, 'the window to take focus (is a system prompt open?)');
+    r.step(`Type \u201c${text.trim()}\u201d`);
     await r.sleep(settleMs);
     const p = centreOf(win, 0.3, 0.25);
     await r.fly(p.x, p.y, 450, 0.1);

@@ -22,6 +22,15 @@ const DONE_MS = 7000;    // how long "Done" stays
 
 const words = (s) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
 
+/** 'wh' for a wh-question, 'aux' for one that starts like "can you" or "is it", else null. */
+function questionKind(text) {
+    const t = text.trim().toLowerCase().replace(/^(hey |ok |okay )?artemis[,.]?\s*/, '');
+    if (/^(what|why|how|when|where|who|whom|whose|which)\b/.test(t)) return 'wh';
+    if (/^(can|could|would|will|should|is|are|am|was|were|do|does|did|have|has|may|might|shall)\b/.test(t)) return 'aux';
+    if (/\?\s*$/.test(t)) return 'aux';
+    return null;
+}
+
 export class Island {
     /**
      * opts: {commands, onRun(cmd), onStop(), onSettings(), onMoved()}
@@ -44,13 +53,25 @@ export class Island {
         this._wave = new St.DrawingArea({style_class: 'artemis-island-wave'});
         this._wave.connect('repaint', (area) => this._paintWave(area));
         this._status = new St.Label({style_class: 'artemis-island-status', text: '', y_align: Clutter.ActorAlign.CENTER, visible: false});
-        this._waveButton = new St.Button({style_class: 'artemis-island-wave-button', can_focus: true, accessible_name: 'Ask Artemis', child: this._wave});
-        this._waveButton.connect('clicked', () => this.toggle());
+        // Push to talk: hold the bars to speak, release to send. From the keyboard, Space or Enter on
+        // them starts and stops (and Ctrl+Shift+Space works anywhere, see extension.js).
+        this._waveButton = new St.Button({style_class: 'artemis-island-wave-button', can_focus: true, accessible_name: 'Push to talk', child: this._wave});
+        this._waveButton.connect('button-press-event', () => { this._opts.onTalk?.(true); return Clutter.EVENT_STOP; });
+        this._waveButton.connect('button-release-event', () => { this._opts.onTalk?.(false); return Clutter.EVENT_STOP; });
+        this._waveButton.connect('key-press-event', (_a, e) => {
+            const k = e.get_key_symbol();
+            if (k !== Clutter.KEY_space && k !== Clutter.KEY_Return) return Clutter.EVENT_PROPAGATE;
+            this._opts.onTalk?.(!this._listening);
+            return Clutter.EVENT_STOP;
+        });
         const chevronIcon = new St.Icon({icon_name: 'pan-down-symbolic', style_class: 'artemis-island-chevron-icon'});
         this._chevron = new St.Button({style_class: 'artemis-island-chevron', can_focus: true, accessible_name: 'Open Artemis', child: chevronIcon});
         this._chevron.connect('clicked', () => this.toggle());
         const sep = () => new St.Widget({style_class: 'artemis-island-sep', y_align: Clutter.ActorAlign.CENTER});
         for (const child of [this._ring, sep(), this._waveButton, this._chevron]) this._pill.add_child(child);
+        // The glow: its own layer just behind the pill (the pill's frosted blur would clip a shadow drawn on it).
+        this._glowActor = new St.Widget({style_class: 'artemis-island-glow', opacity: 0, reactive: false});
+        Main.layoutManager.addChrome(this._glowActor, {trackFullscreen: true});
         Main.layoutManager.addChrome(this._pill, {trackFullscreen: true});
         // The summary tab: what the last command did, beside the pill.
         this._tab = new St.BoxLayout({style_class: 'artemis-island-tab', vertical: true, visible: false, reactive: true});
@@ -80,13 +101,18 @@ export class Island {
         this._menuManager = new PopupMenu.PopupMenuManager(this._pill);
         this._menuManager.addMenu(this._menu);
         this._fillMenu();
+        // The menu wears the widget's material: the same frost and the same colour (CSS).
+        try {
+            const mblur = new Shell.BlurEffect({mode: Shell.BlurMode.BACKGROUND, brightness: 0.75});
+            if ('radius' in mblur) mblur.radius = 24; else mblur.sigma = 12;   // the same frost as the widget
+            if ('corner_radius' in mblur) mblur.corner_radius = 0;   // square, like the panel
+            this._menu.box.add_effect(mblur);
+        } catch (e) { console.warn(`Artemis: no menu blur (${e.message})`); }
         this._menu.connect('open-state-changed', (_m, open) => {
+            this._glass(open);
             chevronIcon.icon_name = open ? 'pan-up-symbolic' : 'pan-down-symbolic';
             this._chevron.accessible_name = open ? 'Close Artemis' : 'Open Artemis';
-            if (open) {
-                this._hint.text = '';
-                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => { this._entry?.grab_key_focus(); return GLib.SOURCE_REMOVE; });
-            }
+            if (open) GLib.idle_add(GLib.PRIORITY_DEFAULT, () => { this._recentBox?.get_first_child()?.grab_key_focus(); return GLib.SOURCE_REMOVE; });
         });
 
         this._pill.connect('notify::width', () => this._layout());
@@ -103,6 +129,9 @@ export class Island {
         this._timer = this._doneTimer = 0;
         if (this._monitorsId) Main.layoutManager.disconnect(this._monitorsId);
         if (this._panelId) Main.layoutManager.panelBox.disconnect(this._panelId);
+        if (this._glassTimer) GLib.source_remove(this._glassTimer);
+        this._glassTimer = 0;
+        this._glassOff();
         this._menu?.destroy();
         this._tab?.destroy();
         for (const actor of [this._pill, this._edge]) {
@@ -110,6 +139,8 @@ export class Island {
             Main.layoutManager.removeChrome(actor);
             actor.destroy();
         }
+        this._glowActor?.destroy();
+        this._glowActor = null;
         this._menu = this._pill = this._edge = this._tab = null;
     }
 
@@ -125,6 +156,52 @@ export class Island {
     }
 
     toggle() { this._menu?.toggle(); }
+
+    // --- liquid glass under the menu (glassEffect.js on each monitor's wallpaper) ----------------
+
+    _glass(open) {
+        if (this._glassTimer) { GLib.source_remove(this._glassTimer); this._glassTimer = 0; }
+        const box = this._menu?.box;
+        if (!open) {
+            if (box) { box.translation_y = 0; box.scale_x = box.scale_y = 1; box.get_children().forEach((c) => { c.opacity = 255; c.translation_y = 0; }); }
+            return;
+        }
+        // Liquid open: the menu drops out of the pill, sinks a little past its place, rises back and
+        // settles (an underdamped spring), and the items ripple in one by one.
+        const items = box ? box.get_children() : [];
+        if (box) { box.set_pivot_point(0.5, 0); }
+        const spring = (t, z = 0.42, w = 15) => {
+            if (t <= 0) return 0;
+            const wd = w * Math.sqrt(1 - z * z);
+            return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + (z * w / wd) * Math.sin(wd * t));
+        };
+        const t0 = GLib.get_monotonic_time();
+        this._glassTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            const t = (GLib.get_monotonic_time() - t0) / 1e6;
+            const p = spring(t);
+            if (box) {
+                box.translation_y = -18 * (1 - p);          // overshoot (p > 1) sinks it below its place
+                box.scale_y = 0.9 + 0.1 * p;                 // and stretches it a touch, like a drop
+                box.scale_x = 1 - 0.04 * (p - 1);            // thinner while stretched, wider while squashed
+                items.forEach((c, i) => {
+                    const q = Math.min(Math.max(spring(t - 0.05 - i * 0.025, 0.6, 18), 0), 1.2);
+                    c.opacity = Math.round(255 * Math.min(q, 1));
+                    c.translation_y = 8 * (1 - q);
+                });
+            }
+            if (t < 1.1) return GLib.SOURCE_CONTINUE;
+            if (box) { box.translation_y = 0; box.scale_x = box.scale_y = 1; items.forEach((c) => { c.opacity = 255; c.translation_y = 0; }); }
+            this._glassTimer = 0;
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _glassOff() {
+        for (const [actor, fx] of this._glassFx ?? []) {
+            try { actor.remove_effect(fx); actor.queue_redraw(); } catch (_) { /* the wallpaper was replaced */ }
+        }
+        this._glassFx = null;
+    }
 
     /** 'idle' | 'working' | 'done' */
     setState(state, text = '', summary = '') {
@@ -150,32 +227,288 @@ export class Island {
                 return GLib.SOURCE_REMOVE;
             });
         }
-        this._animate(state === 'working');
+        this._animate(this._wantAnim());
         this._wave.queue_repaint();
         this._edge.queue_repaint();
     }
 
     // --- panel ---------------------------------------------------------------------------------
 
+    // Two panes: on the left, the request box and your recent prompts; on the right, what Artemis is
+    // doing for the selected prompt as a process tree (each step done, running or stopped), which
+    // becomes a short summary when the task ends.
     _fillMenu() {
-        const box = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
-        const column = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'artemis-island-ask'});
-        this._entry = new St.Entry({style_class: 'artemis-island-entry', hint_text: 'What would you like to do?', can_focus: true, x_expand: true});
-        this._entry.clutter_text.connect('activate', () => this._ask(this._entry.get_text()));
-        this._hint = new St.Label({style_class: 'artemis-island-hint', text: ''});
-        column.add_child(this._entry);
-        column.add_child(this._hint);
-        box.add_child(column);
-        this._menu.addMenuItem(box);
-        this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Try'));
-        for (const cmd of this._opts.commands) this._menu.addAction(cmd.name, () => this._opts.onRun(cmd));
-        this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._stopItem = this._menu.addAction('Stop', () => this._opts.onStop());
-        this._stopItem.visible = false;
-        this._menu.addAction('Settings…', () => this._opts.onSettings());
+        this._tasks = this._tasks ?? [];
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'artemis-island-two-item'});
+        const panes = new St.BoxLayout({style_class: 'artemis-island-two', x_expand: true});
+
+        // No text box: requests are spoken (push to talk). The left pane is only the recent prompts.
+        const left = new St.BoxLayout({vertical: true, style_class: 'artemis-island-left'});
+        this._recentTitle = new St.Label({style_class: 'artemis-island-pane-title', text: 'Recent'});
+        this._recentBox = new St.BoxLayout({vertical: true, style_class: 'artemis-island-recent'});
+        for (const c of [this._recentTitle, this._recentBox]) left.add_child(c);
+
+        const right = new St.BoxLayout({vertical: true, style_class: 'artemis-island-right', x_expand: true});
+        this._dGoal = new St.Label({style_class: 'artemis-island-pane-title', text: 'Goal'});
+        this._dTitle = new St.Label({style_class: 'artemis-island-d-title'});
+        this._dTitle.clutter_text.line_wrap = true;
+        this._dStatus = new St.Label({style_class: 'artemis-island-d-status'});
+        this._dTree = new St.BoxLayout({vertical: true, style_class: 'artemis-island-tree'});
+        this._dSummary = new St.Label({style_class: 'artemis-island-d-summary'});
+        this._dSummary.clutter_text.line_wrap = true;
+        const actions = new St.BoxLayout({style_class: 'artemis-island-d-actions'});
+        this._stopItem = {visible: false}; // no Stop button in the panel (stop by voice or from the Artemis menu)
+        this._againBtn = new St.Button({style_class: 'artemis-island-d-btn artemis-island-d-btn-main', label: 'Run again', can_focus: true, visible: false});
+        this._againBtn.connect('clicked', () => { const t = this._selected(); if (t?.cmd) { this._menu.close(); this._opts.onRun(t.cmd, t.prompt); } });
+        actions.add_child(this._againBtn);
+        // An approval from the core: what will change, then Reject / Approve (Enter approves, Escape rejects).
+        this._apprBox = new St.BoxLayout({vertical: true, style_class: 'artemis-island-appr', visible: false});
+        this._apprText = new St.Label({style_class: 'artemis-island-appr-text'});
+        this._apprText.clutter_text.line_wrap = true;
+        const apprRow = new St.BoxLayout({style_class: 'artemis-island-d-actions'});
+        this._rejectBtn = new St.Button({style_class: 'artemis-island-d-btn', label: 'Reject', can_focus: true});
+        this._approveBtn = new St.Button({style_class: 'artemis-island-d-btn artemis-island-d-btn-main', label: 'Approve', can_focus: true});
+        this._rejectBtn.connect('clicked', () => this._decide(false));
+        this._approveBtn.connect('clicked', () => this._decide(true));
+        for (const b of [this._rejectBtn, this._approveBtn]) b.connect('key-press-event', (_a, e) => {
+            if (e.get_key_symbol() === Clutter.KEY_Escape) { this._decide(false); return Clutter.EVENT_STOP; }
+            return Clutter.EVENT_PROPAGATE;
+        });
+        apprRow.add_child(this._rejectBtn); apprRow.add_child(this._approveBtn);
+        this._apprBox.add_child(this._apprText); this._apprBox.add_child(apprRow);
+        for (const c of [this._dGoal, this._dTitle, this._dStatus, this._dTree, this._apprBox, this._dSummary, actions]) right.add_child(c);
+
+        panes.add_child(left);
+        panes.add_child(new St.Widget({style_class: 'artemis-island-vsep'}));
+        panes.add_child(right);
+        item.add_child(panes);
+        this._menu.addMenuItem(item);
+        // one quiet footer line: how to talk, and Settings
+        const foot = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'artemis-island-foot-item'});
+        const fbox = new St.BoxLayout({x_expand: true, style_class: 'artemis-island-foot'});
+        // the trademark, small, bottom left: artemis. with the period in the accent
+        const mark = new St.Label({style_class: 'artemis-island-mark', y_align: Clutter.ActorAlign.CENTER});
+        mark.clutter_text.set_markup('artemis<span foreground="#a99fc7">.</span>');
+        fbox.add_child(mark);
+        this._footHint = new St.Label({style_class: 'artemis-island-foot-hint', text: 'Hold the bars or Ctrl+Shift+Space to talk', x_expand: true, y_align: Clutter.ActorAlign.CENTER});
+        const set = new St.Button({style_class: 'artemis-island-foot-btn', label: 'Settings', can_focus: true});
+        set.connect('clicked', () => { this._menu.close(); this._opts.onSettings(); });
+        fbox.add_child(this._footHint); fbox.add_child(set);
+        foot.add_child(fbox);
+        this._menu.addMenuItem(foot);
+        this._renderTasks();
     }
 
-    // Typed request: run the command it best matches, or say which ones exist.
+    // --- tasks: recent prompts and the process tree ----------------------------------------------
+
+    /** A prompt starts. Anything still running was replaced by it. */
+    taskStart(prompt, cmd, id = null) {
+        this._tasks = this._tasks ?? [];
+        for (const t of this._tasks) if (t.state === 'working') { t.state = 'stopped'; t.summary = 'Replaced by a newer request.'; t.steps.forEach((x) => { if (x.state === 'running') x.state = 'stopped'; }); }
+        const task = {prompt, cmd, id, state: 'working', steps: [], summary: '', at: GLib.DateTime.new_now_local()};
+        this._tasks.unshift(task);
+        this._tasks.length = Math.min(this._tasks.length, 6);
+        this._sel = task;
+        this._renderTasks();
+    }
+
+    /** The running prompt moves to its next step. */
+    taskStep(label) {
+        const t = this._tasks?.find((x) => x.state === 'working');
+        if (!t) return;
+        t.steps.forEach((x) => { if (x.state === 'running') x.state = 'done'; });
+        t.steps.push({label, state: 'running'});
+        this._renderTasks();
+    }
+
+    /** The core asks to approve a change or a run: show it and put the focus on Approve. */
+    taskApproval(id, approval) {
+        const t = this._tasks?.find((x) => x.id === id) ?? this._tasks?.find((x) => x.state === 'working');
+        if (!t) return;
+        t.approval = approval;
+        this._sel = t;
+        if (!this._menu.isOpen) this._menu.open();
+        this._renderTasks();
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => { this._approveBtn?.grab_key_focus(); return GLib.SOURCE_REMOVE; });
+    }
+
+    taskApprovalResolved(id) {
+        const t = this._tasks?.find((x) => x.approval?.approval_id === id);
+        if (!t) return;
+        t.approval = null;
+        this._renderTasks();
+    }
+
+    _decide(approve) {
+        const t = this._selected();
+        if (!t?.approval) return;
+        const a = t.approval;
+        t.approval = null; // one decision per approval; the core confirms with approval.resolved
+        this._renderTasks();
+        this._opts.onApprove?.(a, approve);
+    }
+
+    /** Find a task by the core's id, for events that carry task_id. */
+    taskById(id) { return this._tasks?.find((x) => x.id === id) ?? null; }
+
+    /** Live detail of the running step: where the cursor is going, what has been typed so far. */
+    taskProgress(detail) {
+        const t = this._tasks?.find((x) => x.state === 'working');
+        const step = t?.steps.findLast((x) => x.state === 'running');
+        if (!step) return;
+        step.detail = detail;
+        if (this._liveLabel && this._selected() === t) {
+            this._liveLabel.text = detail;
+            this._liveLabel.visible = !!detail;
+        }
+    }
+
+    /** The prompt ended: the tree closes and the summary takes over. */
+    taskEnd(summary, failed) {
+        const t = this._tasks?.find((x) => x.state === 'working');
+        if (!t) return;
+        t.state = failed ? 'stopped' : 'done';
+        t.steps.forEach((x) => { if (x.state === 'running') x.state = failed ? 'stopped' : 'done'; });
+        t.summary = summary;
+        this._renderTasks();
+    }
+
+    _selected() { return this._tasks?.includes(this._sel) ? this._sel : this._tasks?.[0] ?? null; }
+
+    _renderTasks() {
+        if (!this._recentBox) return;
+        const GLYPH = {working: '\u25CF', done: '\u2713', stopped: '!'};
+        this._recentBox.destroy_all_children();
+        const sel = this._selected();
+        this._recentTitle.text = 'Recent';
+        if (!this._tasks.length) this._recentBox.add_child(new St.Label({style_class: 'artemis-island-empty', text: 'Nothing yet'}));
+        for (const t of this._tasks) {
+            const row = new St.BoxLayout({style_class: 'artemis-island-row-in'});
+            const g = new St.Label({style_class: `artemis-island-glyph artemis-island-glyph-${t.state}`, text: GLYPH[t.state], y_align: Clutter.ActorAlign.CENTER});
+            const l = new St.Label({text: t.prompt, x_expand: true, y_align: Clutter.ActorAlign.CENTER});
+            l.clutter_text.ellipsize = 3; // Pango.EllipsizeMode.END
+            row.add_child(g); row.add_child(l);
+            const b = new St.Button({style_class: 'artemis-island-row', child: row, can_focus: true, x_align: Clutter.ActorAlign.FILL,
+                accessible_name: `${t.prompt}, ${t.state === 'working' ? 'working' : t.state === 'done' ? 'done' : 'stopped'}`});
+            if (t === sel) b.add_style_pseudo_class('checked');
+            b.connect('clicked', () => { this._sel = t; this._renderTasks(); });
+            this._recentBox.add_child(b);
+        }
+        // the right pane
+        this._dTree.destroy_all_children();
+        this._liveLabel = null;
+        if (this._listening || this._hearing) {
+            const said = this._partial?.trim();
+            this._dGoal.text = 'Goal';
+            this._dTitle.text = said ? `${said} \u258D` : (this._listening ? 'Listening\u2026' : 'Transcribing\u2026');
+            this._dStatus.text = this._listening ? 'Listening \u00b7 stops when you pause' : 'Got it\u2026';
+            if (this._listening) this._dStatus.add_style_pseudo_class('working'); else this._dStatus.remove_style_pseudo_class('working');
+            this._dSummary.text = ''; this._dSummary.visible = false;
+            this._stopItem.visible = this._againBtn.visible = false;
+            return;
+        }
+        if (!sel) {
+            this._dTitle.text = 'Say what you want done';
+            this._dStatus.text = '';
+            this._dSummary.visible = true;
+            this._dSummary.text = 'Your request becomes the goal here, with each step as Artemis works.';
+            this._stopItem.visible = this._againBtn.visible = false;
+            return;
+        }
+        this._dTitle.text = sel.prompt;
+        this._dGoal.text = sel.kind === 'question' ? 'Question' : 'Goal';
+        this._dStatus.text = sel.state === 'working' ? 'Working\u2026' : `${sel.state === 'done' ? 'Done' : 'Stopped'} \u00b7 ${sel.at.format('%H:%M')}`;
+        if (sel.state === 'working') this._dStatus.add_style_pseudo_class('working'); else this._dStatus.remove_style_pseudo_class('working');
+        const steps = sel.steps.length ? sel.steps : (sel.state === 'working' ? [{label: 'Starting', state: 'running'}] : []);
+        steps.forEach((x, i) => {
+            const row = new St.BoxLayout({style_class: 'artemis-island-tree-row'});
+            const branch = new St.Label({style_class: 'artemis-island-branch', text: i === steps.length - 1 ? '\u2514' : '\u251C'});
+            const g = new St.Label({style_class: `artemis-island-glyph artemis-island-glyph-${x.state === 'running' ? 'working' : x.state}`, text: x.state === 'running' ? '\u25CF' : x.state === 'done' ? '\u2713' : '!'});
+            const col = new St.BoxLayout({vertical: true, x_expand: true});
+            const l = new St.Label({style_class: `artemis-island-step artemis-island-step-${x.state}`, text: x.label});
+            l.clutter_text.line_wrap = true;
+            col.add_child(l);
+            if (x.state === 'running') {
+                // updated in place as the cursor moves or text is typed (taskProgress), without rebuilding the tree
+                this._liveLabel = new St.Label({style_class: 'artemis-island-step-live', text: x.detail ?? '', visible: !!x.detail});
+                col.add_child(this._liveLabel);
+            }
+            row.add_child(branch); row.add_child(g); row.add_child(col);
+            this._dTree.add_child(row);
+        });
+        this._apprBox.visible = !!sel.approval;
+        if (sel.approval) this._apprText.text = sel.approval.summary.replace(/\s*Enter to (approve|run), Escape to reject\.?\s*$/i, '');
+        this._dSummary.text = sel.state === 'working' ? '' : sel.summary;
+        this._dSummary.visible = sel.state !== 'working';
+        this._stopItem.visible = sel.state === 'working';
+        this._againBtn.visible = sel.state !== 'working' && !!sel.cmd;
+    }
+
+    /** Push to talk: the bars move while listening, and the right pane says so. */
+    setListening(listening, hearing = false) {
+        if (!listening && !hearing) this._partial = '';
+        this._listening = listening;
+        this._hearing = hearing;
+        this._animate(this._wantAnim());
+        this._wave?.queue_repaint();
+        if (listening && !this._menu.isOpen) this._menu.open();
+        this._renderTasks();
+    }
+
+    /** Your words so far, printed live while you speak (local Whisper). */
+    partial(text) {
+        this._partial = text;
+        if (!this._listening) this.setListening(true); else this._renderTasks();
+    }
+
+    /** What the developer said: a request becomes the goal; a question is recognised as one. */
+    hear(text) {
+        this._hearing = false;
+        this._partial = '';
+        if (!text) { this._renderTasks(); return; }
+        const q = questionKind(text);
+        // "Can you open VS Code?" is a request phrased as a question: run it if it matches a command.
+        if (q === 'wh' || (q === 'aux' && !this._match(text))) {
+            this.taskStart(text.trim(), null);
+            this._tasks[0].kind = 'question';
+            this.taskEnd('Recognised as a question. Answers aren\u2019t connected yet: ask Artemis to do something instead.', false);
+            this._questionUntil = GLib.get_monotonic_time() + 6e6; // the glow holds while Artemis replies
+            this._animate(this._wantAnim());
+            this._opts.onQuestion?.(text.trim());
+            return;
+        }
+        this._ask(text);
+    }
+
+    _match(text) {
+        const want = words(text);
+        let best = null, score = 0;
+        for (const cmd of this._opts.commands) {
+            const have = words(`${cmd.name} ${(cmd.keywords ?? []).join(' ')}`);
+            const s = want.filter((w) => have.some((h) => h.startsWith(w) || w.startsWith(h))).length;
+            if (s > score) { score = s; best = cmd; }
+        }
+        return score >= 2 ? best : null;
+    }
+
+    _questioning() { return (this._questionUntil ?? 0) > GLib.get_monotonic_time(); }
+
+    _wantAnim() { return this._state === 'working' || !!this._speaking || !!this._listening || this._questioning(); }
+
+    /** A soft lilac glow that breathes on the pill while Artemis listens, or after a question. */
+    _glowTick() {
+        const on = !!this._listening || this._questioning();
+        if (!on) { if (this._glowing) { this._pill?.set_style(null); if (this._glowActor) this._glowActor.opacity = 0; this._glowing = false; } return; }
+        this._glowing = true;
+        const b = 0.5 + 0.5 * Math.sin(this._phase * (this._listening ? 4.2 : 2.6));
+        if (this._glowActor) {
+            if (this._glowActor.width !== this._pill.width) this._glowActor.set_size(this._pill.width, this._pill.height);
+            this._glowActor.opacity = Math.round(150 + 105 * b);   // breathes
+        }
+        this._pill?.set_style(`border-color: rgba(190, 180, 225, ${(0.45 + 0.4 * b).toFixed(2)});`);
+    }
+
+    // Spoken request: run the command it best matches; otherwise keep it as a goal Artemis could not do.
     _ask(text) {
         const want = words(text);
         let best = null, score = 0;
@@ -184,10 +517,13 @@ export class Island {
             const s = want.filter((w) => have.some((h) => h.startsWith(w) || w.startsWith(h))).length;
             if (s > score) { score = s; best = cmd; }
         }
-        if (!best) { this._hint.text = 'I can do one of the things below for now. Pick one, or try other words.'; return; }
-        this._entry.set_text('');
-        this._menu.close();
-        this._opts.onRun(best);
+        if (!best) {
+            this.taskStart(text.trim(), null);
+            this.taskEnd('I can\u2019t do that yet. Try other words.', true);
+            this._opts.onUnknown?.(text.trim());
+            return;
+        }
+        this._opts.onRun(best, text.trim()); // the menu stays open: the right pane shows the work as it happens
     }
 
     // --- layout and painting -------------------------------------------------------------------
@@ -202,6 +538,8 @@ export class Island {
         const px = Math.round(m.x + (m.width - this._idleWidth) / 2); // the ring's slot never moves
         const py = Math.round(panelBottom + GAP * s);
         this._pill.set_position(px, py);
+        this._glowActor?.set_position(px, py);
+        this._glowActor?.set_size(this._pill.width, this._pill.height);
         if (this._tab) this._tab.set_position(px + Math.round((this._idleWidth - this._tab.width) / 2), py + this._pill.height + Math.round(8 * s)); // under the widget
         // The edge strip runs from the top of the screen (so it reserves space as a top strut) to
         // just below the pill; only the line along the bar's bottom edge is drawn in it.
@@ -271,9 +609,9 @@ export class Island {
     _paintWave(area) {
         const cr = area.get_context();
         const [w, h] = area.get_surface_size();
-        const active = this._state === 'working';
+        const active = this._state === 'working' || this._speaking || this._listening;
         const n = 8, bw = 3 * this._scale, gap = (w - n * bw) / (n - 1);
-        cr.setSourceRGBA(0.85, 0.75, 0.99, active ? 0.95 : 0.55);
+        cr.setSourceRGBA(0.83, 0.83, 0.85, active ? 0.8 : 0.45); // graphite bars
         for (let i = 0; i < n; i++) {
             const rest = (i % 2 ? 6 : 4) * this._scale;
             const live = h * (0.25 + 0.7 * Math.abs(Math.sin(this._phase * 5 + i * 1.3) * Math.sin(this._phase * 2.1 + i * 0.7)));
@@ -288,6 +626,13 @@ export class Island {
         cr.$dispose();
     }
 
+    /** The bars move while Artemis speaks, too. */
+    setSpeaking(on) {
+        this._speaking = on;
+        this._animate(this._wantAnim());
+        this._wave?.queue_repaint();
+    }
+
     _animate(on) {
         if (on && !this._timer) {
             let last = GLib.get_monotonic_time();
@@ -297,6 +642,8 @@ export class Island {
                 last = now;
                 this._wave?.queue_repaint();
                 this._edge?.queue_repaint();
+                this._glowTick();
+                if (!this._wantAnim()) { this._timer = 0; this._glowTick(); return GLib.SOURCE_REMOVE; }
                 return GLib.SOURCE_CONTINUE;
             });
         } else if (!on && this._timer) {

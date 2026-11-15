@@ -8,8 +8,23 @@
       <summary>Driver</summary>
       <description>agent: a liquid-glass sphere rests in the bottom-left corner and zips through commands; the mouse stirs nothing. pointer: the effect follows the mouse pointer (see Style).</description>
     </key>
+    <key name="wake-word" type="b">
+      <default>false</default>
+      <summary>Listen for "Hey Artemis"</summary>
+      <description>Hands-free: say "Hey Artemis" (or "Artemis, ...") and then the request. Transcribed locally with Whisper; other speech is dropped unread.</description>
+    </key>
+    <key name="push-to-talk" type="as">
+      <default><![CDATA[['<Control><Shift>space']]]></default>
+      <summary>Push to talk</summary>
+      <description>Press to start talking to Artemis, press again to send (as main's push-to-talk shortcut).</description>
+    </key>
+    <key name="voice" type="s">
+      <default>'bill'</default>
+      <summary>Voice</summary>
+      <description>Artemis's voice: a key from voices.js (a free ElevenLabs default voice, or 'system').</description>
+    </key>
     <key name="ui-font" type="s">
-      <choices><choice value="Inter"/><choice value="Space Grotesk"/><choice value="Manrope"/><choice value="Outfit"/><choice value="Sora"/><choice value="Ubuntu Sans"/></choices>
+      <choices><choice value="Inter"/><choice value="Space Grotesk"/><choice value="Manrope"/><choice value="Outfit"/><choice value="Sora"/><choice value="Ubuntu Sans"/><choice value="JetBrains Mono"/></choices>
       <default>'Inter'</default>
       <summary>Font</summary>
       <description>Font for the island's panel and board.</description>
