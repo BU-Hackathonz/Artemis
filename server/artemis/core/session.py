@@ -175,7 +175,12 @@ class Session:
         self.desktop = DesktopOps(
             self.emit, ready=lambda: self.desktop_ready, subscribers=lambda: self.bus.subscriber_count
         )
-        self.gateway = ToolGateway(runner, self.approvals, self.emit, projects_dir=projects_dir, scan=scan)
+        self.gateway = ToolGateway(
+            runner, self.approvals, self.emit, projects_dir=projects_dir, scan=scan,
+            desktop=self._desktop_bridge,
+            # §10: the real agent plans before it acts; scripted agents (stub, tests) may skip it
+            require_plan=type(agent).__name__ == "ClaudeAgent",
+        )
         self.agent = agent
         self.tasks: dict[str, Task] = {}
         self._by_request: dict[str, str] = {}  # client_request_id -> task_id (idempotency)
@@ -238,7 +243,13 @@ class Session:
         if task.active or task.done_cued:
             return
         task.done_cued = True
-        await self.ring_cue(task.task_id, "done")
+        await self.gateway.ring_done(task.task_id)  # the ring goes home, and the gate forgets the plan
+
+    async def _desktop_bridge(self, task_id: str, _op_id: str, kind: str, text: str, window: str | None):
+        """The gate's typing bridge (contracts.md §9): (ok, message, window). The core mints its own
+        op_id (random, single-use), so the gate's is not used."""
+        result = await self.desktop.request(kind, text, task_id, window=window)
+        return result.ok, result.message, result.window
 
     async def plan(self, task_id: str, goal: str, steps: list) -> None:
         """Emit agent.plan (silent). The gate can do the same with its emit and contracts.plan_draft."""
