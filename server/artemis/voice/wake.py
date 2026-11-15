@@ -173,6 +173,10 @@ _NAME = (r"art[ae]m[iaeu]ss?t?|artimis|artimus|artemas|artemise|arth[ae]m[iaeu]s
 _GREETING = r"hey|hay|hi|hello|okay|ok|a|ay"
 _WAKE = re.compile(rf"^\W*(?:{_GREETING})\W+(?:{_NAME})\b[\s,.:;!?-]*", re.IGNORECASE)
 # The start of the phrase and no more ("Hey", "Hey Art"): the speaker is pausing inside "Hey Artemis".
+# The phrase later in an utterance ("so that's it, hey Artemis"). Only full greetings: a bare "a" mid-sentence
+# ("a Artemis demo") is not "Hey". Used only inside an open window, where the words before it would otherwise
+# become the request.
+_WAKE_LATER = re.compile(rf"(?:^|[\s,.;:!?-])(?:hey|hay|hi|hello|okay|ok)\W+(?:{_NAME})\b[\s,.:;!?-]*", re.IGNORECASE)
 _PARTIAL = re.compile(rf"^\W*(?:hey|hay|hi|hello|okay|ok)\W*(?:art\w*)?\W*$", re.IGNORECASE)
 
 
@@ -183,6 +187,15 @@ def wake_request(transcript: str) -> str | None:
     if found is None:
         return None
     return transcript[found.end():].strip()
+
+
+def wake_later(transcript: str) -> str | None:
+    """None if the wake phrase is nowhere in the transcript. Otherwise what follows its last occurrence ("" when the
+    utterance ended with it): the words before it were not the request."""
+    last = None
+    for last in _WAKE_LATER.finditer(transcript):
+        pass
+    return None if last is None else transcript[last.end():].strip()
 
 
 # ----- hearing the speaker, not the room -----
@@ -479,7 +492,12 @@ class WakeLoop:
         elif was_armed:
             if phantom:
                 return None  # after "Hey Artemis", a stock phrase from noise must not become a request
-            request = text  # inside the window after "Hey Artemis": no phrase needed
+            later = wake_later(text)
+            if later is not None:  # "..., hey Artemis [request]": the phrase said again starts the request over
+                self.stats.wakes += 1
+                request = later
+            else:
+                request = text  # inside the window after "Hey Artemis": no phrase needed
         else:
             self.stats.ignored += 1
             return self._emit(Event("ignored", f"{len(text.split())} words", seconds))
