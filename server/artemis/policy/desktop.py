@@ -718,7 +718,7 @@ class DesktopTools:
         text = a.text.replace("\r\n", "\n").replace("\r", "\n")
         # _short joins lines, so say out loud that each line break is an Enter key.
         breaks = text.count("\n")
-        enter = f" with {breaks} line break{'s' if breaks != 1 else ''}, each one the Enter key" if breaks else ""
+        enter = f" with {breaks} line break{'s' if breaks != 1 else ''}, each one a press of the enter key" if breaks else ""
         return await self._type_into(task_id, "type", text, f"Type “{_short(text)}”{enter}")
 
     async def _press_keys(self, task_id: str, a: PressKeysArgs) -> dict:
