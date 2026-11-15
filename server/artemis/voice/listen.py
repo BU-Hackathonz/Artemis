@@ -251,6 +251,19 @@ class WhisperVoice:
             from faster_whisper import WhisperModel
 
             self._model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
+            self._prime()
+
+    def _prime(self) -> None:
+        """One throwaway pass at startup. The first real decode paid the one-time setup (the VAD model, CTranslate2's
+        first allocations, cold disk reads right after login): 11-15 s on David's laptop. The result is discarded."""
+        started = time.monotonic()
+        try:
+            noise = np.random.default_rng(0).normal(0, 1e-3, RATE).astype(np.float32)  # 1 s, near silence
+            list(self._model.transcribe(noise, language="en", beam_size=self.beam_size, vad_filter=True)[0])  # loads the VAD
+            list(self._model.transcribe(noise, language="en", beam_size=self.beam_size, vad_filter=False)[0])  # runs the decoder
+            log.info("Speech model primed in %.1f s", time.monotonic() - started)
+        except Exception as e:  # priming is only for speed: the first request still works without it
+            log.warning("Speech model priming failed (%s); the first request may be slow", type(e).__name__)
 
     def _on_audio(self, data, frames, time, status) -> None:
         with self._lock:
