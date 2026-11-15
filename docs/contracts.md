@@ -622,13 +622,21 @@ the developer's own GitHub account (`gh api user`). Approval `kind` is `publish`
 on the keyboard only, never by voice (§5.4).
 - The dialog names the repository (`owner/repo`), private or public, and every file.
 - `public: true` is a high-severity finding, so it needs the override key.
-- Only `project_files` is committed, never `.env` or `.git`. A file that looks like it holds a key or
-  password stops the publish before anyone is asked.
-- The hash covers the repository, the visibility and every file's name and content. A change during
-  the decision invalidates the approval.
-- On approval the gate runs `git init` if needed, `git add` of those files, one commit ("First
-  version"), then `gh repo create owner/repo --private|--public --source . --remote origin --push`.
-  `gh` keeps its login in the keyring, so it gets the session environment, but no Artemis keys.
+- **The push never comes from the project folder.** The gate copies the project's files (`project_files`,
+  never `.env` or `.git`, minus anything `.gitignore` excludes) byte for byte into a fresh private
+  folder. It runs `git init` there with hooks, fsmonitor, templates and system/global config off, and
+  pushes from there. So an existing `.git` (its history, index, hooks, config or `origin`) can't add
+  anything, and publishing again works.
+- Files that look like they hold a key, token, password or private key, by name or content, stop the
+  publish before anyone is asked.
+- The dialog lists every file (`Approval.files`). The spoken summary names the first eight and the
+  description.
+- The hash covers the repository, the visibility, the description and every file's name and bytes. A
+  fresh copy is hashed again after the decision, and a change invalidates the approval.
+- On approval: one commit ("First version") as `<id>+<login>@users.noreply.github.com`, then `gh repo
+  create owner/repo --private|--public --source . --remote origin --push` from the private copy. `gh`
+  gets the session environment for its keyring login, with hooks still off, and none of Artemis's
+  keys. A timeout kills gh's whole process group.
 
 ## 10. The plan and the ring (Proposed (David), for Avery to merge)
 

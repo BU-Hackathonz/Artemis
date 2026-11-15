@@ -15,8 +15,14 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="the desktop too
 
 FAKE_GH = """#!/bin/sh
 echo "$@" >> "$GH_LOG"
-if [ "$1" = api ]; then [ -n "$GH_SIGNED_OUT" ] && exit 1; echo octo-dev; exit 0; fi
-if [ "$1" = repo ] && [ "$2" = create ]; then exit 0; fi
+if [ "$1" = api ]; then [ -n "$GH_SIGNED_OUT" ] && exit 1; echo "octo-dev 42"; exit 0; fi
+if [ "$1" = repo ] && [ "$2" = create ]; then
+  # what would be pushed: the files and the history of the folder gh was started in
+  echo "FILES $(git ls-files | tr '\\n' ' ')" >> "$GH_LOG"
+  echo "COMMITS $(git rev-list --count HEAD) AUTHOR $(git log -1 --format=%ae)" >> "$GH_LOG"
+  echo "REMOTES $(git remote | tr '\\n' ' ')" >> "$GH_LOG"
+  exit 0
+fi
 exit 0
 """
 
@@ -25,7 +31,7 @@ exit 0
 def world(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
-    (home / ".gitconfig").write_text("[user]\n\tname = Test Dev\n\temail = dev@example.invalid\n")
+    # No git identity on purpose: a fresh demo laptop has none, and publishing must still work.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
@@ -76,7 +82,7 @@ def test_an_approved_private_publish_commits_and_creates_the_repo(world):
     assert "private repository, octo-dev/tip-calculator" in asked.summary and "index.html" in asked.summary
     calls = log.read_text()
     assert "repo create octo-dev/tip-calculator --private --source . --remote origin --push" in calls
-    assert (project / ".git").is_dir()
+    assert not (project / ".git").exists()  # the project folder is never touched: the push comes from a private copy
 
 
 def test_public_needs_the_override_key(world):
@@ -119,3 +125,83 @@ def test_a_file_changed_during_the_approval_is_not_published(world):
     g, _, _ = gate(projects, [change])
     assert publish(g).error == "invalidated"
     assert "repo create" not in log.read_text()
+
+
+def pushed(log):
+    lines = log.read_text().splitlines()
+    files = next(line for line in lines if line.startswith("FILES ")).split()[1:]
+    commits = next(line for line in lines if line.startswith("COMMITS "))
+    return sorted(files), commits
+
+
+def test_what_is_pushed_is_exactly_the_approved_files_with_one_commit(world):
+    projects, _, log = world
+    g, _, approvals = gate(projects, [Decision.approve])
+    assert publish(g).ok
+    files, commits = pushed(log)
+    assert files == ["index.html", "tip.py"] == [f.path for f in approvals.requests[0].files]
+    assert commits.startswith("COMMITS 1 AUTHOR 42+octo-dev@users.noreply.github.com")
+
+
+def test_an_existing_git_folder_adds_no_history_files_or_hooks(world, tmp_path):
+    projects, project, log = world
+    run_git = lambda *a: __import__("subprocess").run(["git", "-c", "user.name=x", "-c", "user.email=x@x", *a],
+                                                      cwd=project, check=True, capture_output=True)
+    run_git("init", "-q")
+    (project / "old-secret.txt").write_text("from an old commit\n")
+    run_git("add", "-A")
+    run_git("commit", "-q", "-m", "wip")
+    (project / "old-secret.txt").unlink()
+    marker = tmp_path / "hook-ran"
+    hook = project / ".git" / "hooks" / "pre-commit"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o755)
+    run_git("config", "core.fsmonitor", f"touch {marker}")
+    run_git("remote", "add", "origin", "https://example.invalid/other.git")
+    g, _, _ = gate(projects, [Decision.approve])
+    assert publish(g).ok
+    files, commits = pushed(log)
+    assert files == ["index.html", "tip.py"] and commits.startswith("COMMITS 1 ")
+    assert [line.strip() for line in log.read_text().splitlines() if line.startswith("REMOTES")] == ["REMOTES"]
+    assert not marker.exists()
+
+
+def test_publishing_twice_works(world):
+    projects, _, log = world
+    g, _, _ = gate(projects, [Decision.approve, Decision.approve])
+    assert publish(g).ok
+    assert asyncio.run(g.call("t1", "publish_github", {"repo": "tip-calc-v2", "public": False, "description": None})).ok
+    assert "repo create octo-dev/tip-calc-v2" in log.read_text()
+
+
+def test_ignored_files_are_left_out_not_an_error(world):
+    projects, project, log = world
+    (project / ".gitignore").write_text("*.log\n")
+    (project / "debug.log").write_text("noise\n")
+    (project / ".pytest_cache").mkdir()
+    (project / ".pytest_cache" / ".gitignore").write_text("*\n")
+    (project / ".pytest_cache" / "README.md").write_text("cache\n")
+    g, _, approvals = gate(projects, [Decision.approve])
+    assert publish(g).ok
+    files, _ = pushed(log)
+    assert files == [".gitignore", "index.html", "tip.py"]
+    assert "debug.log" not in approvals.requests[0].summary
+
+
+@pytest.mark.parametrize("name,content", [("deploy.py", "TOKEN = 'ghp_" + "a" * 36 + "'\n"),
+                                          ("db.py", "URL = 'postgres://admin:hunter2@db.example/app'\n"),
+                                          ("server.pem", "anything\n"),
+                                          ("settings.py", "aws_secret_access_key = abc\n")])
+def test_more_kinds_of_secret_stop_the_publish(world, name, content):
+    projects, project, _ = world
+    (project / name).write_text(content)
+    g, _, approvals = gate(projects, [Decision.approve])
+    assert publish(g).error == "path_rejected" and approvals.requests == []
+
+
+def test_the_description_is_shown_and_hashed(world):
+    projects, _, _ = world
+    g, _, approvals = gate(projects, [Decision.reject])
+    publish(g, description="A tip splitter")
+    asked = approvals.requests[0]
+    assert "A tip splitter" in asked.summary and "A tip splitter" in asked.desktop.text
