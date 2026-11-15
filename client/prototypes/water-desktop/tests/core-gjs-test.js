@@ -164,6 +164,50 @@ async function testLive(dir) {
     Gio.File.new_for_path(launchPath).delete(null);
 }
 
+// Voice settings (contracts §7) against the core. The stub core's voice file lives in a temp HOME.
+async function testVoiceSettings(dir) {
+    const launchPath = `${dir}/launch.json`;
+
+    const offline = new CoreClient({launchPath: `${dir}/none.json`});
+    const noCore = await offline.getVoiceSettings();
+    check(noCore.ok === false && noCore.error === 'not_connected',
+        'voices: without a launch file every call gives not_connected');
+    check((await offline.getVoices()).error === 'not_connected' &&
+        (await offline.patchVoiceSettings({eleven_speed: 1.1})).error === 'not_connected',
+    'voices: getVoices and patchVoiceSettings give not_connected too');
+    offline.destroy();
+
+    writeLaunch(launchPath);
+    const client = new CoreClient({launchPath});
+    client.start();
+    await waitFor('connection for voice settings', () => client.connected);
+
+    const voices = await client.getVoices();
+    check(voices.ok === true && Array.isArray(voices.voices), 'voices: getVoices ok with an array');
+
+    const before = await client.getVoiceSettings();
+    check(before.ok === true && before.settings.eleven_speed !== undefined,
+        'voices: getVoiceSettings ok and has eleven_speed');
+
+    const set = await client.patchVoiceSettings({eleven_speed: 1.1});
+    check(set.ok === true && set.settings.eleven_speed === 1.1,
+        'voices: patch eleven_speed to 1.1 and the returned settings show 1.1');
+    const readBack = await client.getVoiceSettings();
+    check(readBack.ok === true && readBack.settings.eleven_speed === 1.1,
+        'voices: a later read shows the saved 1.1');
+
+    const bad = await client.patchVoiceSettings({eleven_speed: 5});
+    check(bad.ok === false && bad.error === 'invalid_setting' && bad.field === 'eleven_speed',
+        'voices: eleven_speed 5 gives invalid_setting with field eleven_speed');
+    const unchanged = await client.getVoiceSettings();
+    check(unchanged.ok === true && unchanged.settings.eleven_speed === 1.1,
+        'voices: a refused patch changes nothing');
+
+    await client.patchVoiceSettings({eleven_speed: before.settings.eleven_speed});
+    client.destroy();
+    Gio.File.new_for_path(launchPath).delete(null);
+}
+
 async function main() {
     if (!URL || !TOKEN) {
         print('Set ARTEMIS_TEST_URL and ARTEMIS_TEST_TOKEN to a running core.');
@@ -173,6 +217,7 @@ async function main() {
     const dir = GLib.dir_make_tmp('artemis-core-test-XXXXXX');
     try {
         await testLive(dir);
+        await testVoiceSettings(dir);
     } finally {
         for (const name of ['launch.json', 'launch.json.tmp']) {
             try {

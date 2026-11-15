@@ -58,6 +58,25 @@ function call(source, method, finish, ...args) {
     });
 }
 
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+// Maps a failed #request to the voice settings error codes. No response means no connection.
+function voiceError(r) {
+    if (!r)
+        return {ok: false, error: 'not_connected'};
+    const j = r.json;
+    const flat = (r.status === 409 && j?.error === 'set_by_environment') ||
+        (r.status === 422 && j?.error === 'invalid_setting');
+    if (!flat)
+        return {ok: false, error: 'error'};
+    const result = {ok: false, error: j.error};
+    if (typeof j.field === 'string')
+        result.field = j.field;
+    return result;
+}
+
 function note(message) {
     // Never called with the token or the file contents.
     if (typeof log === 'function')
@@ -245,6 +264,36 @@ export class CoreClient {
             return false;
         const body = shortcut === null ? {code} : {code, shortcut};
         return this.#expectNoContent('POST', `/sessions/${encodeURIComponent(this.#sessionId)}/diagnostics`, body);
+    }
+
+    // Voice settings (docs/contracts.md §7). Each resolves to {ok, ...} and never throws.
+    async getVoices() {
+        const r = await this.#request('GET', '/voices');
+        if (r?.status === 200 && Array.isArray(r.json?.voices))
+            return {ok: true, voices: r.json.voices};
+        return voiceError(r);
+    }
+
+    async getVoiceSettings() {
+        const r = await this.#request('GET', '/settings/voice');
+        if (r?.status === 200 && isPlainObject(r.json))
+            return {ok: true, settings: r.json};
+        return voiceError(r);
+    }
+
+    // Sends only the fields the caller gave (undefined is dropped).
+    async patchVoiceSettings(patch) {
+        if (!isPlainObject(patch))
+            return {ok: false, error: 'invalid_setting', field: 'body'};
+        const body = {};
+        for (const [key, value] of Object.entries(patch)) {
+            if (value !== undefined)
+                body[key] = value;
+        }
+        const r = await this.#request('PATCH', '/settings/voice', body);
+        if (r?.status === 200 && isPlainObject(r.json))
+            return {ok: true, settings: r.json};
+        return voiceError(r);
     }
 
     async #expectNoContent(method, path, body) {
