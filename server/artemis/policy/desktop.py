@@ -76,23 +76,30 @@ _RUNNABLE_SUFFIXES = {".desktop", ".sh", ".bash", ".zsh", ".appimage", ".run", "
                       ".ps1", ".vbs", ".command", ".jnlp",
                       # A browser runs the scripts in these (and an .svg can hold them).
                       ".html", ".htm", ".xhtml", ".svg", ".svgz", ".mht", ".mhtml"}
-# Terminal apps, which run what they are given (VS Code is not one, unlike in _TERMINALS).
+# Terminal apps, which run what they are given (editors are not, see _EDITORS).
 _TERMINAL_APPS = re.compile(r"ptyxis|gnome-terminal|org\.gnome\.console|kgx|kitty|alacritty|xterm|konsole|"
                             r"terminator|tilix|wezterm|\bfoot\b|terminal", re.I)
 # An app that would run the file it is given, not show it.
 _INTERPRETERS = re.compile(r"^(env|sh|bash|dash|zsh|fish|python[\d.]*|perl|ruby|node|nodejs|deno|bun|php|java|"
                            r"lua|gjs|pwsh|powershell)$")
-# Windows that run what is typed into them: terminals, and editors with a built-in terminal.
-# Substring match on the app id (the part before ": "), then whole-word matches for short names.
+# Terminal apps: what is typed into them runs as a command. Substring match on the app id (the part
+# before ": "), then whole-word matches for short names.
 _TERMINALS = re.compile(
     r"ptyxis|gnome-terminal|org\.gnome\.terminal|org\.gnome\.console|kgx|kitty|alacritty|xterm|konsole|"
     r"terminator|tilix|wezterm|ghostty|warp|tabby|guake|yakuake|blackbox|terminology|terminal|console|"
-    r"rxvt|sakura|contour|cool-retro-term|tmux|putty|termius|emacs|neovide|nvim|gvim|"
+    r"rxvt|sakura|contour|cool-retro-term|tmux|putty|termius", re.I)
+_TERMINAL_WORDS = re.compile(r"(?<![a-z0-9])(foot|st|term|rio|hyper|screen|tty)(?![a-z0-9])", re.I)
+# Editors (VS Code, Sublime, JetBrains, Emacs, vim). Typing into them is a normal approval, unless the
+# window's title says that their integrated terminal has the focus (_EDITOR_TERMINAL_TITLE).
+_EDITORS = re.compile(
     r"vscode|vscodium|codium|cursor|windsurf|jetbrains|intellij|pycharm|webstorm|clion|goland|rider|"
-    r"phpstorm|rubymine|datagrip|android-?studio|sublime", re.I)
-_TERMINAL_WORDS = re.compile(r"(?<![a-z0-9])(foot|code|st|term|rio|hyper|zed|vim|idea|screen|tty)(?![a-z0-9])", re.I)
-# A terminal's title often says so: "user@host: ~/dir", or the shell's name.
-_TERMINAL_TITLE = re.compile(r"^[\w.-]+@[\w.-]+[: ]|(?<![a-z0-9])(bash|zsh|fish|sh|tmux|ssh|sudo)(?![a-z0-9])", re.I)
+    r"phpstorm|rubymine|datagrip|android-?studio|sublime|emacs|neovide|nvim|gvim|"
+    r"(?<![a-z0-9])(code|idea|zed|vim)(?![a-z0-9])", re.I)
+# An editor's title when its terminal has the focus: "Terminal" in VS Code, "vterm" or "eshell" in Emacs.
+_EDITOR_TERMINAL_TITLE = re.compile(r"(?<![a-z0-9])(terminal|vterm|eshell)(?![a-z0-9])", re.I)
+# A terminal's title often says so: "user@host: ~/dir", or the shell's name. A shell name that follows a
+# dot is a file ("install.sh", ".zshrc"), not a shell.
+_TERMINAL_TITLE = re.compile(r"^[\w.-]+@[\w.-]+[: ]|(?<![a-z0-9.])(bash|zsh|fish|sh|tmux|ssh|sudo)(?![a-z0-9])", re.I)
 # Keys that open a launcher or a shell rather than act in the focused window (see _launcher_key).
 _LAUNCHER_FKEY = re.compile(r"^f([1-9]|1[0-2])$")
 # What pastes the clipboard: the dialog can't show what that is.
@@ -132,8 +139,13 @@ def _is_terminal(window: str) -> bool:
     app, sep, title = window.partition(": ")
     if not sep:  # no app id was reported: the whole string is all there is
         app, title = "", window
-    return bool(_TERMINALS.search(app) or _TERMINAL_WORDS.search(app) or _TERMINAL_TITLE.search(title)
-                or (not app and _TERMINALS.search(title)))
+    if _TERMINALS.search(app) or _TERMINAL_WORDS.search(app) or _TERMINAL_TITLE.search(title):
+        return True
+    if not app and _TERMINALS.search(title):
+        return True
+    # An editor is typed into like a text editor, unless its integrated terminal seems to have the focus.
+    editor = _EDITORS.search(app or title)
+    return bool(editor and _EDITOR_TERMINAL_TITLE.search(title))
 
 
 # What a command may not do without the blocking key. A heuristic, not a boundary: a shell can name

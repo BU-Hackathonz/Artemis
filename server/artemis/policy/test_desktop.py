@@ -296,12 +296,25 @@ def test_launcher_keys_are_refused_in_any_modifier_order(home, keys):
 
 @pytest.mark.parametrize("window", [
     "dev.warp.Warp.desktop: ~", "org.tabby.Tabby.desktop: x", "org.gnome.Guake.desktop: x", "org.kde.yakuake.desktop: x",
-    "com.mitchellh.ghostty.desktop: x", "jetbrains-idea.desktop: Main.java", "emacs.desktop: vterm", "foot.desktop: x",
-    "org.gnome.TextEditor.desktop: bob@box: ~/src", "Terminal"])
+    "com.mitchellh.ghostty.desktop: x", "foot.desktop: x", "org.gnome.TextEditor.desktop: bob@box: ~/src",
+    "org.gnome.Terminal.desktop: install.sh", "Terminal", "code.desktop: bob@box: ~/src", "code.desktop: main.py - Terminal",
+    "emacs.desktop: vterm", "code.desktop: zsh"])
 def test_more_terminals_need_the_override(home, window):
     g, _, approvals = gate(home, [Decision.reject], desktop=bridge(window, []))
     run(g.call("t1", "type_text", {"text": "ls"}))
     assert approvals.requests[0].blocking is True
+
+
+@pytest.mark.parametrize("window", ["code.desktop: main.py", "com.visualstudio.code.oss.desktop: main.py - project",
+                                    "code.desktop: install.sh - project", "code.desktop: .zshrc - Visual Studio Code",
+                                    "sublime-text.desktop: notes.txt", "jetbrains-idea.desktop: Main.java",
+                                    "emacs.desktop: init.el", "gvim.desktop: x.py", "cursor.desktop: app.ts",
+                                    "codium.desktop: x.py", "Visual Studio Code"])
+def test_editors_get_a_normal_approval(home, window):
+    typed = []
+    g, _, approvals = gate(home, [Decision.approve], desktop=bridge(window, typed))
+    assert run(g.call("t1", "type_text", {"text": "hello"})).ok
+    assert approvals.requests[0].blocking is False and typed == [("type", "hello", window)]
 
 
 @pytest.mark.parametrize("window", ["org.gnome.TextEditor.desktop: notes.txt", "org.gnome.Nautilus.desktop: Documents",
