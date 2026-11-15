@@ -7,6 +7,7 @@ symbols are dropped, run-on sentences get their full stop, and a long answer is 
 sentences with a pointer to the log.
 """
 
+import html
 import logging
 import re
 
@@ -26,7 +27,9 @@ _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
 _BULLET = re.compile(r"^\s*(?:[-*+•]|\d+[.)])\s+", re.MULTILINE)
 _QUOTE = re.compile(r"^\s*>\s?", re.MULTILINE)
 _RULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$", re.MULTILINE)
-_EMPHASIS = re.compile(r"(\*\*\*|\*\*|\*|~~)(?=\S)(.+?)(?<=\S)\1")
+_EMPHASIS = re.compile(r"(\*\*\*|\*\*|~~)(?=\S)(.+?)(?<=\S)\1")
+# A single star pair; "*args and **kwargs" has no closing star of its own, so it is left alone.
+_STAR = re.compile(r"(?<![*\w])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![*\w])")
 # Underscores only count at word edges, so my_file_name and __init__.py are left alone.
 _UNDERSCORE = re.compile(r"(?<![\w.])(_{1,3})(?=[^\s_])(.+?)(?<=[^\s_])\1(?!\w|\.\w)")
 
@@ -94,6 +97,7 @@ def for_speech(text: str, stops: bool = False) -> str:
     text = _BULLET.sub(_MARK if stops else "", text)
     for _ in range(3):  # nested emphasis such as **bold with *italic* inside**
         text = _EMPHASIS.sub(r"\2", text)
+        text = _STAR.sub(r"\1", text)
     text = _UNDERSCORE.sub(r"\2", text)
     text = text.replace("`", "")
     if stops:
@@ -117,6 +121,8 @@ _PRODUCT = re.compile(r"(?:next|node|vue|nuxt|three|d3|p5|ember|alpine|backbone|
 # Kept: C#/F#, $ before a digit, @ inside a word, & between letters. "~5" is "about 5"; ";" is a full stop.
 _SYMBOLS = re.compile(
     r"(?P<keep>(?<!\w)[A-Za-z]#(?!\w)|\$(?=\d)|(?<=\w)@(?=\w)|(?<=[A-Za-z])&(?=[A-Za-z]))"
+    r"|(?P<cmp>(?<=[\w)\]])[ ]*(?:<=|>=|<|>)[ ]*(?=[\w(\[-]))"
+    r"|(?P<and>(?<=\s)&(?=\s))"
     r"|(?P<about>~(?=\d))"
     r"|(?P<stop>;+)"
     r"|(?:==|!=|<=|>=|->|=>|&&|\|\||[{}\[\]~^$#@\\=<>|&])+"
@@ -147,12 +153,29 @@ def _shorten_path(word: str) -> str:
 def _symbol(match: re.Match) -> str:
     if match.group("keep"):
         return match.group("keep")
+    if match.group("cmp"):
+        return {"<=": " at most ", ">=": " at least ", "<": " less than ", ">": " greater than "}[match.group("cmp").strip()]
+    if match.group("and"):
+        return "and"
     if match.group("about"):
         return "about "
     if match.group("stop"):
         before = match.string[: match.start()].rstrip()
         return "" if before[-1:] in ".!?,:;" or not before else ". "
     return " "
+
+
+# A URL (or a host with a path) is kept whole, query string and fragment included, minus trailing punctuation.
+_URL = re.compile(r"(?:https?://|www\.)\S*?(?=[.,;:!?)\"']*(?:\s|$))|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}/\S*?(?=[.,;:!?)\"']*(?:\s|$))")
+
+
+def _drop_symbols(spoken: str) -> str:
+    out, last = [], 0
+    for m in _URL.finditer(spoken):
+        out += [_SYMBOLS.sub(_symbol, spoken[last : m.start()]), m.group(0)]
+        last = m.end()
+    out.append(_SYMBOLS.sub(_symbol, spoken[last:]))
+    return "".join(out)
 
 
 def _sentences(text: str) -> list[str]:
@@ -180,10 +203,10 @@ def _log_run_ons(spoken: str) -> None:
 
 def spoken_answer(text: str) -> str:
     """What the developer hears for a model answer or question. The log keeps the original."""
-    spoken = for_speech(text, stops=True)
+    spoken = for_speech(html.unescape(text), stops=True)
     spoken = " ".join(_shorten_path(w) for w in spoken.split(" "))
     spoken = _CALL.sub(r"\1", spoken)
-    spoken = _SYMBOLS.sub(_symbol, spoken)
+    spoken = _drop_symbols(spoken)
     _log_run_ons(spoken)
     spoken = re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"\s+", " ", spoken)).strip()
     sentences = _sentences(spoken)

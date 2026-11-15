@@ -273,3 +273,21 @@ def test_an_abbreviation_does_not_end_a_sentence_at_the_cut():
 def test_a_question_before_a_closing_remark_survives_the_cut():
     text = "One. Two. Three. Four. Should I run it? I will wait."
     assert spoken_answer(text) == "One. Two. Three. The rest is in the log. Should I run it?"
+
+
+@pytest.mark.parametrize(
+    "text,spoken",
+    [
+        ("5 > 3 and x<=4.", "5 greater than 3 and x at most 4."),
+        ("Go to https://a.com/p?a=1&b=2#frag now.", "Go to https://a.com/p?a=1&b=2#frag now."),
+        ("Open a.com/x?a=1&b=2.", "Open a.com/x?a=1&b=2."),
+        ("Tom &amp; Jerry.", "Tom and Jerry."),
+        ("AT&amp;T agrees.", "AT&T agrees."),
+        ("Use *args and **kwargs here.", "Use *args and **kwargs here."),
+        ("Use **bold** and *italic* text.", "Use bold and italic text."),
+    ],
+)
+def test_comparisons_urls_entities_and_stars(text, spoken):
+    from artemis.agent.speech_text import spoken_answer
+
+    assert spoken_answer(text) == spoken
