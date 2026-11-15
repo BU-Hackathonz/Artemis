@@ -41,7 +41,7 @@
       <li><strong>A voice of its own, beside Orca.</strong> Artemis speaks in an ElevenLabs voice you choose, while Orca keeps reading your screen. Without a connection or a key, the offline voice shares Orca's speech service, so Artemis stops only its own speech, never Orca's. One voice speaks each line, never two.</li>
       <li><strong>Works from any app.</strong> &ldquo;Hey Artemis&rdquo;, push-to-talk and spoken results work even when Artemis isn't the focused window.</li>
       <li><strong>Interruptible.</strong> Pressing push-to-talk stops current speech first, so what Artemis was saying isn't recorded. You can also stop or repeat the last line at any time.</li>
-      <li><strong>Keyboard first.</strong> Approvals are Enter and Escape on a focused dialog. Focus moves to the dialog when it opens and back when it closes.</li>
+      <li><strong>Keyboard first.</strong> Approvals are Enter and Escape on a focused dialog; saying &ldquo;approve&rdquo; is an option only for clean changes in your project. Focus moves to the dialog when it opens and back when it closes.</li>
       <li><strong>Nothing silent.</strong> Every pause, failure and completion is announced, and everything spoken is kept in a log you can review.</li>
     </ul>
   </section>
@@ -50,7 +50,7 @@
     <h2 id="control-title">You approve every change</h2>
     <ul>
       <li><strong>Exact approvals.</strong> An approval covers one exact edit, or for a run, the entry file you reviewed and its arguments. Other project files are not part of a run's approval. If the files for an edit change before you decide, it is cancelled and asked again.</li>
-      <li><strong>A spoken "yes" never approves.</strong> Approvals are keyboard-only, so a misheard word can't write or run anything.</li>
+      <li><strong>A spoken "yes" never approves.</strong> With conversation mode on, only the exact word &ldquo;approve&rdquo; can, and only for a clean write or run inside your project, after Artemis has finished reading it to you. Anything the scan flagged, anything outside your project, and publishing stay on the keyboard. &ldquo;Reject&rdquo; works at any time. Conversation mode is off unless you turn it on.</li>
       <li><strong>Blocked actions stay blocked by default.</strong> When a security scan finds a serious problem, focus starts on Reject and Enter alone can't approve. Overriding takes a separate shortcut on the Approve button.</li>
       <li><strong>No shell, no install tool.</strong> The agent's tools are: create or open a project, list and read files, propose new or edited files, run a Python file after approval, scan for security problems, and inspect a local HTML page.</li>
       <li><strong>Files are untrusted.</strong> Text in your project, such as a comment telling the AI to delete everything, is treated as data, not as an instruction. The agent has no delete tool, and any change it proposes still needs your approval. An approved program runs with your permissions, so read it before you approve.</li>
@@ -73,7 +73,8 @@
     <ul>
       <li>Programs run with approval, a static scan, a time limit and a minimal environment. That is gated and limited, but it is not an operating-system sandbox.</li>
       <li>Artemis is tested on Ubuntu 24.04 with Orca, and on Windows 11 with NVDA. Other screen readers and systems are not tested yet.</li>
-      <li>The wake word can miss a quiet voice or wake on a similar word. Push-to-talk always works, and nothing changes without your keypress.</li>
+      <li>The wake word can miss a quiet voice or wake on a similar word. Push-to-talk always works, and nothing changes without your approval.</li>
+      <li>Artemis doesn't know whose voice it hears. With conversation mode on, anyone nearby who says &ldquo;Hey Artemis, approve&rdquo; can approve a clean change in your project. That is why spoken approval never covers flagged code, anything outside the project, or publishing.</li>
       <li>Speech recognition can mishear names and symbols. Artemis reads every transcript back, and typing is always available.</li>
     </ul>
   </section>

@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <title>artemis. Hear your code. Ship without sight.</title>
-<meta name="description" content="Artemis is a voice-first development environment for blind developers. Speak a change, approve it by keyboard, and hear the real result in your own screen reader.">
+<meta name="description" content="Artemis is a voice-first development environment for blind developers. Speak a change, approve it yourself, and hear the real result in your own screen reader.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
 <script src="motion.js" defer></script>
@@ -37,10 +37,10 @@
     <div class="wrap">
       <p class="badge">Voice-first coding <b>·</b> HackUMass 2026</p>
       <h1 id="hero-title"><span>Hear your code.</span> <span class="fade">Ship without sight.</span></h1>
-      <p class="lede">A development environment built for blind developers. Speak a change, approve it by keyboard, and hear the real result in your own screen reader.</p>
+      <p class="lede">A development environment built for blind developers. Speak a change, approve it yourself, and hear the real result in your own screen reader.</p>
       <div class="ctas"><a class="btn btn-white" href="get-started.html">Try Artemis</a><a class="btn btn-ghost" href="how-it-works.html">See how it works</a></div>
       <ul class="hero-stats">
-        <li><b>0</b> changes without your keypress</li>
+        <li><b>0</b> changes without your approval</li>
         <li><b>1</b> voice at a time, never two</li>
         <li><b>100%</b> local speech recognition</li>
       </ul>
@@ -96,7 +96,7 @@
       <p class="statement" data-light>Code you can hear, changes you approve, results you can trust. Built for screen readers first, and fast where it counts.</p>
       <ul class="list" id="what-list">
         <li><a href="how-it-works.html"><span class="k">Voice</span><strong>Speak or type a request</strong><p>Say "Hey Artemis", or hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> from any app. Artemis reads back what it heard first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
-        <li><a href="trust.html"><span class="k">Control</span><strong>Approve the exact change</strong><p>Enter approves, Escape rejects. A spoken "yes" never decides.</p><span class="arr" aria-hidden="true">↗</span></a></li>
+        <li><a href="trust.html"><span class="k">Control</span><strong>Approve the exact change</strong><p>Enter approves, Escape rejects. A spoken "yes" never decides, and spoken approval is limited to clean changes in your project.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="how-it-works.html"><span class="k">Runs</span><strong>Run it for real</strong><p>A fixed command, a time limit, and none of Artemis's secrets.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="trust.html"><span class="k">Safety</span><strong>Catch problems before they run</strong><p>Python files are scanned before each write or run. A serious finding blocks it until you decide.</p><span class="arr" aria-hidden="true">↗</span></a></li>
         <li><a href="how-it-works.html"><span class="k">Echo Check</span><strong>Hear what a page really exposes</strong><p>Artemis reads a local web page's real accessibility tree and speaks the problems, most serious first.</p><span class="arr" aria-hidden="true">↗</span></a></li>
@@ -139,7 +139,7 @@
           <tbody>
             <tr><th scope="row">Start</th><td>Say "Hey Artemis", or hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>, and talk</td><td>Type the request, press Enter</td></tr>
             <tr><th scope="row">Check</th><td>"Heard: …" is read back first</td><td>What you typed is the request</td></tr>
-            <tr><th scope="row">Approve</th><td colspan="2">Enter approves, Escape rejects, on the focused dialog. Never by voice.</td></tr>
+            <tr><th scope="row">Approve</th><td colspan="2">Enter approves, Escape rejects, on the focused dialog. With conversation mode on, you can also say &ldquo;approve&rdquo; or &ldquo;reject&rdquo; once Artemis has read the change to you. Anything the scan flagged, or outside your project, needs the keyboard.</td></tr>
             <tr><th scope="row">Result</th><td colspan="2">Spoken in your chosen voice, and kept in the log.</td></tr>
             <tr><th scope="row">Best for</th><td>Hands on the keyboard, mind on the idea</td><td>Noisy rooms, precise names, no microphone</td></tr>
           </tbody>
@@ -158,7 +158,7 @@
         <div class="tile"><b><span class="sr">No more: </span><s>Scanning a terminal</s></b><p>Exit code and final error line, read out word for word.</p></div>
         <div class="tile"><b><span class="sr">No more: </span><s>Reading a visual diff</s></b><p>A spoken summary built from the real edit, steppable by line.</p></div>
         <div class="tile"><b><span class="sr">No more: </span><s>Two voices at once</s></b><p>One voice speaks each line. If ElevenLabs can't be reached, the offline voice takes over.</p></div>
-        <div class="tile"><b><span class="sr">No more: </span><s>Guessing what's safe</s></b><p>Python files are scanned before each write or run, and nothing runs without your keypress.</p></div>
+        <div class="tile"><b><span class="sr">No more: </span><s>Guessing what's safe</s></b><p>Python files are scanned before each write or run, and nothing runs without your approval.</p></div>
       </div>
     </div>
   </section>
@@ -194,7 +194,7 @@
     <div class="wrap">
       <h2 class="h2" id="why-title">Why blind developers <span class="dim">would choose</span> Artemis.</h2>
       <ol class="why">
-        <li><small>01</small><h3>You decide every change.</h3><p>Nothing is written or run without your keypress. An approval covers the exact edit or run you reviewed.</p></li>
+        <li><small>01</small><h3>You decide every change.</h3><p>Nothing in your project is written or run without your approval. An approval covers the exact edit or run you reviewed.</p></li>
         <li><small>02</small><h3>Every result is real.</h3><p>Programs really run, and you hear what they actually printed.</p></li>
         <li><small>03</small><h3>Errors are never softened.</h3><p>Exit code and final error line come first, word for word.</p></li>
         <li><small>04</small><h3>Your screen reader comes first.</h3><p>Built to run beside Orca, and every control works from the keyboard.</p></li>
