@@ -577,6 +577,15 @@ class Session:
             if decision.say and not was_speaking:
                 # Nothing was being said, so "stop" may have meant the task: never stay silent.
                 await self.say(tid, decision.say)
+        elif action == "decide":
+            # Voice approval (§5.4): the same path as the dialog's POST /approvals, with the hash the
+            # approval carried, so a changed or already-decided approval can't be decided by voice.
+            try:
+                self.approvals.resolve(decision.approval_id, decision.verdict, decision.approval_hash)
+            except Exception:
+                await self.say(tid, "That approval isn't open any more.", "high")
+            else:
+                await self.say(tid, decision.say, decision.priority)
         elif action == "rate":
             set_rate = getattr(self.voice, "set_rate", None)  # optional (SAPI only, Yaovi)
             if set_rate is None:

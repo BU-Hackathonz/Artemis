@@ -352,11 +352,13 @@ transcript.
   | `keep it brief`, `deep dive`, `normal mode`, `visual mode`, `code mode` | Sets `TaskContext.style` for the following tasks and confirms it |
   | `reset my preferences`, `forget my answer style` | Sets the answer style back to the defaults (brief/normal/detailed and visual/code both cleared) and confirms it. Also clears the remembered style (below) |
   | `slower`, `faster` | See §5.3 |
-  | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | Never applied: "Use the keyboard to decide…" as in §5.2 |
+  | `approve`, `approve it` while `awaiting_approval` | **Proposed (David), voice approval:** decides the approval only when it is a `write_files` or `run_program` approval inside the project that the scan did not block, and only once it has been open at least 1.5 s (its summary was heard). It goes through the same `approvals.resolve(id, decision, approval_hash)` as the dialog, so a changed or already-decided approval can't be decided by voice. A blocked approval, every desktop kind (`open`, `read_outside`, `run_command`, `type`) and `publish` stay on the keyboard: "That one needs the keyboard, because …" |
+  | `reject`, `reject it` while `awaiting_approval` | **Proposed (David):** rejects any approval, after the same 1.5 s |
+  | `yes`, `no` while `awaiting_approval` | Never applied: "Say approve or reject, or use the keyboard…" (a misheard "yes" must never write or run) |
   | `approve`, `yes`, `reject`, `no` with no approval open | If no task is active and the agent's last answer was a question: the answer to it, sent as the next request (design A4; anything it leads to is still approved on the keyboard). Otherwise "There's nothing to approve right now.", never a task or a follow-up |
   | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high`. A silent hold then also gets §5.1's `no_speech` line (**Proposed (Avery)**). The voice already strips "Artemis" and "Hey/OK Artemis", so those arrive empty (`intent` null); `wake_word` is the intent for a form only the controller strips, such as "Hi Artemis" |
 
-  No phrase can approve a write or a run, hide a warning, or run code.
+  No phrase other than `approve` can approve, and only a clean project write or run; no phrase can hide a warning or run code.
 - **A spoken request while a task is active** is kept as the one waiting follow-up ("I'll do that
   next.") instead of the `task_active` error. A second one doesn't replace it: "I already have one
   waiting: …. Say cancel to drop it." When the active task succeeds, the follow-up is started as

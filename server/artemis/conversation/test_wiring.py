@@ -140,17 +140,52 @@ async def test_a_status_question_is_answered_without_a_new_task_or_touching_the_
 
 
 @pytest.mark.parametrize("conversation", [False, True], ids=["flag_off", "flag_on"])
-@pytest.mark.parametrize("said", ["Yes.", "yes", "approve", "Approve.", "Approve it", "no", "Artemis, approve."])
-async def test_spoken_words_never_decide_an_approval(tmp_path, said, conversation):
+@pytest.mark.parametrize("said", ["Yes.", "yes", "no", "okay"])
+async def test_yes_and_no_never_decide_an_approval(tmp_path, said, conversation, monkeypatch):
+    monkeypatch.setattr("artemis.conversation.controller.VOICE_REVEAL_S", 0)
     w = await at_first_approval(tmp_path, conversation=conversation)
     approval = w.pending()
     await w.say(said)
-    if conversation or normalize(said) in APPROVAL_WORDS:
-        assert w.voice.spoken[-1] == KEYBOARD_ONLY
     assert w.pending() is not None and w.pending().approval_id == approval.approval_id
     assert w.tasks()[0].state == "awaiting_approval" and len(w.tasks()) == 1
     assert not [e for e in w.session.bus.history if e.type == "approval.resolved"]
     assert not list((tmp_path / "projects").glob("**/*.py"))  # nothing was written
+
+
+@pytest.mark.parametrize("said", ["approve", "Approve.", "Approve it", "Artemis, approve."])
+async def test_with_the_flag_off_approve_never_decides(tmp_path, said):
+    w = await at_first_approval(tmp_path, conversation=False)
+    await w.say(said)
+    if normalize(said) in APPROVAL_WORDS:
+        assert w.voice.spoken[-1] == KEYBOARD_ONLY
+    assert w.pending() is not None
+    assert not [e for e in w.session.bus.history if e.type == "approval.resolved"]
+
+
+async def test_approve_by_voice_writes_the_project_file(tmp_path, monkeypatch):
+    monkeypatch.setattr("artemis.conversation.controller.VOICE_REVEAL_S", 0)
+    w = await at_first_approval(tmp_path, conversation=True)
+    approval = w.pending()
+    await w.say("Approve.")
+    for _ in range(50):
+        if list((tmp_path / "projects").glob("**/*.py")):
+            break
+        await asyncio.sleep(0.02)
+    resolved = [e for e in w.session.bus.history if e.type == "approval.resolved"]
+    assert resolved and resolved[0].data["approval_id"] == approval.approval_id and resolved[0].data["decision"] == "approve"
+    assert list((tmp_path / "projects").glob("**/main.py"))
+
+
+async def test_reject_by_voice_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr("artemis.conversation.controller.VOICE_REVEAL_S", 0)
+    w = await at_first_approval(tmp_path, conversation=True)
+    await w.say("Reject.")
+    for _ in range(50):
+        if [e for e in w.session.bus.history if e.type == "approval.resolved"]:
+            break
+        await asyncio.sleep(0.02)
+    assert [e.data["decision"] for e in w.session.bus.history if e.type == "approval.resolved"][:1] == ["reject"]
+    assert not list((tmp_path / "projects").glob("**/*.py"))
 
 
 async def test_an_empty_tap_during_an_approval_says_it_again_once(tmp_path):

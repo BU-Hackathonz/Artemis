@@ -7,6 +7,7 @@ and nothing here can approve anything: approvals stay on the keyboard.
 """
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -27,12 +28,22 @@ Action = Literal[
     "repeat",  # repeat the last announcement (the voice remembers it)
     "cancel",  # cancel the active task
     "rate",  # change the speaking rate by `delta` steps; speak `say` if the voice can't
+    "decide",  # answer the open approval by voice: `verdict` for `approval_id` with `approval_hash` (§5.4)
 ]
+
+# Voice approval (contracts.md §5.4, Proposed (David)): only these words decide, never "yes" or "no".
+VOICE_APPROVE = frozenset({"approve", "approve it"})
+VOICE_REJECT = frozenset({"reject", "reject it"})
+# Approving by voice is for the project only: a scanned write or a Python run. Rejecting works for
+# any approval. Anything blocked by the scan, every desktop kind and every command stays on the keyboard.
+VOICE_APPROVABLE = frozenset({"write_files", "run_program"})
+VOICE_REVEAL_S = 1.5  # like the dialog's reveal guard: never a decision on words said before it was heard
 
 log = logging.getLogger(__name__)
 
 FINAL_STATES = ("succeeded", "failed", "canceled")
 KEYBOARD_ONLY = "Use the keyboard to decide: Enter on the dialog to approve, Escape to reject."
+VOICE_WORDS = "Say approve or reject, or use the keyboard: Enter to approve, Escape to reject."
 WAITING = "A decision is still waiting. Say repeat to hear it again."
 NOTHING_TO_APPROVE = "There's nothing to approve right now."
 # The core's heartbeat line (core/session.py STILL_WORKING). It is not a step of the task, so
@@ -49,6 +60,9 @@ class Decision:
     priority: Literal["low", "normal", "high"] = "normal"
     text: str | None = None  # the developer's words, unchanged, for submit and queue
     delta: int = 0
+    verdict: Literal["approve", "reject"] | None = None  # "decide" only
+    approval_id: str | None = None
+    approval_hash: str | None = None
     # Spoken after the action when an approval is open, so an interruption never hides it.
     reminder: str | None = None
 
@@ -119,7 +133,8 @@ def _names(files: list[str]) -> str:
 
 
 class Controller:
-    def __init__(self, style: Style | None = None, on_style: Callable[[Style], object] | None = None) -> None:
+    def __init__(self, style: Style | None = None, on_style: Callable[[Style], object] | None = None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         """`style` is where to start (the saved one, if the core remembers it); `on_style` is told
         whenever the developer changes it, so the core can save it. A failing `on_style` is
         ignored: the style still applies for this session."""
@@ -128,6 +143,8 @@ class Controller:
         self.queued: str | None = None  # one follow-up, started when the active task ends
         self.task: _Task | None = None  # the active task, or the last one
         self.approval: str | None = None  # the open approval's spoken summary
+        self.open_approval: dict | None = None  # its id, hash, kind, blocking and when it opened (voice approval)
+        self._clock = clock
         self.screen_reader: str | None = None
         self.expecting_reply = False  # the last answer was a question
 
@@ -152,6 +169,7 @@ class Controller:
             task.state = data.get("state", task.state)
             if not task.active:
                 self.approval = None
+                self.open_approval = None
                 self.expecting_reply = task.state == "succeeded" and task.answer.rstrip().endswith("?")
         elif event.type == "agent.message":
             if data.get("kind") == "progress":
@@ -161,12 +179,17 @@ class Controller:
                 task.answer = data.get("text", "")
         elif event.type == "approval.requested":
             self.approval = data.get("summary") or "An approval is open."
+            self.open_approval = {
+                "id": data.get("approval_id"), "hash": data.get("approval_hash"), "kind": data.get("kind"),
+                "blocking": bool(data.get("blocking")), "at": self._clock(),
+            }
             # The approval carries the findings that apply to what it proposes. A clean one replaces
             # an earlier finding, which is no longer true of the code about to be written or run.
             if isinstance(data.get("findings"), list):
                 task.scan = _scan_text(data["findings"]) if data["findings"] else ""
         elif event.type == "approval.resolved":
             self.approval = None
+            self.open_approval = None
         elif event.type == "file.changed":
             path = data.get("path")
             if path and path not in task.files:
@@ -199,6 +222,27 @@ class Controller:
         return FollowUp(f"Dropped the follow-up, because the task before it didn't finish: {_end(_short(text))}")
 
     # ----- what the developer said -----
+
+    def _voice_decision(self, words: str) -> Decision:
+        """An approval word while an approval is open. "approve" decides a clean project write or run,
+        "reject" decides any approval, and "yes" or "no" never decide anything: a misheard "yes" must
+        never write or run."""
+        a = getattr(self, "open_approval", None)
+        if a is None or not a.get("id") or not a.get("hash"):
+            return Decision("approval_word", "say", KEYBOARD_ONLY, "high")  # an approval voice can't name
+        if words not in VOICE_APPROVE | VOICE_REJECT:
+            return Decision("approval_word", "say", VOICE_WORDS, "high")  # "yes" and "no" never decide
+        if self._clock() - a["at"] < VOICE_REVEAL_S:
+            return Decision("approval_word", "say", "Let me finish reading it first. Then say approve or reject.", "high")
+        if words in VOICE_REJECT:
+            return Decision("approval_word", "decide", "Rejected.", "high", verdict="reject",
+                            approval_id=a["id"], approval_hash=a["hash"])
+        if a["kind"] not in VOICE_APPROVABLE or a["blocking"]:
+            why = "the security scan flagged it" if a["blocking"] else "it reaches outside the project"
+            return Decision("approval_word", "say",
+                            f"That one needs the keyboard, because {why}. Press Enter on the dialog to approve, or say reject.", "high")
+        return Decision("approval_word", "decide", "Approved.", "high", verdict="approve",
+                        approval_id=a["id"], approval_hash=a["hash"])
 
     def decide(self, transcript: str) -> Decision:
         if not transcript.strip() or not simplify(transcript):
@@ -267,8 +311,7 @@ class Controller:
             )
         if intent == "approval_word":
             if self.approval or (active and task.state == "awaiting_approval"):
-                # A misheard "yes" must never write or run anything.
-                return Decision(intent, "say", KEYBOARD_ONLY, "high")
+                return self._voice_decision(simplify(transcript))
             if not active and self.expecting_reply:
                 # The agent's last answer was a question, so "yes" or "no" is the answer to it
                 # (design A4: the next request is the reply). Safe: anything it leads to that
