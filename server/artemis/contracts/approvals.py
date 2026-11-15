@@ -5,7 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-ApprovalKind = Literal["write_files", "run_program"]
+ApprovalKind = Literal["write_files", "run_program", "open", "read_outside", "run_command", "type", "publish"]
+# Desktop approvals (contracts.md §9, Proposed): open an app or a path, read a file outside the
+# project, run one shell command, type into the focused app, publish the project to GitHub.
 FileAction = Literal["created", "modified", "deleted"]
 Severity = Literal["low", "medium", "high"]
 
@@ -21,6 +23,17 @@ class RunSpec(BaseModel):
     preset: Literal["python"]
     entry: str
     timeout_s: int = 10
+
+
+class DesktopSpec(BaseModel):
+    """What a desktop approval will do, shown and spoken word for word before it is approved."""
+
+    action: Literal["open_app", "open_path", "open_url", "read_path", "run_command", "type_text", "press_keys", "publish_github"]
+    # The app id, the resolved path, the command's resolved folder, or for typing the focused
+    # window as the island reported it ("org.gnome.Ptyxis: ~/project"). The hash covers it.
+    target: str
+    text: str | None = None  # the exact command, the exact text to type, or the keys
+    sha256: str | None = None  # read_path and open_path: the file's content, so a swapped file fails
 
 
 class Finding(BaseModel):
@@ -39,6 +52,7 @@ class Approval(BaseModel):
     files: list[FileSummary] = []
     diff: str | None = None
     run: RunSpec | None = None
+    desktop: DesktopSpec | None = None  # set for the desktop kinds (§9)
     findings: list[Finding] = []
     # True when a high-severity finding applies: the client's default action is
     # Reject and approving needs a distinct key.

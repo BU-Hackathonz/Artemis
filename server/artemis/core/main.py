@@ -5,6 +5,8 @@ ARTEMIS_AGENT      stub (default) | claude
 ARTEMIS_VOICE      whisper (default when the voice group is installed) | stub
 ARTEMIS_RUNNER     real (default) | fake (writes files, never runs anything)
 ARTEMIS_CONVERSATION  off (default) | on: built-in spoken phrases and follow-ups (contracts.md §5.4)
+ARTEMIS_PREFS_FILE    where conversation mode remembers the answer style; default
+                        %USERPROFILE%/.artemis/preferences.json. Absolute, outside the projects folder
 ARTEMIS_RESULT_EARCONS  off (default) | on: a success, failure or approval tone just before that line is
                         spoken, never while listening (contracts.md §5.5); session.py
 ARTEMIS_WHISPER_MODEL   small.en (default) | medium.en (more accurate, slower); voice/listen.py
@@ -110,6 +112,32 @@ def runner_factory():
     return LocalRunner
 
 
+REPO = Path(__file__).resolve().parents[3]
+
+
+def prefs_path(projects_dir: Path) -> Path | None:
+    """The file the answer style is remembered in, or None to remember nothing.
+
+    Only with ARTEMIS_CONVERSATION=on (contracts.md §5.4): with it off nothing is read or written.
+    The file must be an absolute path outside the projects folder (the agent writes there) and
+    outside this repository (the core runs in server/, so a relative path would land in it).
+    """
+    if os.environ.get("ARTEMIS_CONVERSATION", "off").lower() != "on":
+        return None
+    from artemis.conversation.prefs import default_path
+
+    path = default_path().expanduser()
+    if not path.is_absolute():
+        log.warning("ARTEMIS_PREFS_FILE must be an absolute path; the answer style won't be remembered")
+        return None
+    resolved = path.resolve()
+    for root, name in ((Path(projects_dir), "projects folder"), (REPO, "Artemis repository")):
+        if resolved.is_relative_to(root.resolve()):
+            log.warning("ARTEMIS_PREFS_FILE is inside the %s; the answer style won't be remembered", name)
+            return None
+    return path
+
+
 def build():
     install_log_redaction()  # core.log gets tracebacks too; uvicorn has configured logging by now
     config = Config.from_env()
@@ -122,6 +150,7 @@ def build():
         scan=make_scan(),
         log_dir=log_dir,
         vocabulary=make_vocabulary(),
+        prefs_path=prefs_path(config.projects_dir),
     )
     return create_app(core, os.environ.get("ARTEMIS_TOKEN", ""))
 

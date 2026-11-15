@@ -7,6 +7,7 @@ import asyncio
 import copy
 import json
 import os
+import sys
 import time
 
 import pytest
@@ -22,7 +23,7 @@ from artemis.agent.config import Config  # noqa: E402
 from artemis.agent.context import task_message, vocabulary  # noqa: E402
 from artemis.agent.prompts import DESKTOP, SPOKEN_REQUESTS, SYSTEM_PROMPT, strict_schema, system_prompt, tool_definitions  # noqa: E402
 from artemis.agent.stub import StubAgent  # noqa: E402
-from artemis.contracts import TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
+from artemis.contracts import DESKTOP_TOOL_ARGS, TOOL_ARGS, Answered, Decision, Failed, ProjectRef, TaskContext  # noqa: E402
 from artemis.policy.gateway import ToolGateway  # noqa: E402
 from artemis.policy.testing import EventLog, FakeApprovals, FakeRunner  # noqa: E402
 
@@ -144,6 +145,17 @@ def test_hello_world_tool_loop(tmp_path):
     assert spoken.index("main.py ran successfully. It printed: Hello, World!") < len(spoken) - 1
 
 
+def test_a_sentence_beside_a_tool_call_is_spoken_as_progress(tmp_path):
+    script = hello_script()
+    script[0] = message(thinking(), text("I'll start a **new project** first."),
+                        tool("toolu_1", "create_project", name="hello world"), stop_reason="tool_use")
+    w = World(tmp_path, script)
+    asyncio.run(w.run())
+    first = w.log.events[0]
+    assert first.type == "agent.message" and first.data == {"text": "I'll start a **new project** first.", "kind": "progress"}
+    assert (first.announce.text, first.announce.priority) == ("I'll start a new project first.", "low")
+
+
 def test_request_shape(tmp_path):
     w = World(tmp_path, [message(text("Hello."))])
     asyncio.run(w.run())
@@ -156,7 +168,8 @@ def test_request_shape(tmp_path):
     assert call["system"] == SYSTEM_PROMPT
     # Thinking is always on for this model, forced tool choice is a 400, and we don't stream.
     assert not {"thinking", "tool_choice", "stream", "temperature"} & set(call)
-    assert [t["name"] for t in call["tools"]] == list(TOOL_ARGS)
+    offered = [n for n in TOOL_ARGS if sys.platform.startswith("linux") or n not in DESKTOP_TOOL_ARGS]
+    assert [t["name"] for t in call["tools"]] == offered
 
 
 def test_model_and_effort_come_from_config(tmp_path):
@@ -229,19 +242,37 @@ def test_refusal_after_tool_calls_keeps_the_answered_history(tmp_path):
     assert [m["role"] for m in w.agent.messages] == ["user", "assistant", "user"]
 
 
-def test_max_tokens(tmp_path):
-    cut_off = message(text("Here is a very long"), stop_reason="max_tokens")
-    w = World(tmp_path, [cut_off])
+def test_max_tokens_repeatedly_fails_out_loud(tmp_path):
+    cut = lambda: message(text("Here is a very long"), stop_reason="max_tokens")
+    w = World(tmp_path, [cut(), cut(), cut()])
     outcome = asyncio.run(w.run())
-    assert outcome == Failed(code="too_long", message="That got too long. Try a smaller request.")
-    assert w.log.spoken() == []
+    assert outcome.code == "too_long" and "too big" in outcome.message
+    assert len(w.client.calls) == 3
 
 
-def test_max_tokens_with_a_cut_off_tool_call_runs_nothing(tmp_path):
+def test_max_tokens_cut_off_tool_call_runs_nothing_and_asks_for_smaller_pieces(tmp_path):
     cut_off = message(tool("toolu_1", "create_project", name="x"), stop_reason="max_tokens")
-    w = World(tmp_path, [cut_off])
-    assert asyncio.run(w.run()).code == "too_long"
-    assert w.gateway.project is None and w.agent.messages == []
+    w = World(tmp_path, [cut_off, message(text("Split it."))])
+    outcome = asyncio.run(w.run())
+    assert outcome == Answered(text="Split it.")
+    assert w.gateway.project is None  # the cut-off call was not executed
+    result = w.agent.messages[2]["content"][0]
+    assert result["type"] == "tool_result" and result["tool_use_id"] == "toolu_1" and result["is_error"]
+    assert "cut off" in result["content"] and "did NOT run" in result["content"]
+    assert any("too big" in t for t in w.log.spoken())
+
+
+def test_max_tokens_text_only_reply_continues_in_smaller_pieces(tmp_path):
+    w = World(tmp_path, [message(text("long"), stop_reason="max_tokens"), message(text("ok"))])
+    assert asyncio.run(w.run()) == Answered(text="ok")
+    assert "cut off" in w.agent.messages[2]["content"]
+
+
+def test_a_slow_answer_is_a_timeout_not_no_internet(tmp_path):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    w = World(tmp_path, [anthropic.APITimeoutError(request=request)])
+    outcome = asyncio.run(w.run())
+    assert outcome.code == "timeout" and "internet" not in outcome.message
 
 
 def test_unknown_tool_is_an_error_result_and_the_loop_continues(tmp_path):
@@ -472,9 +503,11 @@ def test_tool_schemas_are_strict(tmp_path):
         assert definition["strict"] is True and definition["description"]
         check(definition["input_schema"])
     names = [t["name"] for t in tools]
+    desktop = ["open_app", "open_path", "open_url", "read_path", "run_command", "type_text", "press_keys", "publish_github"]
     assert names == [
         "create_project", "open_project", "list_files", "read_file", "write_files", "run_program", "edit_file",
         "inspect_page", "scan_project",
+        *(desktop if sys.platform.startswith("linux") else []), "plan",
     ]
     assert not {"shell", "delete_file", "ask_user", "scan", "install"} & set(names)
 
@@ -488,16 +521,23 @@ def test_strict_schema_keeps_a_property_named_like_a_keyword():
 
 
 def test_system_prompt_is_frozen_and_covers_the_rules():
-    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "no network",
+    for phrase in ["blind", "read aloud", "no markdown", "rejected_by_user", "scan_blocked", "<untrusted>", "Plan first", "waits for", "never touched",
                    "what it does as a whole", "never speak symbols", "in the log"]:
         assert phrase in SYSTEM_PROMPT
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
-# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when a rejected or
-# scan-blocked change or run stopped being proposed again for the rest of the conversation) as it
+# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when code went into files
+# and VS Code was opened with open_path, not typed, on top of the plan and the desktop tools) as it
 # is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "9f2b7c6b97d60b529c45317129405d2dbe83c35a50f55486c856d225e255c2c3"
+MAIN_SYSTEM_PROMPT_SHA256 = "e80bca1bb40719fed230af34fd4e36e99b673c5983dbb5d769960b3e0b2a4489"
+
+
+def test_spoken_answers_are_short_and_true_to_the_tool_results():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "at most two short sentences unless they ask for more detail" in flat
+    assert "if the last run failed, never say the program works" in flat
+    assert "never by their path or how their name is spelled" in flat
 
 
 def test_a_rejected_change_is_not_proposed_again_unless_asked():
@@ -509,6 +549,29 @@ def test_a_rejected_change_is_not_proposed_again_unless_asked():
     assert "Both hold for the rest of the conversation" in flat
     assert "unless the developer asks for it in words" in flat
     assert "this is the one case where you ask before calling a tool" in flat
+
+
+def test_code_goes_into_files_and_vs_code_is_opened_not_typed():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "Code goes into files, never into a window." in flat
+    assert "Create and change code with write_files and edit_file" in flat
+    assert "Use type_text and press_keys only for text the developer asked you to type into another app" in flat
+    assert "with open_path and with_app set to VS Code" in flat
+    assert "Opening an app or a file in the usual folders happens right away" in flat
+
+
+def test_prompt_tells_the_model_to_build_complete_multi_file_projects():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "no TODO stubs" in flat and "index.html, style.css and script.js" in flat
+    assert "under about three hundred lines" in flat and "inspect_page" in flat
+    assert "what you built and how to use it" in flat
+
+
+def test_readback_and_feedback_rules():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "call read_file with aloud true" in flat and "from next_start_line" in flat
+    assert "what the run actually printed or failed with, then offer to read it or explain it" in flat
+    assert "inspect_page with describe true" in flat
 
 
 def test_flag_off_system_prompt_is_mains():

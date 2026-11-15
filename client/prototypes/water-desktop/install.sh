@@ -20,9 +20,9 @@ if [[ "${1:-}" == "--remove" ]]; then
 fi
 
 mkdir -p "$dest/schemas"
-# Every module of the extension. The connected build has no scripted presets or virtual keyboard,
-# so an older install's presets.js and caret.js are removed.
-rm -f "$dest/presets.js" "$dest/caret.js"
+# Every module of the extension. The connected build has no scripted presets, so an older
+# install's presets.js is removed.
+rm -f "$dest/presets.js"
 cp "$src"/metadata.json "$src"/*.js "$src"/stylesheet.css "$dest/"
 cp "$src"/schemas/*.gschema.xml "$dest/schemas/"
 glib-compile-schemas "$dest/schemas"

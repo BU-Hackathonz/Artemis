@@ -4,12 +4,13 @@
 #   bash infra/setup-ubuntu.sh [--yes] [--no-apt] [--no-model] [--extension-dir PATH]
 #
 # Steps, in order. Each one says what it does before it does it:
-#   1. apt: libportaudio2 (sounddevice needs it for the microphone) and curl if it is missing.
+#   1. apt: libportaudio2 (sounddevice needs it for the microphone), curl, and the desktop tools' commands
+#      gtk-launch (libgtk-3-bin) and gio (libglib2.0-bin), each only if it is missing.
 #      apt-get installs system packages, so this needs sudo and asks for your password. --no-apt skips it.
 #   2. uv, if it is missing: asks (y/N) before running uv's official installer. --yes answers yes.
 #   3. uv sync for server/: the core's Python dependencies.
-#   4. The Whisper speech model, downloaded once with the same settings the core uses, so the first
-#      push-to-talk does not stall. --no-model skips it.
+#   4. The Whisper speech models (small.en, and tiny.en for "Hey Artemis"), downloaded once with the same
+#      settings the core uses, so the first push-to-talk does not stall. --no-model skips it.
 #   5. The GNOME Shell extension: copied (not symlinked) into ~/.local/share/gnome-shell/extensions/<uuid>/
 #      and enabled if gnome-extensions is available. Needs --extension-dir PATH; skipped without it.
 #
@@ -107,8 +108,10 @@ else
     missing=()
     dpkg -s libportaudio2 >/dev/null 2>&1 || missing+=(libportaudio2)
     command -v curl >/dev/null 2>&1 || missing+=(curl)
+    command -v gtk-launch >/dev/null 2>&1 || missing+=(libgtk-3-bin)
+    command -v gio >/dev/null 2>&1 || missing+=(libglib2.0-bin)
     if (( ${#missing[@]} == 0 )); then
-        note "1. apt: libportaudio2 and curl are already installed."
+        note "1. apt: libportaudio2, curl, gtk-launch and gio are already installed."
     else
         command -v apt-get >/dev/null 2>&1 || die "apt-get was not found. Install ${missing[*]} with your package manager, or pass --no-apt."
         note "1. apt: installing ${missing[*]}. libportaudio2 is the audio library sounddevice uses for the microphone."
@@ -155,7 +158,7 @@ uv sync --frozen --project "$SERVER" --group security --group voice --group agen
 if (( NO_MODEL )); then
     note "4. Speech model: skipped (--no-model). The first push-to-talk will download it."
 else
-    note "4. Speech model: downloading the Whisper model the core uses (ARTEMIS_WHISPER_MODEL, default small.en), once."
+    note "4. Speech model: downloading the Whisper models the core uses (ARTEMIS_WHISPER_MODEL, default small.en, and the quick wake model, default tiny.en), once."
     note "   The download is large (hundreds of MB) and needs the internet."
     (
         cd -- "$SERVER"
@@ -163,11 +166,16 @@ else
 import time
 from faster_whisper import WhisperModel
 from artemis.voice.listen import whisper_model
+from artemis.voice.wake import quick_model
 
-name = whisper_model()  # the same name the core loads
-start = time.time()
-WhisperModel(name, device="cpu", compute_type="int8")  # the same construction as WhisperVoice
-print(f"Whisper {name} ready ({time.time() - start:.1f} s).")
+names = [whisper_model()]  # the same names the core loads
+quick = quick_model()  # None when ARTEMIS_WAKE_QUICK_MODEL=off
+if quick and quick not in names:
+    names.append(quick)
+for name in names:
+    start = time.time()
+    WhisperModel(name, device="cpu", compute_type="int8")  # the same construction as WhisperVoice
+    print(f"Whisper {name} ready ({time.time() - start:.1f} s).")
 '
     )
 fi
@@ -199,6 +207,21 @@ else
     rm -rf -- "$dest"
     mkdir -p -- "$dest"
     cp -rL -- "$EXT_DIR/." "$dest/"
+    # GNOME Shell loads settings from schemas/gschemas.compiled, which is not in git. Without it the
+    # extension fails to enable (State: ERROR, GLib.FileError), so compile it on every install.
+    if compgen -G "$dest/schemas/*.gschema.xml" >/dev/null; then
+        command -v glib-compile-schemas >/dev/null 2>&1 \
+            || die "glib-compile-schemas was not found. Install it with: sudo apt-get install -y libglib2.0-bin"
+        glib-compile-schemas --strict "$dest/schemas" \
+            || die "glib-compile-schemas could not compile the extension's settings in $dest/schemas."
+        [[ -f "$dest/schemas/gschemas.compiled" ]] \
+            || die "glib-compile-schemas ran but $dest/schemas/gschemas.compiled is missing."
+        note "   Compiled the extension's settings (schemas/gschemas.compiled)."
+    fi
+    # Record which checkout was installed, so a stale copy is easy to spot after a pull.
+    commit="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    printf '%s\n' "$commit" > "$dest/installed-from"
+    note "   Installed the extension from commit $commit (written to $dest/installed-from)."
     if command -v gnome-extensions >/dev/null 2>&1; then
         if gnome-extensions enable "$uuid" 2>/dev/null; then
             note "   Enabled $uuid with gnome-extensions."
@@ -212,6 +235,8 @@ else
         note "   You are on Wayland: log out and log back in so GNOME Shell loads the extension, then run:"
         note "     gnome-extensions enable $uuid"
     fi
+    note "   Check it loaded: gnome-extensions info $uuid   (it must say State: ACTIVE)."
+    note "   Check it is current: cat $dest/installed-from   (must match: git -C $REPO rev-parse --short HEAD)."
 fi
 
 note ""

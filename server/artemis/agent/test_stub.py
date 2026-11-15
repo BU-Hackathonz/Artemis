@@ -25,15 +25,20 @@ def test_happy_path_event_order(tmp_path):
     assert outcome == Answered(text="I created hello-world with main.py and ran it. It printed Hello, World!")
     assert (tmp_path / "hello-world" / "main.py").read_text() == 'print("Hello, World!")\n'
     assert log.types() == [
+        "agent.plan",          # write main.py, then run it (contracts.md §10)
+        "ring.cue",            # the plan is made: think
+        "ring.cue",            # create_project: think, at the editor
         "agent.message",       # Starting project hello-world.
         "task.state",          # awaiting_approval
         "approval.requested",  # write_files
         "approval.resolved",
+        "ring.cue",            # write_files: the plan's write step, once the developer approved
         "file.changed",
         "task.state",          # working
         "task.state",          # awaiting_approval
         "approval.requested",  # run_program
         "approval.resolved",
+        "ring.cue",            # run_program: the plan's run step, once approved
         "task.state",          # running
         "run.result",
         "task.state",          # working
@@ -41,11 +46,15 @@ def test_happy_path_event_order(tmp_path):
     ]
     assert all(e.task_id == "tsk_1" for e in log.events)
     assert [a.kind for a in approvals.requests] == ["write_files", "run_program"]
+    cues = [e.data for e in log.of("ring.cue")]
+    assert [(c["step"], c["action"], c["target"]) for c in cues] == [
+        (None, "think", None), (None, "think", "editor"), (0, "write", "editor"), (1, "run", "terminal")]
     assert log.spoken() == [
+        "I'll write main.py. Then I'll run it.",  # the plan, step by step (§10)
         "Starting project hello-world.",
-        "Create project hello-world with 1 file: main.py, 1 line. Not scanned: the security scanner isn't installed. Enter to approve, Escape to reject.",
+        "Approval needed. Create project hello-world with 1 file: main.py, 1 line. Not scanned: the security scanner isn't installed. Enter to approve, Escape to reject.",
         "Created main.py, 1 line.",
-        "Run main.py with Python. Not scanned: the security scanner isn't installed. Enter to run, Escape to reject.",
+        "Approval needed. Run main.py with Python. Not scanned: the security scanner isn't installed. Enter to run, Escape to reject.",
         "Running main.py.",
         "main.py ran successfully. It printed: Hello, World!",
         "I created hello-world with main.py and ran it. It printed Hello, World!",
@@ -132,7 +141,7 @@ def test_config_defaults_and_env(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     default = Config.from_env()
     assert (default.agent, default.model, default.effort, default.max_iterations) == (
-        "stub", "claude-opus-5-5", "medium", 12,
+        "stub", "claude-opus-5-5", "medium", 40,
     )
     assert default.projects_dir.name == "ArtemisProjects"
     assert not hasattr(default, "api_key")

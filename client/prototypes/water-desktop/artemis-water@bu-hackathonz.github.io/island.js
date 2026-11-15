@@ -1,10 +1,13 @@
 // The Artemis top-edge island: a glowing pill hanging under the top bar, joined to a light line
 // along the bottom edge of the bar, with the ring, the "artemis." name, a waveform and a chevron.
-//   - the chevron (or the waveform) opens a panel: type a request for the Artemis core, or Stop
+//   - the chevron (or the waveform) opens a panel (Jun's two panes): on the left, type a request for
+//     the Artemis core and see your recent requests; on the right, the selected request's goal and
+//     each step Artemis takes, which becomes a short summary when it ends. Approvals stay in the
+//     guarded dialog (approvalDialog.js); the panel only says one is waiting
 //   - while a request is in progress the pill says so, the waveform moves and a pulse of light runs
 //     along the edge; when it ends the ring shows a check for a few seconds
-//   - setView() takes islandState.view() (contracts.md §8). The look is the approved one: the eight
-//     states map onto its idle, working and done looks; any new look per state is Jun's call
+//   - setView() takes islandState.view() (contracts.md §8). The look is Jun's graphite (#170): the
+//     eight states map onto its idle, working and done looks, and a lilac glow breathes while it listens
 // The droplet that flies through a command is drawn by the extension (ringEffect); it leaves from
 // and returns to ringCenter(). The island reserves its strip at the top of the screen, so
 // maximized windows sit below it instead of under it.
@@ -55,6 +58,9 @@ export class Island {
         this._chevron.connect('clicked', () => this.toggle());
         const sep = () => new St.Widget({style_class: 'artemis-island-sep', y_align: Clutter.ActorAlign.CENTER});
         for (const child of [this._ring, sep(), this._waveButton, this._chevron]) this._pill.add_child(child);
+        // The glow: its own layer just behind the pill (the pill's frosted blur would clip a shadow drawn on it).
+        this._glowActor = new St.Widget({style_class: 'artemis-island-glow', opacity: 0, reactive: false});
+        Main.layoutManager.addChrome(this._glowActor, {trackFullscreen: true});
         Main.layoutManager.addChrome(this._pill, {trackFullscreen: true});
         // The summary tab: what the last command did, beside the pill.
         this._tab = new St.BoxLayout({style_class: 'artemis-island-tab', vertical: true, visible: false, reactive: true});
@@ -84,7 +90,15 @@ export class Island {
         this._menuManager = new PopupMenu.PopupMenuManager(this._pill);
         this._menuManager.addMenu(this._menu);
         this._fillMenu();
+        // The menu wears the widget's material: the same frost and the same colour (CSS).
+        try {
+            const mblur = new Shell.BlurEffect({mode: Shell.BlurMode.BACKGROUND, brightness: 0.75});
+            if ('radius' in mblur) mblur.radius = 24; else mblur.sigma = 12;   // the same frost as the widget
+            if ('corner_radius' in mblur) mblur.corner_radius = 0;   // square, like the panel
+            this._menu.box.add_effect(mblur);
+        } catch (e) { console.warn(`Artemis: no menu blur (${e.message})`); }
         this._menu.connect('open-state-changed', (_m, open) => {
+            this._liquidOpen(open);
             chevronIcon.icon_name = open ? 'pan-up-symbolic' : 'pan-down-symbolic';
             this._chevron.accessible_name = open ? 'Close Artemis' : 'Open Artemis';
             if (open) {
@@ -105,6 +119,8 @@ export class Island {
         if (this._timer) GLib.source_remove(this._timer);
         if (this._doneTimer) GLib.source_remove(this._doneTimer);
         this._timer = this._doneTimer = 0;
+        if (this._openTimer) GLib.source_remove(this._openTimer);
+        this._openTimer = 0;
         if (this._monitorsId) Main.layoutManager.disconnect(this._monitorsId);
         if (this._panelId) Main.layoutManager.panelBox.disconnect(this._panelId);
         this._menu?.destroy();
@@ -114,18 +130,24 @@ export class Island {
             Main.layoutManager.removeChrome(actor);
             actor.destroy();
         }
+        this._glowActor?.destroy();
+        this._glowActor = null;
         this._menu = this._pill = this._edge = this._tab = null;
     }
 
     /** Where the ring sits (stage px): the droplet leaves from and returns to here. */
     ringCenter() {
-        const [x, y] = this._dead ? [0, 0] : this._ring.get_transformed_position();
-        const [w, h] = this._dead ? [0, 0] : this._ring.get_transformed_size();
-        if (!w) {
-            const m = Main.layoutManager.primaryMonitor;
-            return {x: m.x + m.width / 2, y: m.y + Main.layoutManager.panelBox.height + 40 * this._scale};
+        // From where the pill was just placed (set_position is immediate) plus the ring's box inside it,
+        // not get_transformed_position(): that lags a relayout by a frame, so a ring re-centred right after
+        // the pill changed width (a status shown or hidden) landed where the slot had been, out of line.
+        if (!this._dead) {
+            const [px, py] = this._pill.get_position();
+            const box = this._ring.get_allocation_box();
+            const w = box.x2 - box.x1, h = box.y2 - box.y1;
+            if (w > 0 && h > 0) return {x: px + box.x1 + w / 2, y: py + box.y1 + h / 2};
         }
-        return {x: x + w / 2, y: y + h / 2};
+        const m = Main.layoutManager.primaryMonitor;
+        return {x: m.x + m.width / 2, y: m.y + Main.layoutManager.panelBox.height + 40 * this._scale};
     }
 
     toggle() { this._menu?.toggle(); }
@@ -154,7 +176,7 @@ export class Island {
                 return GLib.SOURCE_REMOVE;
             });
         }
-        this._animate(state === 'working');
+        this._animate(this._wantAnim());
         this._wave.queue_repaint();
         this._edge.queue_repaint();
     }
@@ -168,29 +190,264 @@ export class Island {
             this.setState(look, view.label);
         }
         this._pill.accessible_name = view.accessibleName;
+        this.setListening(view.state === 'listening', view.label === 'Transcribing');
+        this.setSpeaking(!!view.speaking || view.state === 'speaking');
     }
 
     /** The panel's Stop item: shown while a request is in progress. */
     setStopVisible(on) {
         if (this._stopItem) this._stopItem.visible = !!on;
+        if (this._stopBtn) this._stopBtn.visible = !!on;
     }
 
     // --- panel ---------------------------------------------------------------------------------
 
+    // Jun's two panes (#170): on the left the request box and your recent requests; on the right, what
+    // Artemis is doing for the selected one as a tree of steps, which becomes a summary when it ends.
     _fillMenu() {
-        const box = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false});
-        const column = new St.BoxLayout({vertical: true, x_expand: true, style_class: 'artemis-island-ask'});
+        this._tasks = [];
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'artemis-island-two-item'});
+        const panes = new St.BoxLayout({style_class: 'artemis-island-two', x_expand: true});
+
+        // The typed request stays (David's decision of 2026-11-14): voice first, typing always works.
+        const left = new St.BoxLayout({vertical: true, style_class: 'artemis-island-left'});
+        const ask = new St.BoxLayout({vertical: true, style_class: 'artemis-island-ask'});
         this._entry = new St.Entry({style_class: 'artemis-island-entry', hint_text: 'What would you like to do?', can_focus: true, x_expand: true});
         this._entry.clutter_text.connect('activate', () => this._ask(this._entry.get_text()));
         this._hint = new St.Label({style_class: 'artemis-island-hint', text: ''});
-        column.add_child(this._entry);
-        column.add_child(this._hint);
-        box.add_child(column);
-        this._menu.addMenuItem(box);
-        this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._stopItem = this._menu.addAction('Stop', () => this._opts.onStop());
-        this._stopItem.visible = false;
-        this._menu.addAction('Settings…', () => this._opts.onSettings());
+        ask.add_child(this._entry);
+        ask.add_child(this._hint);
+        this._recentTitle = new St.Label({style_class: 'artemis-island-pane-title', text: 'Recent'});
+        this._recentBox = new St.BoxLayout({vertical: true, style_class: 'artemis-island-recent'});
+        for (const c of [ask, this._recentTitle, this._recentBox]) left.add_child(c);
+
+        const right = new St.BoxLayout({vertical: true, style_class: 'artemis-island-right', x_expand: true});
+        this._dGoal = new St.Label({style_class: 'artemis-island-pane-title', text: 'Goal'});
+        this._dTitle = new St.Label({style_class: 'artemis-island-d-title'});
+        this._dTitle.clutter_text.line_wrap = true;
+        this._dStatus = new St.Label({style_class: 'artemis-island-d-status'});
+        this._dTree = new St.BoxLayout({vertical: true, style_class: 'artemis-island-tree'});
+        // An approval is decided only in the guarded dialog (the 600 ms reveal guard, Escape rejects,
+        // Shift+Enter for a blocked one): the panel shows what is waiting, with no buttons of its own.
+        this._apprBox = new St.BoxLayout({vertical: true, style_class: 'artemis-island-appr', visible: false});
+        this._apprText = new St.Label({style_class: 'artemis-island-appr-text'});
+        this._apprText.clutter_text.line_wrap = true;
+        this._apprBox.add_child(this._apprText);
+        this._dSummary = new St.Label({style_class: 'artemis-island-d-summary'});
+        this._dSummary.clutter_text.line_wrap = true;
+        const actions = new St.BoxLayout({style_class: 'artemis-island-d-actions'});
+        this._stopBtn = new St.Button({style_class: 'artemis-island-d-btn', label: 'Stop', can_focus: true, visible: false});
+        this._stopBtn.connect('clicked', () => this._opts.onStop());
+        actions.add_child(this._stopBtn);
+        this._stopItem = this._stopBtn;
+        for (const c of [this._dGoal, this._dTitle, this._dStatus, this._dTree, this._apprBox, this._dSummary, actions]) right.add_child(c);
+
+        panes.add_child(left);
+        panes.add_child(new St.Widget({style_class: 'artemis-island-vsep'}));
+        panes.add_child(right);
+        item.add_child(panes);
+        this._menu.addMenuItem(item);
+        // One quiet footer line: the mark, how to talk, and Settings.
+        const foot = new PopupMenu.PopupBaseMenuItem({reactive: false, can_focus: false, style_class: 'artemis-island-foot-item'});
+        const fbox = new St.BoxLayout({x_expand: true, style_class: 'artemis-island-foot'});
+        const mark = new St.Label({style_class: 'artemis-island-mark', y_align: Clutter.ActorAlign.CENTER});
+        mark.clutter_text.set_markup('artemis<span foreground="#a99fc7">.</span>');
+        fbox.add_child(mark);
+        fbox.add_child(new St.Label({style_class: 'artemis-island-foot-hint', text: 'Hold Ctrl+Shift+Space to talk', x_expand: true, y_align: Clutter.ActorAlign.CENTER}));
+        const set = new St.Button({style_class: 'artemis-island-foot-btn', label: 'Settings', can_focus: true});
+        set.connect('clicked', () => { this._menu.close(); this._opts.onSettings(); });
+        fbox.add_child(set);
+        foot.add_child(fbox);
+        this._menu.addMenuItem(foot);
+        this._renderTasks();
+    }
+
+    // --- tasks: recent requests and the tree of steps, from the core's events (extension.js) -------
+
+    /** A request started (the core's task id). Anything still marked working was replaced by it. */
+    taskStart(prompt, id) {
+        for (const t of this._tasks) if (t.state === 'working') this._finish(t, 'Replaced by a newer request.', true);
+        const task = {prompt, id, state: 'working', steps: [], summary: '', at: GLib.DateTime.new_now_local()};
+        this._tasks.unshift(task);
+        this._tasks.length = Math.min(this._tasks.length, 6);
+        this._sel = task;
+        this._renderTasks();
+    }
+
+    taskById(id) { return this._tasks.find((x) => x.id === id) ?? null; }
+
+    /** The running request moves to its next step. */
+    taskStep(id, label) {
+        const t = this.taskById(id);
+        if (!t || t.state !== 'working' || !label) return;
+        if (t.steps.at(-1)?.label === label) return;
+        t.steps.forEach((x) => { if (x.state === 'running') x.state = 'done'; });
+        t.steps.push({label, state: 'running'});
+        this._renderTasks();
+    }
+
+    /** What is waiting in the approval dialog (null when it was decided). */
+    taskApproval(id, summary) {
+        const t = this.taskById(id);
+        if (!t) return;
+        t.approval = summary;
+        this._renderTasks();
+    }
+
+    /** The request ended: the tree closes and the summary takes over. */
+    /** Ends every task still working (the core restarted: those tasks get no more events). */
+    taskEndAll(summary) {
+        const open = (this._tasks ?? []).filter((t) => t.state === 'working');
+        for (const t of open) this._finish(t, summary, true);
+        if (open.length) this._renderTasks();
+    }
+
+    taskEnd(id, summary, failed) {
+        const t = this.taskById(id);
+        if (!t || t.state !== 'working') return;
+        this._finish(t, summary, failed);
+        this._renderTasks();
+    }
+
+    _finish(t, summary, failed) {
+        t.state = failed ? 'stopped' : 'done';
+        t.steps.forEach((x) => { if (x.state === 'running') x.state = failed ? 'stopped' : 'done'; });
+        t.summary = summary;
+        t.approval = null;
+    }
+
+    _selected() { return this._tasks.includes(this._sel) ? this._sel : this._tasks[0] ?? null; }
+
+    _renderTasks() {
+        if (!this._recentBox) return;
+        const GLYPH = {working: '\u25CF', done: '\u2713', stopped: '!'};
+        const NAME = {working: 'working', done: 'done', stopped: 'stopped'};
+        // The rows are rebuilt on every event: keep keyboard focus on the same request's row, so a screen
+        // reader user reading the list (or who just pressed Enter on a row) isn't dropped out of the panel.
+        const focus = global.stage.get_key_focus();
+        const focusedTask = this._recentBox.get_children().find((c) => c === focus || c.contains?.(focus))?._artemisTask ?? null;
+        this._recentBox.destroy_all_children();
+        const sel = this._selected();
+        if (!this._tasks.length) this._recentBox.add_child(new St.Label({style_class: 'artemis-island-empty', text: 'Nothing yet'}));
+        for (const t of this._tasks) {
+            const row = new St.BoxLayout({style_class: 'artemis-island-row-in'});
+            const g = new St.Label({style_class: `artemis-island-glyph artemis-island-glyph-${t.state}`, text: GLYPH[t.state], y_align: Clutter.ActorAlign.CENTER});
+            const l = new St.Label({text: t.prompt, x_expand: true, y_align: Clutter.ActorAlign.CENTER});
+            l.clutter_text.ellipsize = 3; // Pango.EllipsizeMode.END
+            row.add_child(g); row.add_child(l);
+            const b = new St.Button({style_class: 'artemis-island-row', child: row, can_focus: true, x_align: Clutter.ActorAlign.FILL,
+                accessible_name: `${t.prompt}, ${NAME[t.state]}`});
+            b._artemisTask = t;
+            if (t === sel) b.add_style_pseudo_class('checked');
+            b.connect('clicked', () => { this._sel = t; this._renderTasks(); });
+            this._recentBox.add_child(b);
+            if (t === focusedTask) b.grab_key_focus();
+        }
+        this._dTree.destroy_all_children();
+        if (this._listening || this._hearing) {
+            this._dGoal.text = 'Goal';
+            this._dTitle.text = this._listening ? 'Listening\u2026' : 'Transcribing\u2026';
+            this._dStatus.text = this._listening ? 'Listening \u00b7 release to send' : 'Got it\u2026';
+            if (this._listening) this._dStatus.add_style_pseudo_class('working'); else this._dStatus.remove_style_pseudo_class('working');
+            this._dSummary.visible = this._apprBox.visible = false;
+            return;
+        }
+        if (!sel) {
+            this._dGoal.text = 'Goal';
+            this._dTitle.text = 'Say or type what you want done';
+            this._dStatus.text = '';
+            this._apprBox.visible = false;
+            this._dSummary.visible = true;
+            this._dSummary.text = 'Your request becomes the goal here, with each step as Artemis works.';
+            return;
+        }
+        this._dGoal.text = 'Goal';
+        this._dTitle.text = sel.prompt;
+        this._dStatus.text = sel.state === 'working' ? 'Working\u2026' : `${sel.state === 'done' ? 'Done' : 'Stopped'} \u00b7 ${sel.at.format('%H:%M')}`;
+        if (sel.state === 'working') this._dStatus.add_style_pseudo_class('working'); else this._dStatus.remove_style_pseudo_class('working');
+        const steps = sel.steps.length ? sel.steps : (sel.state === 'working' ? [{label: 'Starting', state: 'running'}] : []);
+        steps.forEach((x, i) => {
+            const row = new St.BoxLayout({style_class: 'artemis-island-tree-row'});
+            const branch = new St.Label({style_class: 'artemis-island-branch', text: i === steps.length - 1 ? '\u2514' : '\u251C'});
+            const g = new St.Label({style_class: `artemis-island-glyph artemis-island-glyph-${x.state === 'running' ? 'working' : x.state}`, text: x.state === 'running' ? '\u25CF' : x.state === 'done' ? '\u2713' : '!'});
+            const l = new St.Label({style_class: `artemis-island-step artemis-island-step-${x.state}`, text: x.label, x_expand: true});
+            l.clutter_text.line_wrap = true;
+            row.add_child(branch); row.add_child(g); row.add_child(l);
+            this._dTree.add_child(row);
+        });
+        this._apprBox.visible = !!sel.approval;
+        if (sel.approval) this._apprText.text = `Waiting for you in the approval dialog: ${sel.approval.replace(/\s*Enter to (approve|run), Escape to reject\.?\s*$/i, '')}`;
+        this._dSummary.text = sel.state === 'working' ? '' : sel.summary;
+        this._dSummary.visible = sel.state !== 'working';
+    }
+
+    /** Listening (push-to-talk or an armed "Hey Artemis"): the glow breathes and the right pane says so. */
+    setListening(listening, hearing = false) {
+        if (this._listening === listening && this._hearing === hearing) return;
+        this._listening = listening;
+        this._hearing = hearing;
+        this._animate(this._wantAnim());
+        this._wave?.queue_repaint();
+        this._renderTasks();
+    }
+
+    /** The bars move while Artemis speaks, too. */
+    setSpeaking(on) {
+        if (this._speaking === on) return;
+        this._speaking = on;
+        this._animate(this._wantAnim());
+        this._wave?.queue_repaint();
+    }
+
+    _wantAnim() { return this._state === 'working' || !!this._speaking || !!this._listening; }
+
+    /** A soft lilac glow that breathes on the pill while Artemis listens. */
+    _glowTick() {
+        if (!this._listening) {
+            if (this._glowing) { this._pill?.set_style(null); if (this._glowActor) this._glowActor.opacity = 0; this._glowing = false; }
+            return;
+        }
+        this._glowing = true;
+        const b = 0.5 + 0.5 * Math.sin(this._phase * 4.2);
+        if (this._glowActor) {
+            if (this._glowActor.width !== this._pill.width) this._glowActor.set_size(this._pill.width, this._pill.height);
+            this._glowActor.opacity = Math.round(150 + 105 * b);   // breathes
+        }
+        this._pill?.set_style(`border-color: rgba(190, 180, 225, ${(0.45 + 0.4 * b).toFixed(2)});`);
+    }
+
+    // Liquid open: the panel drops out of the pill, sinks a little past its place, rises back and
+    // settles (an underdamped spring), and its rows ripple in one by one.
+    _liquidOpen(open) {
+        if (this._openTimer) { GLib.source_remove(this._openTimer); this._openTimer = 0; }
+        const box = this._menu?.box;
+        if (!box) return;
+        const reset = () => { box.translation_y = 0; box.scale_x = box.scale_y = 1; box.get_children().forEach((c) => { c.opacity = 255; c.translation_y = 0; }); };
+        if (!open) { reset(); return; }
+        const items = box.get_children();
+        box.set_pivot_point(0.5, 0);
+        const spring = (t, z = 0.42, w = 15) => {
+            if (t <= 0) return 0;
+            const wd = w * Math.sqrt(1 - z * z);
+            return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + (z * w / wd) * Math.sin(wd * t));
+        };
+        const t0 = GLib.get_monotonic_time();
+        this._openTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            const t = (GLib.get_monotonic_time() - t0) / 1e6;
+            const p = spring(t);
+            box.translation_y = -18 * (1 - p);          // overshoot (p > 1) sinks it below its place
+            box.scale_y = 0.9 + 0.1 * p;                 // and stretches it a touch, like a drop
+            box.scale_x = 1 - 0.04 * (p - 1);            // thinner while stretched, wider while squashed
+            items.forEach((c, i) => {
+                const q = Math.min(Math.max(spring(t - 0.05 - i * 0.025, 0.6, 18), 0), 1.2);
+                c.opacity = Math.round(255 * Math.min(q, 1));
+                c.translation_y = 8 * (1 - q);
+            });
+            if (t < 1.1) return GLib.SOURCE_CONTINUE;
+            reset();
+            this._openTimer = 0;
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     // Typed request: sent to the core. The field is cleared before the core answers, so a stray
@@ -227,6 +484,8 @@ export class Island {
         const px = Math.round(m.x + (m.width - this._idleWidth) / 2); // the ring's slot never moves
         const py = Math.round(panelBottom + GAP * s);
         this._pill.set_position(px, py);
+        this._glowActor?.set_position(px, py);
+        this._glowActor?.set_size(this._pill.width, this._pill.height);
         if (this._tab) this._tab.set_position(px + Math.round((this._idleWidth - this._tab.width) / 2), py + this._pill.height + Math.round(8 * s)); // under the widget
         // The edge strip runs from the top of the screen (so it reserves space as a top strut) to
         // just below the pill; only the line along the bar's bottom edge is drawn in it.
@@ -296,9 +555,9 @@ export class Island {
     _paintWave(area) {
         const cr = area.get_context();
         const [w, h] = area.get_surface_size();
-        const active = this._state === 'working';
+        const active = this._wantAnim();
         const n = 8, bw = 3 * this._scale, gap = (w - n * bw) / (n - 1);
-        cr.setSourceRGBA(0.85, 0.75, 0.99, active ? 0.95 : 0.55);
+        cr.setSourceRGBA(0.83, 0.83, 0.85, active ? 0.8 : 0.45); // graphite bars
         for (let i = 0; i < n; i++) {
             const rest = (i % 2 ? 6 : 4) * this._scale;
             const live = h * (0.25 + 0.7 * Math.abs(Math.sin(this._phase * 5 + i * 1.3) * Math.sin(this._phase * 2.1 + i * 0.7)));
@@ -322,6 +581,8 @@ export class Island {
                 last = now;
                 this._wave?.queue_repaint();
                 this._edge?.queue_repaint();
+                this._glowTick();
+                if (!this._wantAnim()) { this._timer = 0; this._glowTick(); return GLib.SOURCE_REMOVE; }
                 return GLib.SOURCE_CONTINUE;
             });
         } else if (!on && this._timer) {

@@ -14,9 +14,15 @@ MAX_READ_BYTES = 1024 * 1024
 MAX_WRITE_BYTES = 256 * 1024
 MAX_FILES_PER_BATCH = 20
 
+# Text and source a project is made of. Nothing here runs by itself: run_program only runs .py, and
+# a script in any other language needs run_command, which the developer approves line by line.
 WRITE_EXTENSIONS = frozenset(
-    {".py", ".txt", ".md", ".json", ".toml", ".csv", ".html", ".css", ".js"}
+    {".py", ".txt", ".md", ".json", ".toml", ".csv", ".html", ".css", ".js",
+     ".htm", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".svg", ".yaml", ".yml", ".xml",
+     ".ini", ".cfg", ".sql", ".scss", ".vue"}
 )
+# Extensionless project files that are plain text (matched on the whole name, lower case).
+WRITE_NAMES = frozenset({".gitignore", ".gitattributes", ".editorconfig", ".prettierrc", "license", "readme"})
 
 # Folders that are never listed, sent to the model or scanned.
 SKIP_DIRS = frozenset({".git", "__pycache__", ".venv", "node_modules"})
@@ -98,7 +104,7 @@ def safe_resolve(root: Path, rel: str, *, for_write: bool = False) -> Path:
     for part in resolved.relative_to(root_resolved).parts:
         _check_protected(part)
 
-    if for_write and resolved.suffix.lower() not in WRITE_EXTENSIONS:
+    if for_write and resolved.suffix.lower() not in WRITE_EXTENSIONS and resolved.name.lower() not in WRITE_NAMES:
         kind = resolved.suffix or "no extension"
         raise PathRejected(
             f"{rel} has {kind}, and I can only write "

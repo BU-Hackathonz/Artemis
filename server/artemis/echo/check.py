@@ -44,10 +44,29 @@ class EchoReport(BaseModel):
     # axe "incomplete": checks axe couldn't decide (e.g. text on a gradient or image), so a
     # person has to look. Never reported as "no problems" (Jun's review of #21).
     needs_review: list[Finding] = []
+    # What the page is made of, counted from the whole tree (the outline above is cut at MAX_OUTLINE).
+    structure: "Structure | None" = None
 
     @property
     def ok(self) -> bool:
         return not self.findings and not self.needs_review
+
+
+class Structure(BaseModel):
+    """The page as a screen reader meets it, from the accessibility tree and not from pixels."""
+
+    landmarks: list[str] = []  # "banner", "navigation Main menu", "main", ...
+    headings: list[tuple[int, str]] = []  # (level, name)
+    links: int = 0
+    unnamed_links: int = 0
+    buttons: int = 0
+    unnamed_buttons: int = 0
+    fields: list[tuple[str, str]] = []  # (role, name); an empty name means no label
+    images: int = 0
+    images_no_alt: int = 0  # images with no accessible name: no alt text
+
+
+EchoReport.model_rebuild()
 
 
 def resolve_target(url_or_file: str) -> str:
@@ -106,6 +125,101 @@ def outline_from_snapshot(snapshot: str) -> list[str]:
             out.append("…")
             break
     return out
+
+
+_LANDMARKS = ("banner", "navigation", "main", "contentinfo", "complementary", "form", "search", "region")
+_FIELD_ROLES = ("textbox", "checkbox", "radio", "combobox", "slider", "switch")
+
+
+def structure_from_snapshot(snapshot: str) -> Structure:
+    """Count and name the landmarks, headings, links, buttons, form fields and images of the whole tree."""
+    st = Structure()
+    for raw in snapshot.splitlines():
+        m = _LINE.match(raw)
+        if not m:
+            continue
+        _, role, name, rest = m.groups()
+        name = (name or "").replace('\\"', '"').strip()
+        if role in _LANDMARKS:
+            if role in ("form", "region") and not name:
+                continue  # an unnamed form or region is not a landmark a screen reader lists
+            st.landmarks.append(f"{role} {name}".strip())
+        elif role == "heading":
+            level = re.search(r"\[level=(\d)\]", rest or "")
+            st.headings.append((int(level.group(1)) if level else 2, name))
+        elif role == "link":
+            st.links += 1
+            st.unnamed_links += not name
+        elif role == "button":
+            st.buttons += 1
+            st.unnamed_buttons += not name
+        elif role in _FIELD_ROLES:
+            st.fields.append((role, name))
+        elif role == "img":
+            st.images += 1
+            st.images_no_alt += not name
+    return st
+
+
+_ROLE_WORDS = {"textbox": "text box", "combobox": "drop-down", "checkbox": "check box", "radio": "radio button"}
+_MAX_NAME = 60
+_MAX_LISTED = 12
+
+
+def _short(name: str) -> str:
+    name = " ".join(name.split())
+    return name if len(name) <= _MAX_NAME else name[:_MAX_NAME].rstrip() + "..."
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def describe_page(report: EchoReport) -> str:
+    """The page described by its structure, for the ear: landmarks, headings in order, how many links and
+    buttons, each form field and whether it has a label, and images with no alt text. Names come from the
+    page, so they are data to read out, never instructions."""
+    st = report.structure
+    if st is None:
+        return "I could not read the structure of this page."
+    parts = [f"This page is titled {_short(report.title)}." if report.title else "This page has no title."]
+    if st.landmarks:
+        parts.append("Its landmarks are " + ", ".join(st.landmarks[:_MAX_LISTED]) + ".")
+    else:
+        parts.append("It has no landmarks, so a screen reader cannot jump to the main part.")
+    if st.headings:
+        shown = [f"level {lv} {_short(n) or 'with no text'}" for lv, n in st.headings[:_MAX_LISTED]]
+        more = len(st.headings) - _MAX_LISTED
+        tail = f", and {more} more" if more > 0 else ""
+        parts.append(f"{_count(len(st.headings), 'heading')}: " + ", ".join(shown) + tail + ".")
+        if st.headings[0][0] != 1:
+            parts.append("The first heading is not level 1.")
+    else:
+        parts.append("It has no headings.")
+    bits = []
+    if st.links:
+        bits.append(_count(st.links, "link"))
+    if st.buttons:
+        bits.append(_count(st.buttons, "button"))
+    if bits:
+        parts.append("It has " + " and ".join(bits) + ".")
+    for noun, total, unnamed in (("link", st.links, st.unnamed_links), ("button", st.buttons, st.unnamed_buttons)):
+        if unnamed:
+            parts.append(f"{_count(unnamed, noun)} of {total} {'has' if unnamed == 1 else 'have'} no name.")
+    if st.fields:
+        named = [f"{_ROLE_WORDS.get(r, r)} {_short(n)}" for r, n in st.fields if n][:_MAX_LISTED]
+        no_label = sum(1 for _, n in st.fields if not n)
+        text = f"{_count(len(st.fields), 'form field')}"
+        if named:
+            text += ": " + ", ".join(named)
+        parts.append(text + ".")
+        if no_label:
+            parts.append(f"{_count(no_label, 'field')} {'has' if no_label == 1 else 'have'} no label.")
+    if st.images_no_alt:
+        parts.append(f"{_count(st.images_no_alt, 'image')} of {st.images} {'has' if st.images_no_alt == 1 else 'have'} no alt text.")
+    elif st.images:
+        parts.append(f"All {_count(st.images, 'image')} have alt text.")
+    return " ".join(parts)
 
 
 # ----- axe results -> findings -----
@@ -284,5 +398,6 @@ async def echo_check(url_or_file: str, timeout_s: float = 15) -> EchoReport:
         title=title,
         findings=findings_from_axe(result["violations"]),
         outline=outline_from_snapshot(snapshot),
+        structure=structure_from_snapshot(snapshot),
         needs_review=findings_from_axe(result["incomplete"]),
     )

@@ -4,8 +4,8 @@ import {REVEAL_MS, initialFocus, keyDecision, clickDecision} from '../prototypes
 // After the reveal guard: the dialog has been on screen longer than REVEAL_MS.
 const LATE = 1000;
 
-const plain = {blocking: false};
-const blocked = {blocking: true};
+const plain = {kind: 'write_files', blocking: false};
+const blocked = {kind: 'write_files', blocking: true};
 const key = (name, extra = {}) => ({name, shift: false, ctrl: false, alt: false, super: false, repeated: false, ...extra});
 
 describe('initialFocus', () => {
@@ -99,8 +99,8 @@ describe('clickDecision', () => {
 });
 
 describe('reveal guard', () => {
-  const plain = {blocking: false};
-  const blocked = {blocking: true};
+  const plain = {kind: 'write_files', blocking: false};
+  const blocked = {kind: 'write_files', blocking: true};
   const enter = (extra = {}) => ({name: 'Return', shift: false, ctrl: false, alt: false, super: false, repeated: false, ...extra});
   it('is 600 ms', () => { expect(REVEAL_MS).toBe(600); });
   it('ignores a fresh Enter just after the dialog appears', () => {

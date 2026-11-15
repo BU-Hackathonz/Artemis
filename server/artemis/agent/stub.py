@@ -17,6 +17,10 @@ class StubAgent:
             await say(emit, task.task_id, text)
             return Answered(text=text)
 
+        await tools.call(task.task_id, "plan", {"goal": "Create a Python program that prints Hello World", "steps": [
+            {"say": "I'll write main.py.", "action": "write", "target": "editor"},
+            {"say": "Then I'll run it.", "action": "run", "target": "terminal"},
+        ]})
         created = await tools.call(task.task_id, "create_project", {"name": PROJECT})
         if not created.ok:
             return Failed(code=created.error, message=created.message or "")

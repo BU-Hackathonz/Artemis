@@ -50,7 +50,8 @@ def test_edit_in_an_opened_project_is_one_approved_diff(tmp_path):
     }
     assert "-    return user\n+    return user.strip()\n" in approval.diff
     assert w.log.types() == [
-        "agent.message", "task.state", "approval.requested", "approval.resolved", "file.changed", "task.state",
+        "ring.cue", "agent.message", "task.state", "approval.requested", "approval.resolved", "ring.cue",
+        "file.changed", "task.state",
     ]
     assert w.log.spoken()[-1] == "Changed app.py, 1 line."
 

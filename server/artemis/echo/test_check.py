@@ -268,3 +268,64 @@ async def test_playwright_driver_and_browser_get_no_secrets(tmp_path, monkeypatc
     assert seen["launch_env"]["PLAYWRIGHT_BROWSERS_PATH"] == "/opt/pw-browsers"
     assert seen["browser_closed"] and seen["stopped"]
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-should-not-leak"
+
+
+STRUCT = """- banner:
+  - img "Club logo"
+  - navigation "Main":
+    - link "Home"
+    - link
+- main:
+  - heading "Join the club" [level=1]
+  - heading "Why join" [level=2]
+  - img
+  - form "Sign up":
+    - textbox "Email"
+    - textbox
+    - button "Go"
+- contentinfo:
+  - paragraph: bye
+"""
+
+
+def test_structure_counts_the_whole_tree():
+    from artemis.echo.check import structure_from_snapshot
+
+    st = structure_from_snapshot(STRUCT)
+    assert st.landmarks == ["banner", "navigation Main", "main", "form Sign up", "contentinfo"]
+    assert st.headings == [(1, "Join the club"), (2, "Why join")]
+    assert (st.links, st.unnamed_links, st.buttons, st.images, st.images_no_alt) == (2, 1, 1, 2, 1)
+    assert st.fields == [("textbox", "Email"), ("textbox", "")]
+
+
+def test_describe_page_is_structure_not_pixels():
+    from artemis.echo.check import describe_page, structure_from_snapshot
+
+    r = report([], title="Join the club")
+    r.structure = structure_from_snapshot(STRUCT)
+    text = describe_page(r)
+    assert "titled Join the club" in text
+    assert "landmarks are banner, navigation Main, main, form Sign up, contentinfo" in text
+    assert "2 headings: level 1 Join the club, level 2 Why join" in text
+    assert "2 links and 1 button" in text and "1 link of 2 has no name" in text
+    assert "2 form fields: text box Email" in text and "1 field has no label" in text
+    assert "1 image of 2 has no alt text" in text
+
+
+def test_describe_page_empty_and_missing_structure():
+    from artemis.echo.check import Structure, describe_page
+
+    r = report([])
+    assert describe_page(r) == "I could not read the structure of this page."
+    r.structure = Structure()
+    text = describe_page(r)
+    assert "no landmarks" in text and "no headings" in text
+
+
+def test_describe_page_caps_long_lists_and_names():
+    from artemis.echo.check import Structure, describe_page
+
+    r = report([])
+    r.structure = Structure(headings=[(1, "H" * 200)] + [(2, f"s{i}") for i in range(30)])
+    text = describe_page(r)
+    assert "H" * 61 not in text and "and 19 more" in text

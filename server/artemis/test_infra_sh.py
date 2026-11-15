@@ -206,3 +206,79 @@ def test_failed_health_check_removes_launch_file_and_stops_the_core(tmp_path):
     assert result.returncode == 1
     assert "did not answer /health" in result.stderr + result.stdout
     assert not (tmp_path / "run" / "artemis" / "launch.json").exists()
+
+
+# ----- setup-ubuntu.sh: the GNOME Shell extension install -----
+
+QUIET_UV = "#!/bin/sh\nexit 0\n"
+# A fake gnome-extensions, so the test never talks to the real GNOME Shell on a developer's machine.
+FAKE_GNOME_EXTENSIONS = '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$FAKE_GE_LOG"\nexit 0\n'
+SCHEMA_ID = "org.gnome.shell.extensions.artemis-test"
+GOOD_SCHEMA = f"""<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="{SCHEMA_ID}" path="/org/gnome/shell/extensions/artemis-test/">
+    <key name="water" type="b"><default>true</default></key>
+  </schema>
+</schemalist>
+"""
+
+
+def _setup_env(tmp_path: Path) -> dict[str, str]:
+    env = _env(tmp_path)
+    bin_dir = tmp_path / "bin"
+    for name, body in (("uv", QUIET_UV), ("gnome-extensions", FAKE_GNOME_EXTENSIONS)):
+        (bin_dir / name).write_text(body)
+        (bin_dir / name).chmod(0o755)
+    env["FAKE_GE_LOG"] = str(tmp_path / "ge.log")
+    env.pop("XDG_SESSION_TYPE", None)
+    return env
+
+
+def _extension(tmp_path: Path, schema: str) -> Path:
+    ext = tmp_path / "src" / "artemis-test@example.com"
+    (ext / "schemas").mkdir(parents=True)
+    (ext / "metadata.json").write_text(json.dumps({"uuid": "artemis-test@example.com", "name": "Test"}))
+    (ext / "extension.js").write_text("// current\n")
+    (ext / "schemas" / f"{SCHEMA_ID}.gschema.xml").write_text(schema)
+    return ext
+
+
+def _run_setup(env: dict[str, str], ext: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [BASH, str(SETUP), "--yes", "--no-apt", "--no-model", "--extension-dir", str(ext)],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+
+
+@pytest.mark.skipif(shutil.which("glib-compile-schemas") is None, reason="glib-compile-schemas is not installed")
+def test_setup_installs_the_current_extension_with_compiled_schemas(tmp_path):
+    env = _setup_env(tmp_path)
+    ext = _extension(tmp_path, GOOD_SCHEMA)
+    dest = tmp_path / "home" / ".local/share/gnome-shell/extensions/artemis-test@example.com"
+    # An old copy from an earlier install, with a file the new extension no longer has.
+    dest.mkdir(parents=True)
+    (dest / "extension.js").write_text("// old\n")
+    (dest / "stale.js").write_text("// gone\n")
+
+    result = _run_setup(env, ext)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (dest / "schemas" / "gschemas.compiled").is_file()
+    assert (dest / "extension.js").read_text() == "// current\n"
+    assert not (dest / "stale.js").exists()
+    head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+    assert (dest / "installed-from").read_text().strip() == (head.stdout.strip() or "unknown")
+    assert "State: ACTIVE" in result.stdout
+    assert "enable artemis-test@example.com" in (tmp_path / "ge.log").read_text()
+
+
+@pytest.mark.skipif(shutil.which("glib-compile-schemas") is None, reason="glib-compile-schemas is not installed")
+def test_setup_stops_when_the_extension_schema_does_not_compile(tmp_path):
+    env = _setup_env(tmp_path)
+    ext = _extension(tmp_path, "<schemalist><schema id='broken'")
+
+    result = _run_setup(env, ext)
+
+    assert result.returncode != 0
+    assert "could not compile" in result.stderr
+    assert not (tmp_path / "ge.log").exists()

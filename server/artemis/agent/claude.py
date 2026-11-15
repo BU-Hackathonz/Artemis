@@ -21,6 +21,14 @@ from .prompts import system_prompt, tool_definitions
 
 MAX_TOKENS = 16000
 RETRY_DELAY_S = 2.0
+# How many times in one task a reply that hit the output limit is answered with "split it up".
+MAX_CUT_OFFS = 2
+CUT_OFF_NOTE = (
+    "Your last reply hit the output limit and was cut off, so this tool call did NOT run and nothing "
+    "was written. Split the work: put each file in its own write_files call, keep each file under "
+    "about 300 lines (move parts into more files, such as separate css and js files), and send the "
+    "smaller pieces one after another."
+)
 # Lets the API re-run a request that a safety classifier declined on the model it recommends
 # for that kind of refusal, inside the same call.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -64,6 +72,8 @@ class ClaudeAgent:
             # failed. <message> You can try again."). Saying it here too put it in the log twice.
             return Failed(code=code, message=message)
 
+        last_failed = False  # the last tool result was an error
+        cut_offs = 0
         for _ in range(self._config.max_iterations):
             try:
                 response = await self._create(task, emit)
@@ -84,6 +94,9 @@ class ClaudeAgent:
                 return await fail("auth", "The Claude API key is missing or invalid.")
             except (anthropic.RateLimitError, anthropic.InternalServerError):
                 return await fail("busy", "Claude is still busy. Try again in a minute.")
+            except anthropic.APITimeoutError:
+                # A subclass of APIConnectionError, so it must come first: a slow answer is not "no internet".
+                return await fail("timeout", "Claude took too long to answer. Try again.")
             except anthropic.APIConnectionError:
                 return await fail("offline", "No internet connection to Claude.")
             except anthropic.APIStatusError as exc:
@@ -98,16 +111,44 @@ class ClaudeAgent:
             if response.stop_reason == "refusal":
                 return await fail("refused", "I can't help with that request.")
             if response.stop_reason == "max_tokens":
-                return await fail("too_long", "That got too long. Try a smaller request.")
+                cut_offs += 1
+                # A big file can run past the output limit. Never run a cut-off tool call (its input is
+                # incomplete) and never hide it: say so, then let the model redo it in smaller pieces.
+                if cut_offs > MAX_CUT_OFFS or not response.content:
+                    return await fail(
+                        "too_long",
+                        "That was too big to write in one go, even in pieces. Try a smaller request.",
+                    )
+                await say(emit, task.task_id, "That was too big for one step. Splitting it into smaller files.", "progress")
+                self.messages.append({"role": "assistant", "content": response.content})
+                calls = [block for block in response.content if block.type == "tool_use"]
+                if calls:
+                    note = [
+                        {"type": "tool_result", "tool_use_id": c.id, "content": CUT_OFF_NOTE, "is_error": True}
+                        for c in calls
+                    ]
+                else:
+                    note = "Your last reply hit the output limit and was cut off. Continue in smaller pieces."
+                self.messages.append({"role": "user", "content": note})
+                last_failed = bool(calls)
+                continue
 
             # Exactly as returned, thinking blocks included.
             self.messages.append({"role": "assistant", "content": response.content})
             calls = [block for block in response.content if block.type == "tool_use"]
             if not calls:
                 text = "\n".join(b.text for b in response.content if b.type == "text").strip()
-                text = text or "Done."
+                # An empty answer after a failed tool must not claim it worked.
+                text = text or ("That did not work. Ask me to try again." if last_failed else "Done.")
                 await say(emit, task.task_id, text)
                 return Answered(text=text)
+
+            # A sentence written alongside the tool calls ("I'll check the file first.") is what Claude
+            # is doing right now: say it as progress, so the work is explained while it happens.
+            # Low priority: it never cuts or delays an approval or a result, and a newer line replaces it.
+            between = "\n".join(b.text for b in response.content if b.type == "text").strip()
+            if between:
+                await say(emit, task.task_id, between, "progress")
 
             # The model may ask for several tools at once; run them one at a time, in order,
             # so there is never more than one approval open (design A7).
@@ -138,6 +179,7 @@ class ClaudeAgent:
                 self.messages.append({"role": "user", "content": results})
                 raise
             self.messages.append({"role": "user", "content": results})
+            last_failed = bool(results) and results[-1]["is_error"]
 
         return await fail("too_many_steps", "That took too many steps. Try a smaller request.")
 

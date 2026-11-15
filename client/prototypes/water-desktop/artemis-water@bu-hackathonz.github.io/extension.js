@@ -26,8 +26,12 @@ import {WaterEffect, MAX_DROPS} from './waterEffect.js';
 import {LensEffect} from './lensEffect.js';
 import {OrbEffect} from './orbEffect.js';
 import {RingEffect} from './ringEffect.js';
+import {cueTargetRect, cueWindow, caretAnchor} from './ringTargets.js';
+import {findApp, dockSpot, pressIcon, waitForWindow} from './launchFlight.js';
+import {CaretTracker} from './caret.js';
 import {Island} from './island.js';
 import {CoreClient} from './core.js';
+import {Typist, focusedWindow} from './desktop.js';
 import {ApprovalDialog} from './approvalDialog.js';
 import {initial, reduce, setConnected, view, expireDone, DONE_MS} from './islandState.js';
 
@@ -88,6 +92,14 @@ const HOLD_GLOW = 0.4;          // ... and the extra glow it keeps
 const HOLD_EASE = 5;            // 1/s: easing into and out of the held state
 const HOLD_POKE_MS = [380, 900]; // menu open: random little pokes to its jelly spring, this often
 const MORPH_SECONDS = 0.55;     // ring <-> droplet transition (a command waits for it to start)
+const CUE_FLY_MS = 600;         // the droplet flies to the window a ring.cue names (ease-out quad)
+const CUE_ARC = 0.12;           // how far it bows off the straight line on the way (share of the distance)
+const RIDE_POLL_MS = 90;        // while Artemis types: how often the droplet checks where the caret is
+const RIDE_GLIDE_MS = 140;      // ... and how long it glides to the caret's new spot
+const CUE_RUN_PULSE_HZ = 1.2;   // a "run" cue pulses its glow this often
+const LAUNCH_DWELL_MS = 450;    // "open": the droplet rests on the dock icon at least this long ...
+const LAUNCH_WAIT_MS = 20000;   // ... and waits up to this long for the app's window
+const LAUNCH_FLY_MS = 750;      // ... then flies onto it, a little slower than a cue flight
 const TRAIL_HIGHLIGHTS = 1.6;   // agent trail: brighter glossy lines ...
 const TRAIL_DISPERSION = 2.0;   // ... stronger rainbow fringes ...
 const TRAIL_GLOW = 0.08;        // ... and a faint glow, so it's easy to follow
@@ -103,6 +115,9 @@ const DRAG_THRESHOLD = 5;       // px the pointer must move before a press becom
 const mix = (a, b, t) => a + (b - a) * t;
 const smooth = (t) => { t = Math.min(Math.max(t, 0), 1); return t * t * (3 - 2 * t); };
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+// Clutter's EASE_OUT_QUAD, as a function: the droplet is a shader on the stage, not an actor that
+// Clutter's ease() could move, so the same curve drives its timer.
+const easeOutQuad = (t) => 1 - (1 - t) * (1 - t);
 
 export default class ArtemisWaterExtension extends Extension {
     enable() {
@@ -125,6 +140,12 @@ export default class ArtemisWaterExtension extends Extension {
         this._readySid = null;          // the session ready was last sent for
         this._doneTimer = 0;
         this._talkTimer = 0;
+        this._typist = Typist.create();   // null when the shell has no virtual keyboard: the island then can't type
+        this._desktopOps = new Set();     // op_ids already answered: never type the same op twice
+        this._desktopJob = null;          // the last desktop action, so they run one at a time
+        this._caret = null;               // AT-SPI caret tracker, made at the first ring.cue (caret.js)
+        this._rideTimer = 0;              // the droplet follows the caret while Artemis types
+        this._launch = null;              // an "open" cue's visit to the dock (launchFlight.js)
 
         this._core = new CoreClient({
             onEvent: (event) => this._onEvent(event),
@@ -142,6 +163,7 @@ export default class ArtemisWaterExtension extends Extension {
         this._workAreaId = global.display.connect('workareas-changed', () => this._agentGoHome(true));
 
         this._addPushToTalk();
+        this._addMuteKey();
         this._addPanelButton();
         this._setupAgent();
         this._core.start();
@@ -166,6 +188,12 @@ export default class ArtemisWaterExtension extends Extension {
             core?.destroy();
         }
         this._closeApproval();
+        this._typist?.destroy();
+        this._typist = null;
+        this._stopRide();
+        this._endLaunch();
+        this._caret?.destroy();
+        this._caret = null;
         if (this._doneTimer) GLib.source_remove(this._doneTimer);
         this._doneTimer = 0;
         if (this._talkTimer) GLib.source_remove(this._talkTimer);
@@ -173,6 +201,8 @@ export default class ArtemisWaterExtension extends Extension {
         this._listening = false;
         if (this._shortcutBound) Main.wm.removeKeybinding('push-to-talk');
         this._shortcutBound = false;
+        if (this._muteBound) Main.wm.removeKeybinding('mute-listening');
+        this._muteBound = false;
         this._teardownAgentUI();
         this._button?.destroy();
         this._button = null;
@@ -184,6 +214,7 @@ export default class ArtemisWaterExtension extends Extension {
         if (this._dragTimer) GLib.source_remove(this._dragTimer);
         this._dragTimer = 0;
         this._drag = null;
+        this._cue = null;
         if (this._homeId) this._settings.disconnect(this._homeId);
         this._homeId = 0;
         if (this._reattachId) GLib.source_remove(this._reattachId);
@@ -296,7 +327,9 @@ export default class ArtemisWaterExtension extends Extension {
                 onSettings: () => this.openPreferences(),
                 font: this._settings.get_string('ui-font'),
                 // the pill resizes with its status: follow its ring, but never mid-flight
-                onMoved: () => { if (!this._agent?.awake && !this._homeTimer) this._agentGoHome(true); },
+                // After the relayout settles (the ring's box is final then), so the ring re-centres on the slot
+                // where it really is now, not where it was a frame ago.
+                onMoved: () => this._afterLayout(() => { if (!this._agent?.awake && !this._homeTimer) this._agentGoHome(true); }),
             });
             this._agentGoHome(true);
         } else {
@@ -306,6 +339,18 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     // Fly back to the corner (not cancellable by commands), then rest.
+    // Run fn once GNOME has laid the stage out again (Meta.later BEFORE_REDRAW), at most once per frame.
+    _afterLayout(fn) {
+        if (this._layoutLater) return;
+        const run = () => { this._layoutLater = 0; if (this._settings) fn(); return GLib.SOURCE_REMOVE; };
+        try {
+            const laters = global.compositor?.get_laters?.();
+            this._layoutLater = laters ? laters.add(Meta.LaterType.BEFORE_REDRAW, run) : Meta.later_add(Meta.LaterType.BEFORE_REDRAW, run);
+        } catch {
+            this._layoutLater = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, run);
+        }
+    }
+
     _agentGoHome(snap) {
         if (!this._agent) return;
         const home = this._homePos();
@@ -319,6 +364,9 @@ export default class ArtemisWaterExtension extends Extension {
         this._homeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ACTIVE_MS, () => {
             const t = Math.min((GLib.get_monotonic_time() - t0) / 1000 / ms, 1);
             const e = easeInOut(t);
+            // Home is the island's ring slot, which can move during the flight (the pill changes width when
+            // the task ends): aim at where it is now, so the ring lands on it instead of jumping at the end.
+            if (this._island) Object.assign(home, this._homePos());
             // A gentle arc home.
             const bend = 0.18 * Math.sin(Math.PI * t) * dist;
             const nx = -(home.y - from.y) / (dist || 1), ny = (home.x - from.x) / (dist || 1);
@@ -334,6 +382,182 @@ export default class ArtemisWaterExtension extends Extension {
             }
             return GLib.SOURCE_CONTINUE;
         });
+    }
+
+    // A ring.cue (contracts.md §10): the droplet flies to what Artemis is really doing now (the
+    // window the cue names), or home when the task is done. Only the ring look moves; the orb and
+    // the sphere stay put.
+    _onRingCue(cue) {
+        if (!this._agent || !this._isRing()) return;
+        this._endLaunch();
+        if (cue.action === 'done') {
+            this._cue = null;
+            this._agentGoHome(false);
+            return;
+        }
+        this._cue = {action: cue.action};
+        this._caret ??= new CaretTracker(); // made now, so it has seen the focus before any typing starts
+        if (cue.action === 'type') {
+            const at = this._caretTarget();
+            if (at) { this._agentFlyTo(at); return; }
+        }
+        const windows = this._cueWindows();
+        if (cue.action === 'open' && !cueWindow(cue, windows) && this._launchFromDock(cue.target)) return;
+        const monitor = Main.layoutManager.primaryMonitor;
+        const dest = cueTargetRect(cue, {
+            windows,
+            screen: {x: monitor.x, y: monitor.y, width: monitor.width, height: monitor.height},
+            home: this._homePos(),
+        });
+        this._agentFlyTo({x: dest.x + dest.width / 2, y: dest.y + dest.height / 2});
+    }
+
+    // "Open <app>" with no window of it yet: fly to its dock icon, press it, wait there while it
+    // starts, then fly onto its new window. False when the app or the dock can't be found (the
+    // caller then flies as before). Reduce motion: the droplet jumps, and the icon's zoom is skipped.
+    _launchFromDock(target) {
+        const app = typeof target === 'string' ? findApp(target) : null;
+        const spot = app ? dockSpot(app) : null;
+        if (!spot) return false;
+        const launch = {arrived: false, win: undefined, timers: [], cancel: null};
+        this._launch = launch;
+        const after = (ms, fn) => {
+            const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+                launch.timers = launch.timers.filter((t) => t !== id);
+                if (this._launch === launch) fn();
+                return GLib.SOURCE_REMOVE;
+            });
+            launch.timers.push(id);
+        };
+        const onto = () => {
+            if (!launch.arrived || launch.win === undefined) return;
+            const win = launch.win;
+            this._endLaunch();
+            if (!win || !win.get_compositor_private()) return; // never came, or closed already: stay at the dock
+            const r = win.get_frame_rect();
+            this._agentFlyTo({x: r.x + r.width / 2, y: r.y + r.height / 2}, LAUNCH_FLY_MS);
+        };
+        this._agentFlyTo({x: spot.x, y: spot.y});
+        after(CUE_FLY_MS, () => {
+            this._clickPulse();
+            if (this._interface.enable_animations) pressIcon(spot);
+            after(LAUNCH_DWELL_MS, () => {
+                launch.arrived = true;
+                // The window may have opened before we started waiting (a fast app): look again.
+                if (launch.win === undefined) {
+                    const open = app.get_windows().find((w) => w.get_window_type() === Meta.WindowType.NORMAL);
+                    if (open) launch.win = open;
+                }
+                onto();
+            });
+        });
+        launch.cancel = waitForWindow(app, target, LAUNCH_WAIT_MS, (win) => {
+            if (this._launch !== launch) return;
+            launch.win = win;
+            onto();
+        });
+        return true;
+    }
+
+    _endLaunch() {
+        const launch = this._launch;
+        if (!launch) return;
+        this._launch = null;
+        for (const id of launch.timers) GLib.source_remove(id);
+        launch.cancel?.();
+    }
+
+    // The windows a cue can name, bottom to top (stacking order), minimized and dialogs left out.
+    _cueWindows() {
+        const tracker = Shell.WindowTracker.get_default();
+        const out = [];
+        for (const actor of global.get_window_actors()) {
+            const win = actor.meta_window;
+            if (!win || win.minimized || win.get_window_type() !== Meta.WindowType.NORMAL) continue;
+            if (!win.showing_on_its_workspace()) continue;
+            const r = win.get_frame_rect();
+            out.push({
+                appId: tracker.get_window_app(win)?.get_id() ?? win.get_wm_class() ?? '',
+                title: win.get_title() ?? '',
+                rect: {x: r.x, y: r.y, width: r.width, height: r.height},
+            });
+        }
+        return out;
+    }
+
+    // Flies the droplet to a point over ~CUE_FLY_MS with an ease-out, bowing a little on the way.
+    // While it flies or waits at a target it counts as awake, so a layout change doesn't snap it
+    // home mid-task (only a finished task, or _agentGoHome, brings it back). Reduce motion: jump.
+    _agentFlyTo(to, ms = CUE_FLY_MS, arc = CUE_ARC) {
+        const A = this._agent;
+        if (!A) return;
+        if (this._homeTimer) { GLib.source_remove(this._homeTimer); this._homeTimer = 0; }
+        A.awake = true;
+        const from = {x: A.x, y: A.y};
+        const dist = Math.hypot(to.x - from.x, to.y - from.y);
+        if (!this._interface.enable_animations || dist < 1) {
+            A.x = to.x;
+            A.y = to.y;
+            this._wake();
+            return;
+        }
+        const t0 = GLib.get_monotonic_time();
+        this._homeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ACTIVE_MS, () => {
+            const t = Math.min((GLib.get_monotonic_time() - t0) / 1000 / ms, 1);
+            const e = easeOutQuad(t);
+            const bend = arc * Math.sin(Math.PI * t) * dist;
+            const nx = -(to.y - from.y) / dist, ny = (to.x - from.x) / dist;
+            A.x = mix(from.x, to.x, e) + nx * bend;
+            A.y = mix(from.y, to.y, e) + ny * bend;
+            this._wake();
+            if (t >= 1) {
+                this._homeTimer = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    // Where the droplet should sit for the focused window's caret, or null when the app doesn't say.
+    _caretTarget() {
+        const caret = this._caret?.position(global.display.focus_window);
+        if (!caret) return null;
+        const m = Main.layoutManager.primaryMonitor;
+        return caretAnchor(caret, {x: m.x, y: m.y, width: m.width, height: m.height});
+    }
+
+    // While Artemis types, the droplet rides the caret: it checks every RIDE_POLL_MS and glides to
+    // the caret's new spot. Returns the stop function. Ring look only; nothing when the app gives no caret.
+    _rideCaret() {
+        this._stopRide();
+        if (!this._agent || !this._isRing()) return () => {};
+        this._caret ??= new CaretTracker();
+        let last = null;
+        this._rideTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, RIDE_POLL_MS, () => {
+            const at = this._caretTarget();
+            if (at && (!last || Math.hypot(at.x - last.x, at.y - last.y) > 2)) {
+                last = at;
+                this._agentFlyTo(at, RIDE_GLIDE_MS, 0);
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+        return () => this._stopRide();
+    }
+
+    _stopRide() {
+        if (this._rideTimer) GLib.source_remove(this._rideTimer);
+        this._rideTimer = 0;
+    }
+
+    // The per-action look of the ring while a cue is shown: "run" pulses its glow, "type" holds a
+    // brighter glow, and the other actions keep the working look. {glow, spin} are added to the
+    // droplet's own values in _tickOrb.
+    _cueLook(now) {
+        const cue = this._cue;
+        if (!cue) return {glow: 0, spin: 1};
+        if (cue.action === 'run') return {glow: 0.2 * (0.5 + 0.5 * Math.sin(2 * Math.PI * CUE_RUN_PULSE_HZ * now)), spin: 1.5};
+        if (cue.action === 'type') return {glow: 0.3, spin: 1};
+        return {glow: 0, spin: 1};
     }
 
     // An invisible, round click target over the resting sphere: click it for the command menu.
@@ -418,8 +642,10 @@ export default class ArtemisWaterExtension extends Extension {
 
     /** A typed request from the island: the core's answer, as the island's message. */
     async _ask(text) {
+        this._prompt = text; // the panel's goal for the task this starts
         const r = this._core ? await this._core.submitTask(text) : {ok: false, reason: 'not_connected'};
         if (r.ok) return {ok: true};
+        this._prompt = null; // nothing started, so the next task must not take this goal
         const message = {
             task_active: 'Still working on the last request.',
             not_connected: 'Artemis core is not running.',
@@ -457,10 +683,89 @@ export default class ArtemisWaterExtension extends Extension {
 
     _onEvent(event) {
         if (!this._settings) return;
+        if (event.type === 'ring.cue') this._onRingCue(event.data ?? {});
         this._state = reduce(this._state, event);
+        this._panelEvent(event);
         if (event.type === 'approval.requested') this._openApproval(event.data ?? {});
         else if (event.type === 'approval.resolved' && event.data?.approval_id === this._approval?.approval_id) this._closeApproval();
+        else if (event.type === 'desktop.action') this._onDesktopAction(event.data ?? {});
+        else if (event.type === 'task.state' && event.data?.state === 'canceled') this._typist?.stop();
+        else if (event.type === 'task.state' && event.data?.state === 'queued') this._typist?.resume();
         this._applyState();
+    }
+
+    // Jun's panel (#170): recent requests and the steps of the selected one, from the same events.
+    // It only shows; the state above (islandState) still decides what the island and ring say.
+    _panelEvent(ev) {
+        const I = this._island;
+        if (!I) return;
+        const d = ev.data ?? {}, tid = ev.task_id;
+        const say = (ev.announce?.text ?? '').replace(/\.$/, '');
+        switch (ev.type) {
+        case 'transcript.final':
+            if (d.text) this._prompt = d.text;
+            break;
+        case 'task.state':
+            if (tid && !I.taskById(tid) && ['queued', 'working'].includes(d.state)) {
+                I.taskStart(this._prompt ?? (say.replace(/^Working on:\s*/, '') || 'Request'), tid);
+                this._prompt = null;
+            }
+            if (d.state === 'running' && say) I.taskStep(tid, say);
+            else if (d.state === 'succeeded') I.taskEnd(tid, this._answers?.get(tid) ?? 'Done.', false);
+            else if (d.state === 'failed') I.taskEnd(tid, this._errors?.get(tid) ?? 'The task failed.', true);
+            else if (d.state === 'canceled') I.taskEnd(tid, 'Canceled.', true);
+            if (['succeeded', 'failed', 'canceled'].includes(d.state)) { this._answers?.delete(tid); this._errors?.delete(tid); }
+            break;
+        case 'agent.message':
+            if (d.kind === 'progress' && !/^still working/i.test(d.text ?? '')) I.taskStep(tid, (d.text ?? '').replace(/\.$/, ''));
+            else if (d.kind !== 'progress' && tid) (this._answers ??= new Map()).set(tid, d.text);
+            break;
+        case 'file.changed':
+            if (say) I.taskStep(tid, say);
+            break;
+        case 'approval.requested':
+            I.taskStep(tid, d.kind === 'run_program' ? 'Waiting for your approval to run' : 'Waiting for your approval to write');
+            I.taskApproval(tid, d.summary ?? '');
+            break;
+        case 'approval.resolved':
+            I.taskApproval(tid, null);
+            break;
+        case 'run.result':
+            I.taskStep(tid, d.timed_out ? 'The run timed out' : `Ran it: exit code ${d.exit_code}`);
+            break;
+        case 'error':
+            if (tid) (this._errors ??= new Map()).set(tid, `${d.message ?? ''} ${d.recovery ?? ''}`.trim());
+            break;
+        }
+    }
+
+    // The core asks for focus (before an approval) or for typing (after it) and waits for POST
+    // /desktop/{op_id}/result. Each op is answered once; a repeated op_id is ignored.
+    _onDesktopAction(action) {
+        const {op_id: op, kind, text = '', window = null} = action;
+        if (typeof op !== 'string' || this._desktopOps.has(op)) return;
+        if (this._desktopOps.size > 500) this._desktopOps.clear();
+        this._desktopOps.add(op);
+        const core = this._core;
+        const typist = this._typist;
+        const generation = typist?.generation;
+        const answer = (result) => core?.desktopResult(op, result);
+        const run = async () => {
+            if (kind === 'focus') {
+                const label = focusedWindow();
+                return answer(label ? {ok: true, window: label} : {ok: false, message: 'no window has the keyboard focus'});
+            }
+            if (!typist || (kind !== 'type' && kind !== 'keys'))
+                return answer({ok: false, message: 'the island cannot type on this desktop'});
+            const stopRide = this._rideCaret();
+            try {
+                const {ok, message} = await typist.run(kind, text, window, generation);
+                return answer(ok ? {ok: true} : {ok: false, message});
+            } finally {
+                stopRide();
+            }
+        };
+        this._desktopJob = (this._desktopJob ?? Promise.resolve()).then(run).catch(() => answer({ok: false, message: 'the island could not type'}));
     }
 
     // A drop keeps the task and its approval: a reconnect to the same session replays only what was
@@ -472,10 +777,22 @@ export default class ArtemisWaterExtension extends Extension {
         if (this._offlineTimer) { GLib.source_remove(this._offlineTimer); this._offlineTimer = 0; }
         if (connected && sid && sid !== this._sid) {
             this._sid = sid;
+            this._muted = false; // a new session is a (re)started core: it always starts listening
             this._closeApproval();
+            this._cue = null;
+            this._endLaunch();
             this._state = initial(true);
+            // the old session's tasks get no more events: end them in the panel instead of leaving them "working"
+            this._island?.taskEndAll('Artemis restarted, so this request stopped.');
+            this._prompt = null;
+            this._answers?.clear();
+            this._errors?.clear();
         } else {
             this._state = setConnected(this._state, connected);
+        }
+        if (!connected || (sid && sid !== this._desktopSid)) {
+            this._typist?.stop();
+            this._desktopSid = sid;
         }
         if (!connected && this._dialog) {
             this._offlineTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, OFFLINE_CLOSE_MS, () => {
@@ -487,11 +804,12 @@ export default class ArtemisWaterExtension extends Extension {
         }
         if (connected && !this._dialog && this._approval && this._state.waiting && this._state.approvalId === this._approval.approval_id)
             this._showApproval(this._approval);
+        if (connected) this._typist?.resume();
         const session = sid || 'none';
         if (connected && session !== this._readySid && this._core) {
             this._readySid = session;
             if (this._shortcutFailed) this._core.diagnostics('shortcut_registration_failed', SHORTCUT);
-            this._core.ready(this._shortcutFailed ? null : SHORTCUT);
+            this._core.ready(this._shortcutFailed ? null : SHORTCUT, {desktop: !!this._typist});
         }
         this._applyState();
     }
@@ -520,7 +838,7 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     // Push-to-talk: the shortcut opens the microphone; it closes when Control and Shift are both
-    // let go, or when the shortcut is pressed again.
+    // let go (key repeats while held are ignored).
     _addPushToTalk() {
         const action = Main.wm.addKeybinding('push-to-talk', this._settings, Meta.KeyBindingFlags.NONE,
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this._pushToTalk());
@@ -528,9 +846,28 @@ export default class ArtemisWaterExtension extends Extension {
         this._shortcutFailed = !this._shortcutBound;
     }
 
+    // Listening on and off (Control Alt M by default): off closes the mic in the core, wake word included.
+    _addMuteKey() {
+        const action = Main.wm.addKeybinding('mute-listening', this._settings, Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this._toggleMute());
+        this._muteBound = action !== Meta.KeyBindingAction.NONE;
+    }
+
+    _toggleMute() {
+        if (!this._core || this._muteBusy) return; // a held key repeats: one toggle per press
+        this._muteBusy = true;
+        const want = !this._muted;
+        this._core.mute(want).then((state) => {
+            if (state !== null) this._muted = state;
+        }).catch(() => {}).finally(() => { this._muteBusy = false; });
+    }
+
     _pushToTalk() {
         if (!this._core) return;
-        if (this._listening) { this._stopListening(); return; }
+        // Holding the shortcut repeats it (the key auto-repeats), so while the mic is open further
+        // activations are ignored: only letting go of Control and Shift stops listening. A toggle
+        // here turned each repeat into a start/stop pair (David's laptop: dozens of 0.01 s releases).
+        if (this._listening) return;
         this._listening = true;
         // A quick release can come before the core has answered the start: the stop waits for it,
         // so the two never arrive out of order and leave the mic open.
@@ -772,6 +1109,7 @@ export default class ArtemisWaterExtension extends Extension {
         const O = this._orb;
         const dt = Math.min(Math.max(now - O.t, 0), 0.05);
         O.t = now;
+        const cue = this._cueLook(now);
         if (O.vis <= 0) { O.x = x; O.y = y; O.vx = O.vy = 0; O.stretch = 0; }
 
         // The orb sits exactly where it is going (no lag); its velocity only shapes it.
@@ -823,19 +1161,19 @@ export default class ArtemisWaterExtension extends Extension {
         const live = s.get_boolean('orb-motion') && this._interface.enable_animations;
         const settled = speed < 1 && Math.hypot(x - O.x, y - O.y) < 0.5 && O.stretch < 0.002 &&
             Math.abs(O.scale - 1) < 0.002 && Math.abs(O.sv) < 0.01 && O.energy < 0.02 && O.flash === 0 && !O.hold && O.vis === 1 &&
-            !this._doneGlow && !morph.busy && !this._working;
+            !this._doneGlow && !morph.busy && !this._working && !this._cue;
         if (live || !settled) {
             // The slow life of the orb: its outline morphs and it tumbles, both faster when stirred.
             O.morph += dt * (1 + O.energy * 1.6);
             // spins up while a command runs (the ring's "thinking swirl")
-            O.spin += dt * (0.4 + O.energy * 1.4 + speed / 900) * (this._agent?.awake || this._working ? 3 : 1);
+            O.spin += dt * (0.4 + O.energy * 1.4 + speed / 900) * (this._agent?.awake || this._working ? 3 : 1) * cue.spin;
         }
         if (live || !settled || !this._lensOn) {
             const radius = s.get_double('orb-size') / 2 * Math.max(O.scale, 0.3) * (this._isIsland() && !this._agent?.awake ? 0.42 : 1);
             const shape = [O.dir[0], O.dir[1], O.stretch, live ? O.energy : O.energy * (settled ? 0 : 1)];
             const light = [s.get_double('highlights'), ORB_DISPERSION, O.morph % 1000, O.spin % 6283.1853];
             const working = this._agent?.awake || this._working ? 0.45 : 0; // shines while it works
-            const glow = RING_GLOW + working + RING_FLASH_GLOW * O.flash + HOLD_GLOW * O.hold + 0.1 * Math.min(O.energy, 1);
+            const glow = RING_GLOW + working + cue.glow + RING_FLASH_GLOW * O.flash + HOLD_GLOW * O.hold + 0.1 * Math.min(O.energy, 1);
             const wobble = Math.max(O.flash, HOLD_WOBBLE * O.hold);
             for (const {actor, rect} of this._targets()) {
                 const orb = this._effects.get(actor)?.lens;

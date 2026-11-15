@@ -23,6 +23,7 @@ from artemis.contracts import (
     ApprovalResponse,
     ClientDiagnostic,
     ClientReady,
+    DesktopResult,
     TaskRequest,
     VoiceSettingsPatch,
 )
@@ -42,6 +43,10 @@ PING_S = 15
 NO_INTERPRETER_RECOVERY = "Until then I can write files but not run them."
 
 
+class MuteBody(BaseModel):
+    muted: bool
+
+
 class ListenBody(BaseModel):
     action: str  # "start" | "stop"
 
@@ -53,8 +58,19 @@ class SpeechBody(BaseModel):
 SAMPLE_TEXT = "This is how I sound."  # the voice picker's Test voice: fixed, never free text
 
 
+ALLOWED_HOSTS = ("127.0.0.1", "localhost")
+
+
+def host_allowed(host: str) -> bool:
+    """The Host header must name the loopback address (any port): 127.0.0.1 or localhost."""
+    name, sep, port = host.strip().lower().rpartition(":")
+    if not sep or not port.isdigit():
+        name = host.strip().lower()  # no port
+    return name in ALLOWED_HOSTS
+
+
 class Guard(BaseHTTPMiddleware):
-    """§6: an unlisted Origin (including "null") gets 403; every request needs the Bearer token.
+    """§6: an unlisted Origin or a non-loopback Host gets 403; every request needs the Bearer token.
 
     CORS preflights are answered by CORSMiddleware outside this one, so they never reach it.
     """
@@ -64,6 +80,8 @@ class Guard(BaseHTTPMiddleware):
         self._expected = f"Bearer {token}".encode()
 
     async def dispatch(self, request: Request, call_next):
+        if not host_allowed(request.headers.get("host", "")):  # DNS rebinding: a page on evil.example
+            return JSONResponse({"error": "host_not_allowed"}, status_code=403)  # resolving to 127.0.0.1
         origin = request.headers.get("origin")
         if origin is not None and origin not in ALLOWED_ORIGINS:
             return JSONResponse({"error": "origin_not_allowed"}, status_code=403)
@@ -87,6 +105,7 @@ class Core:
         log_dir=None,
         vocabulary=None,
         heartbeat_s: float = HEARTBEAT_S,
+        prefs_path: Path | None = None,
     ):
         self.voice = voice
         self.make_runner = make_runner
@@ -100,8 +119,13 @@ class Core:
         self.watch_task: asyncio.Task | None = None
         self.activity_task: asyncio.Task | None = None
         self.wake = None  # the "Hey Artemis" listener, when ARTEMIS_LISTEN_MODE=wake
+        self.muted = False  # listening switched off (POST /voice/mute): no wake word, no push-to-talk, mic closed
+        self._wake_wanted = False  # the wake word was on before muting, so unmuting turns it back on
         self.activity: tuple[str, str | None] = ("idle", None)  # the last voice.activity sent
         self.heartbeat_s = heartbeat_s
+        # Where the answer style is remembered (conversation mode only). None, the default, remembers
+        # nothing: only main.py passes a path, so tests never touch the home folder.
+        self.prefs_path = prefs_path
         # Interpreter pre-check: probed once per process, then reused by every session.
         self._interpreter_probe: asyncio.Task | None = None
         self.background: set[asyncio.Task] = set()  # per-session checks, canceled at shutdown
@@ -119,6 +143,8 @@ class Core:
             log_dir=self.log_dir,
             on_project=self._on_project,
             heartbeat_s=self.heartbeat_s,
+            prefs_path=self.prefs_path,
+            on_question=self.expect_reply,
         )
         self.sessions[sid] = session
         return session
@@ -164,6 +190,12 @@ class Core:
             if s.approvals.has(aid):
                 return s
         raise HTTPException(404, {"error": "approval_not_found"})
+
+    def find_desktop_op(self, op_id: str) -> Session:
+        for s in self.sessions.values():
+            if s.desktop.has(op_id):
+                return s
+        raise HTTPException(404, {"error": "desktop_op_not_found"})
 
     def current(self) -> Session | None:
         """Voice belongs to the newest session (one per app launch)."""
@@ -245,6 +277,12 @@ class Core:
             return
         self.spawn(session.spoken(text, new_id("cr")))
 
+    def expect_reply(self) -> None:
+        """A task ended with a question: with the wake word on, the reply needs no "Hey Artemis". The
+        listener opens its window once the question has been said (the listening tone marks it)."""
+        if self.wake is not None:
+            self.wake.expect_reply()
+
     def start_wake(self) -> None:
         """Start hands-free listening if ARTEMIS_LISTEN_MODE=wake and the voice can transcribe."""
         if not hasattr(self.voice, "_transcribe"):
@@ -261,6 +299,31 @@ class Core:
         self.wake = listener
         if hasattr(self.voice, "wake_listener"):
             self.voice.wake_listener = listener  # the working tick stays quiet while a request is being heard
+
+    async def set_muted(self, muted: bool) -> None:
+        """Switch all listening off or on (the island's shortcut). Off closes the microphone: the wake
+        listener stops, and an open push-to-talk is closed and dropped. Said once either way."""
+        if muted == self.muted:
+            return
+        self.muted = muted
+        session = self.current()
+        if muted:
+            self._wake_wanted = self.wake is not None
+            if self.wake is not None:
+                self.wake.stop()
+                self.wake = None
+            if getattr(self.voice, "busy_listening", False):
+                try:
+                    await self.voice.stop_listening("cr_muted")  # what was being recorded is dropped
+                except Exception:
+                    log.exception("could not close push-to-talk while muting")
+            line = "Listening is off. Press the same shortcut to turn it back on."
+        else:
+            if self._wake_wanted:
+                self.start_wake()
+            line = "Listening is on."
+        if session is not None:
+            await session.say(None, line, "high")
 
     def wire_voice(self) -> None:
         """Say the ElevenLabs fallback notice through the bus when that voice gives up. Called at
@@ -324,6 +387,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             if task and not task.done():
                 task.cancel()
         for s in core.sessions.values():
+            s.desktop.cancel_all()  # the session is over: nothing waits for the island
             for t in s.tasks.values():
                 if t.job and not t.job.done():
                     t.job.cancel()
@@ -366,20 +430,27 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             last = 0
         queue = session.bus.subscribe()
 
+        stale = session.desktop.is_stale  # a finished desktop.action is never sent again, live or replayed
+
         async def stream():
             try:
                 seen = last
                 for event in session.bus.since(last):  # replay, then live
                     seen = event.seq
+                    if stale(event):
+                        continue
                     yield {"id": str(event.seq), "data": event.model_dump_json()}
                 while True:
                     event = await queue.get()
                     if event.seq <= seen:
                         continue
                     seen = event.seq
+                    if stale(event):
+                        continue
                     yield {"id": str(event.seq), "data": event.model_dump_json()}
             finally:
                 session.bus.unsubscribe(queue)
+                session.desktop.subscribers_changed()  # an op waiting on a vanished island ends now
 
         return EventSourceResponse(stream(), ping=PING_S)
 
@@ -451,11 +522,26 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             raise HTTPException(404, {"error": "approval_not_found"})
         return Response(status_code=204)
 
+    @app.post("/desktop/{op_id}/result", status_code=204)
+    async def desktop_result(op_id: str, body: DesktopResult):
+        session = core.find_desktop_op(op_id)
+        if not session.desktop.resolve(op_id, body):
+            raise HTTPException(404, {"error": "desktop_op_not_found"})
+        return Response(status_code=204)
+
+    @app.post("/voice/mute")
+    async def mute(body: MuteBody):
+        await core.set_muted(body.muted)
+        return {"muted": core.muted}
+
     @app.post("/voice/listen", status_code=204)
     async def listen(body: ListenBody):
         session = core.current()
         if session is None:
             raise HTTPException(409, {"error": "no_session"})
+        if core.muted and body.action == "start":
+            await session.say(None, "Listening is off. Press the same shortcut to turn it back on.", "high")
+            return JSONResponse({"error": "muted"}, status_code=409)
         if body.action == "start":
             try:
                 await core.voice.start_listening()  # §5.1: it stops speech and plays the earcon itself
@@ -498,6 +584,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         it registered, so the first thing a blind user hears is how to start. Fixed text, like the
         diagnostics; normal priority, so it never talks over an error."""
         session = core.session(sid)
+        session.desktop_ready = body.desktop
         if not session.greeted:
             session.greeted = True
             await session.say(None, ready_text(body.shortcut))

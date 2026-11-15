@@ -187,7 +187,7 @@ async def test_hello_world_approve_twice(client, core, voice):
     assert session.tasks[tid].state == "succeeded"
     t = types(session)
     assert t[:2] == ["voice.status", "task.state"]
-    assert "file.changed" in t and "run.result" in t and t[-1] == "task.state"
+    assert "file.changed" in t and "run.result" in t and t[-2:] == ["task.state", "ring.cue"]  # done cue follows the final state
     seqs = [e.seq for e in session.bus.history]
     assert seqs == list(range(1, len(seqs) + 1))
     assert any("Hello, World" in text for _, text in voice.spoken)
@@ -343,6 +343,25 @@ async def test_push_to_talk_creates_a_task(client, core, voice):
     final = [e for e in session.bus.history if e.type == "transcript.final"][0]
     assert final.data["text"].startswith("create a Python program")
     assert next(iter(session.tasks.values())).request.source == "voice"
+
+
+async def test_a_voice_request_is_not_read_back(client, core, voice):
+    """A spoken request starts silently (David's test run: the read-back after "Hey Artemis" was
+    redundant and slow): no "Heard:" and no "Working on:". The words stay in transcript.final and the
+    queued state. A typed request is still read back; a non-task utterance keeps "Heard:"."""
+    sid, session = await start(client, core)
+    await session.spoken("create a Python program", "cr_v")
+    final = [e for e in session.bus.history if e.type == "transcript.final"][0]
+    assert final.announce is None and final.data["text"] == "create a Python program"
+    queued = [e for e in session.bus.history if e.type == "task.state" and e.data["state"] == "queued"][0]
+    assert queued.announce is None
+    await asyncio.sleep(0.05)
+    assert not [t for _, t in voice.spoken if t.startswith(("Heard:", "Working on:"))]
+    await session.cancel(session.active_task.task_id)
+    n = len(session.bus.history)
+    await session.spoken("cancel", "cr_c")  # no task: not a request, so still confirmed
+    finals = [e for e in session.bus.history[n:] if e.type == "transcript.final"]
+    assert finals[0].announce.text == "Heard: cancel"
 
 
 async def test_spoken_while_active_and_control_words(client, core, voice, monkeypatch):
@@ -1037,6 +1056,7 @@ def core_main(monkeypatch, tmp_path):
     monkeypatch.setenv("ARTEMIS_RUNNER", "fake")
     monkeypatch.setenv("ARTEMIS_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("ARTEMIS_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("ARTEMIS_PREFS_FILE", str(tmp_path / "prefs" / "preferences.json"))  # never the home folder
     monkeypatch.delitem(sys.modules, "artemis.core.main", raising=False)
     module = importlib.import_module("artemis.core.main")
     monkeypatch.setitem(sys.modules, "artemis.core.main", module)  # removed again after the test
@@ -1059,6 +1079,49 @@ def test_installed_scanner_is_used_quietly(core_main, monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="artemis.core.main"):
         assert core_main.make_scan() is scan.scan
     assert "not installed" not in caplog.text
+
+
+# ----- remembered answer style (§5.4, conversation mode only) -----
+
+
+async def say(client, session, voice, transcript):
+    before = len(session.bus.history)
+    voice.transcript = transcript
+    await client.post("/voice/listen", headers=AUTH, json={"action": "start"})
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "transcript.final" for e in s.bus.history[before:]))
+
+
+async def test_keep_it_brief_is_remembered_in_the_next_session(client, core, voice, monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    core.prefs_path = tmp_path / "prefs" / "preferences.json"
+    _, first = await start(client, core)
+    await say(client, first, voice, "keep it brief")
+    assert first.conversation.style.verbosity == "brief"
+
+    _, second = await start(client, core)  # the next launch
+    assert second.conversation.style.verbosity == "brief"
+    saved = json.loads(core.prefs_path.read_text(encoding="utf-8"))
+    assert saved == {"version": 1, "style": {"verbosity": "brief", "focus": "none"}}  # nothing else
+
+
+async def test_with_conversation_off_no_style_file_is_written(client, core, voice, monkeypatch, tmp_path, core_main):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "off")
+    assert core_main.prefs_path(tmp_path / "projects") is None  # main.py passes no path at all
+    core.prefs_path = tmp_path / "prefs" / "preferences.json"  # and a path given anyway is not used
+    _, session = await start(client, core)
+    await say(client, session, voice, "keep it brief")
+    assert session.conversation is None
+    assert not (tmp_path / "prefs").exists()
+
+
+def test_style_file_never_in_the_projects_folder_or_the_repo(core_main, monkeypatch, tmp_path):
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    projects = tmp_path / "projects"
+    assert core_main.prefs_path(projects) == tmp_path / "prefs" / "preferences.json"
+    for bad in [projects / "calc" / "p.json", core_main.REPO / "server" / "p.json", "p.json"]:
+        monkeypatch.setenv("ARTEMIS_PREFS_FILE", str(bad))
+        assert core_main.prefs_path(projects) is None
 
 
 # ----- result earcons (ARTEMIS_RESULT_EARCONS, contracts.md 5.5) -----
@@ -1264,3 +1327,57 @@ async def test_orca_starting_and_stopping_emits_voice_status(client, core, platf
         await wait_for(session, lambda s: last_reader(s) is None)
     finally:
         watcher.cancel()
+
+
+# ----- David's test run: listening off, and an early decision cuts its summary -----
+
+async def test_listening_off_closes_the_mic_and_refuses_push_to_talk(client, core, voice):
+    sid, session = await start(client, core)
+    r = await client.post("/voice/mute", json={"muted": True}, headers=AUTH)
+    assert r.status_code == 200 and r.json() == {"muted": True} and core.muted
+    assert voice.spoken[-1][1].startswith("Listening is off.")
+    r = await client.post("/voice/listen", json={"action": "start"}, headers=AUTH)
+    assert r.status_code == 409 and r.json() == {"error": "muted"}
+    r = await client.post("/voice/mute", json={"muted": False}, headers=AUTH)
+    assert r.json() == {"muted": False} and voice.spoken[-1][1] == "Listening is on."
+    again = await client.post("/voice/mute", json={"muted": False}, headers=AUTH)
+    assert again.json() == {"muted": False} and voice.spoken[-1][1] == "Listening is on."  # no second line
+
+
+class CuttableVoice(FakeVoice):
+    def __init__(self):
+        super().__init__()
+        self.stopped = 0
+        self.busy = True
+
+        class Speaker:
+            def busy(inner):
+                return self.busy
+        self.announcer.current = lambda: Speaker()
+
+    async def announce(self, text, priority):
+        await super().announce(text, priority)
+        if priority != "low":
+            self.announcer.last = text
+
+    async def stop_speech(self):
+        self.stopped += 1
+
+
+@pytest.mark.parametrize("then_alert,stops", [(False, 1), (True, 0)])
+async def test_an_early_decision_cuts_only_its_own_summary(tmp_path, then_alert, stops):
+    from artemis.contracts import Announce, EventDraft
+    voice = CuttableVoice()
+    # Drive the session's emit directly: an approval is requested and read, then decided by the user.
+    core_session = session_with(tmp_path, voice, [])
+    summary = "Create project todo with 1 file: main.py. Enter to approve, Escape to reject."
+    await core_session.emit(EventDraft(task_id="t1", type="approval.requested",
+                                       announce=Announce(text=summary, priority="high"),
+                                       data={"approval_id": "apr_1", "kind": "write_files", "approval_hash": "h",
+                                             "summary": summary}))
+    if then_alert:
+        await core_session.emit(EventDraft(task_id="t1", type="error", announce=Announce(text="The scan found a problem. Check it.", priority="high"),
+                                           data={"code": "x", "message": "The scan found a problem.", "recovery": "Check it."}))
+    await core_session.emit(EventDraft(task_id="t1", type="approval.resolved",
+                                       data={"approval_id": "apr_1", "decision": "approve", "by": "user"}))
+    assert voice.stopped == stops

@@ -261,15 +261,34 @@ export class CoreClient {
         return this.#expectNoContent('POST', '/voice/listen', {action});
     }
 
+    // Switch all listening off (true) or on (false): resolves to the core's state, or null if unreachable.
+    async mute(muted) {
+        const r = await this.#request('POST', '/voice/mute', {muted: !!muted});
+        return r?.status === 200 && isPlainObject(r.json) && typeof r.json.muted === 'boolean' ? r.json.muted : null;
+    }
+
     async cancel(taskId) {
         return this.#expectNoContent('POST', `/tasks/${encodeURIComponent(taskId)}/cancel`, {});
     }
 
-    async ready(shortcut = null) {
+    // desktop: true only when this island can type (its virtual keyboard was created). Every /ready
+    // call sets the flag again, so a later call must repeat it.
+    async ready(shortcut = null, {desktop = false} = {}) {
         if (!this.#sessionId)
             return false;
-        const body = shortcut === null ? {} : {shortcut};
+        const body = {...(shortcut === null ? {} : {shortcut}), ...(desktop ? {desktop: true} : {})};
         return this.#expectNoContent('POST', `/sessions/${encodeURIComponent(this.#sessionId)}/ready`, body);
+    }
+
+    // Answers a desktop.action (contracts §9). body: {ok, message?, window?}. 'gone' means the op
+    // expired or was already answered: the caller ignores it.
+    async desktopResult(opId, body) {
+        const r = await this.#request('POST', `/desktop/${encodeURIComponent(opId)}/result`, body);
+        if (r?.status === 204)
+            return 'ok';
+        if (r?.status === 404)
+            return 'gone';
+        return 'error';
     }
 
     async diagnostics(code, shortcut = null) {

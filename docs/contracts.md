@@ -35,6 +35,19 @@ Errors outside the table: a missing or wrong token is `401 {error: "unauthorized
 | PATCH | `/settings/voice` | `VoiceSettingsPatch` (§7), only the fields to change → `200 VoiceSettings` | **Proposed (Avery).** Saves the file, applies it to the voice from the next line, and returns what is now in effect. `422 {error: "invalid_setting", field}` for a bad value, an unknown key or `active_engine`; `409 {error: "set_by_environment", field}` for a field an environment variable pins. Nothing is saved when either applies |
 | GET | `/voices` | → `{voices: [{engine, id, name}]}` | **Proposed (Avery).** The installed SAPI voices and, when `ELEVENLABS_API_KEY` is set, the ElevenLabs voices. No other field, and no key, leaves here |
 
+**From David's test run (Proposed (David)):**
+- `POST /voice/mute {muted}` → `200 {muted}` switches all listening off or on. Off closes the
+  microphone: the wake listener stops, and an open push-to-talk is closed and dropped. While muted,
+  `/voice/listen start` gives `409 {error: "muted"}`. Each change is said once. The island binds it to
+  the `mute-listening` shortcut, Control Alt M by default.
+- When the developer decides an approval, the core stops the voice only if the line playing is that
+  approval's own summary or its reminder. A line that started after it, such as an error or a blocked
+  warning, plays to the end.
+- While Artemis speaks, the wake listener still hears the mic (`ARTEMIS_BARGE_IN=on`, the default).
+  It acts only on "Hey Artemis …" or a stop word ("stop", "wait", "be quiet"), and never on its own
+  line coming back from the speakers: most words matching what it is saying. It then stops speaking
+  at once and takes the request, if one was said. Push-to-talk speech never counts as an interruption.
+
 ## 2. Core → client: the event stream
 
 One envelope for everything. The client renders every event's `announce.text` in the log
@@ -54,15 +67,16 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 ```
 
 `priority`: `low` (progress, may be dropped if speech is busy), `normal` (queued), `high`
-(interrupts: approval requests, run results, errors, cancel). The agent's final answer is `normal`.
+(interrupts: run results, errors, cancel). Approval requests are `normal`: they wait for the line
+being said instead of cutting it off (**Proposed (David)**). The agent's final answer is `normal`.
 `repeat` says the last `normal` or `high` line again.
 
 | `type` | `data` |
 |---|---|
-| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal (an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
-| `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
-| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`) is `progress` at `low` (with the opt-in tick, §5.7, the same event is sent but not spoken) |
-| `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval` |
+| `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal unless it starts a task (then it is silent, and a spoken request is not read back at all: the agent's plan is the first thing heard; a typed one is read back once by "Working on: …", §5.1); an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
+| `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal, typed requests only), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
+| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`, then 6 s, then every 9 s while nothing else is said) is `progress` at `low` (with the opt-in tick, §5.7, the same event is sent but not spoken). A sentence the agent writes beside a tool call is said as `progress` at `low` |
+| `approval.requested` | `Approval` (below), announced at normal, after whatever Artemis is saying, as "Approval needed. <summary>" (a blocking one says only its summary, which starts "Blocked:"), right after `task.state` `awaiting_approval`. Still open 10 s later, it is said once more, when Artemis is quiet, as an `agent.message` `progress` at normal: "Still waiting for your approval. <summary>" (**Proposed (David)**) |
 | `approval.resolved` | `{approval_id, decision: "approve"\|"reject", by: "user"\|"invalidated"}`, not announced. An invalidated one (files changed, or the task was canceled) carries `"reject"` |
 | `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}`, announced "Created main.py, 1 line." at normal. No tool deletes, so `deleted` is never sent today |
 | `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}`, announced at high by the gateway (§4 samples 4 and 5). `exit_code` is null when the run timed out |
@@ -152,11 +166,11 @@ temp folder outside the workspace) and again before each run approval; its findi
 | `create_project` | `{name}` | no: it only reserves the name; the folder is created by the first approved `write_files` | yes |
 | `open_project` | `{name}` | no | yes |
 | `list_files` | `{dir?}` | no | yes |
-| `read_file` | `{path, start_line?, end_line?}` | no | yes |
+| `read_file` | `{path, start_line?, end_line?, aloud?, line_numbers?}`: with `aloud` the gateway speaks about 20 lines in words (symbols named, indent level announced, secrets redacted) and returns `next_start_line` | no | yes |
 | `write_files` | `{files: [{path, content}]}`: one approval for the whole batch. Overwrites only in a project created this session | yes, after a scan | yes |
 | `run_program` | `{entry, args?: [str]}`; the preset comes from the file type | yes, after a scan | yes |
 | `edit_file` | `{path, edits: [{old, new}]}`: each `old` must match exactly once; works in any project, not only one created this session. Approved as a `write_files` approval | yes, after a scan | after MVP (built) |
-| `inspect_page` | `{path}`: an `.html` or `.htm` file in the project | no: read-only | Echo Check |
+| `inspect_page` | `{path, describe?}`: with `describe` it also speaks the page structure (landmarks, headings, links, fields, images without alt). an `.html` or `.htm` file in the project | no: read-only | Echo Check |
 | `scan_project` | `{path?}`: a file or folder in the project; omitted scans all of it | no: read-only | after MVP (built) |
 
 There is no shell, delete, network or install tool, and the agent can't apply anything without
@@ -254,6 +268,14 @@ The core doesn't call `stop_speech()` itself here. Artemis's own voice (SAPI thr
 must never be recorded and transcribed as a request. The client's own "Stop speech" control is
 unchanged. Cutting off speech never hides an open approval: see §5.4.
 
+**The transcript is spoken once.** A final transcript that starts a task has `announce: null`; the
+same words are read back by the task's first line, "Working on: <request>" (the `queued`
+`task.state`). There is no "Heard: <text>" before it. The text stays in `transcript.final`
+`data.text`, so the editable field and the log keep it. Every other final transcript (control
+words, a spoken request while a task is active or waiting, "Nothing to cancel.") keeps
+"Heard: <text>", since no task line follows. An empty transcript is silent. A typed request is
+unchanged: no `transcript.final`, and "Working on:" is its only line.
+
 **Proposed (Avery): why a release gave no request.** `stop_listening()` still returns a `str`; when it
 is empty it may be an `artemis.voice.text.Heard`, whose `dropped` says why: `"short"` (a tap: under
 0.3 s of audio, or let go during the listening earcon), `"silent"` (held long enough, but even the
@@ -343,11 +365,13 @@ transcript.
   | `keep it brief`, `deep dive`, `normal mode`, `visual mode`, `code mode` | Sets `TaskContext.style` for the following tasks and confirms it |
   | `reset my preferences`, `forget my answer style` | Sets the answer style back to the defaults (brief/normal/detailed and visual/code both cleared) and confirms it. Also clears the remembered style (below) |
   | `slower`, `faster` | See §5.3 |
-  | `approve`, `yes`, `reject`, `no` while `awaiting_approval` | Never applied: "Use the keyboard to decide…" as in §5.2 |
+  | `approve`, `approve it` while `awaiting_approval` | **Proposed (David), voice approval:** decides the approval only when it is a `write_files` or `run_program` approval inside the project that the scan did not block, and only 1.5 s after Artemis finished saying its summary. The summary is queued after what Artemis is saying (§3), so the core starts that clock when speech falls silent with no one talking; if push-to-talk cut the summary off, it was not heard, and `approve` gets "Let me read it first. <summary> Then say approve or reject." Anyone in the room who can trigger the wake word or push-to-talk can approve this way: that is why it is limited to clean project writes and runs. It goes through the same `approvals.resolve(id, decision, approval_hash)` as the dialog, so a changed or already-decided approval can't be decided by voice. A blocked approval, every desktop kind (`open`, `read_outside`, `run_command`, `type`) and `publish` stay on the keyboard: "That one needs the keyboard, because …" |
+  | `reject`, `reject it` while `awaiting_approval` | **Proposed (David):** rejects any approval, at any time (rejecting is always safe) |
+  | `yes`, `no` while `awaiting_approval` | Never applied: "Say approve or reject, or use the keyboard…" (a misheard "yes" must never write or run) |
   | `approve`, `yes`, `reject`, `no` with no approval open | If no task is active and the agent's last answer was a question: the answer to it, sent as the next request (design A4; anything it leads to is still approved on the keyboard). Otherwise "There's nothing to approve right now.", never a task or a follow-up |
   | Nothing (an empty push-to-talk tap) or only the wake word (`Hey Artemis`) | Never a task. Silent, unless an approval is open: then its summary again, once, at `high`. A silent hold then also gets §5.1's `no_speech` line (**Proposed (Avery)**). The voice already strips "Artemis" and "Hey/OK Artemis", so those arrive empty (`intent` null); `wake_word` is the intent for a form only the controller strips, such as "Hi Artemis" |
 
-  No phrase can approve a write or a run, hide a warning, or run code.
+  No phrase other than `approve` can approve, and only a clean project write or run; no phrase can hide a warning or run code.
 - **A spoken request while a task is active** is kept as the one waiting follow-up ("I'll do that
   next.") instead of the `task_active` error. A second one doesn't replace it: "I already have one
   waiting: …. Say cancel to drop it." When the active task succeeds, the follow-up is started as
@@ -361,14 +385,19 @@ transcript.
   "Use the keyboard to decide…"; a queued request adds "A decision is still waiting".
 - **Errors.** If handling an utterance fails (for example the voice can't change its rate), the
   core speaks an `error` with code `conversation_failed` and the session keeps working.
-- **Remembered answer style (proposed; needs the core to opt in).** The controller takes a starting
+- **Remembered answer style.** The controller takes a starting
   `Style` and calls an `on_style` hook on every change; `artemis.conversation.prefs` loads and saves
   it as `{"version": 1, "style": {"verbosity": …, "focus": …}}` in `ARTEMIS_PREFS_FILE`, or
   `%USERPROFILE%/.artemis/preferences.json`. Only those two fields are ever stored, never a
   transcript, project name or path. A missing, damaged or wrong-version file means the defaults, and
-  a failed save never reaches the conversation. The core decides whether to pass the saved style in
-  (tests and the browser demo must not touch the developer's home folder), so with no wiring nothing
-  is remembered and nothing changes.
+  a failed save never reaches the conversation. The core opts in only from `artemis.core.main`, and
+  only with `ARTEMIS_CONVERSATION=on`: each new session starts from the saved style and saves every
+  change (`Session(prefs_path=…)`). With the flag off nothing is read or written. `Core` and
+  `Session` default to no file, so tests and the in-memory browser demo never touch the home folder.
+  The core ignores an `ARTEMIS_PREFS_FILE` that is relative or inside the projects folder or the
+  repository. Sessions don't share a style while they run: the last change saved wins.
+  `infra\setup-demo.ps1 -Force` deletes the file, so a style set in a rehearsal doesn't reach the
+  stage run.
 - **Agent prompt.** With the flag on, the agent's system prompt also gets a "How to read a spoken
   request" paragraph (`artemis.agent.prompts.system_prompt(True)`). With it off, the system prompt
   is unchanged.
@@ -395,6 +424,9 @@ It starts nothing that typing couldn't, and every write and run still needs a ke
 - Speech that doesn't start with the wake phrase is never kept or logged; only its word count is.
 - `voice.activity` is `listening` from a bare "Hey Artemis" until the request or the window's end,
   never while it is only waiting for the phrase.
+- A task that ends with a question (its answer ends with "?") opens the same window, with the
+  listening tone, for 10 s once the question has been said: the reply needs no "Hey Artemis"
+  (**Proposed (David)**).
 - Push-to-talk keeps working alongside. Without the variable nothing changes.
 
 ### 5.7 Working tick (**Proposed (Avery)**, opt-in: `ARTEMIS_WORKING_CUE=earcon`, default off)
@@ -543,3 +575,113 @@ task contract is needed: `voice.activity` (§2) adds the voice's own states.
 - **Proposed (Avery), from David's run with real speech:** Artemis talks through most of a task, so an overlay hid Editing, Running and Done for the whole task. Speaking now shows on its own only when idle. Listening and transcribing still take priority over everything, since push-to-talk stops speech (§5.1).
 - On Linux there is no NVDA estimate: `speaking` comes from the engine that plays the audio.
   Orca's own speech is the screen reader's and is never reported.
+
+## 9. Desktop tools (Proposed (David), for Avery to merge; Avery's review points 1–9 on #174)
+
+Artemis may act on the whole desktop, never without the guarded approval dialog, except that opening
+waits only when it could run something (see the open rows). The models are in
+`contracts/tools.py` (`DESKTOP_TOOL_ARGS`). Each tool joins `TOOL_ARGS`, and so becomes visible to
+the model, only when the policy gate handles it.
+
+| Tool | Args | Approval `kind` | What the dialog shows and says |
+|---|---|---|---|
+| `open_app` | `{app}` | `open`, only when dangerous: a terminal or interpreter, or a launcher in the developer's own applications folder (blocking, a high finding) | "Open VS Code." (no dialog for a normal app) |
+| `open_path` | `{path, with_app?}` | `open`, only when dangerous: outside the current project and the developer's own folders (Documents, Desktop, Downloads, Projects, the projects folder), or with a planted launcher (blocking) | "Open notes.txt in Text Editor." (no dialog inside those folders) |
+| `read_path` | `{path, start_line?, end_line?}` | `read_outside` | "Read ~/Documents/plan.md." (one approval per file) |
+| `run_command` | `{command, cwd?}` | `run_command` | The exact command and its folder, word for word |
+| `type_text` | `{text}` | `type` | The exact text, and the window it goes into |
+| `press_keys` | `{keys}` | `type` | The keys and the window, e.g. "Press Control S in Text Editor" |
+
+**Clients.** A client never shows Approve for an approval whose `kind` it doesn't know, or for a
+desktop kind without `Approval.desktop`. It shows the summary and Reject only. The island's dialog
+titles and reads each desktop kind as its own (Jun).
+
+**What is approved.** `Approval.desktop` (`DesktopSpec {action, target, text?, sha256?}`) holds what
+will happen. `approval_hash` is `approval_hash(kind, workspace, [action, target, text, sha256])`:
+- `target` is the resolved path, the app id, the command's resolved folder, or the focused window;
+- `sha256` is set for `read_path` and `open_path`;
+- the gate recomputes the hash after the decision, and a swapped file or link fails it, as
+  `run_program` does.
+
+**Paths.** Every path must be under `$HOME`, after `safe_resolve`'s link check. Two kinds are refused
+outright, and no approval can override that:
+- any dot-entry at the top of home (`.ssh`, `.gnupg`, `.config`, `.local`, `.mozilla`, `.aws`, …);
+- `.env*` and `.git` anywhere, `XDG_RUNTIME_DIR` (the launch file), and `~/.artemis`.
+
+`open_path` refuses executable files and the `.desktop`, `.sh`, `.AppImage`, `.run` and `.jar`
+types, so opening never runs anything.
+
+**Commands.** `run_command` runs `bash -c <command>` in a folder under home, with a 30 s timeout and
+output capped at 16 KB, in an **allowlisted** environment: `PATH`, `HOME`, `LANG`, `LC_*`, `TERM`,
+`USER`, `SHELL`, `XDG_RUNTIME_DIR`, and the display variables `gio` needs. No `SSH_AUTH_SOCK`, and no
+token or key variables.
+
+The path denylist can't bind what a command does, so the gate marks a command as a high-severity
+finding, which needs the blocking key (Shift+Enter), when it:
+- names a denied path;
+- uses `sudo`, `su` or `pkexec`;
+- pipes a download into a shell (`curl …| sh`, `wget …| bash`);
+- deletes recursively (`rm -r`, `rm -rf`);
+- writes to a raw device or makes a filesystem (`dd`, `mkfs`);
+- uses the launch file.
+
+Output returns to the model wrapped as untrusted.
+
+**Typing.** Only the GNOME shell can type on Wayland, so `type_text` and `press_keys` work like this:
+1. Before the approval, the core sends `desktop.action {op_id, kind: "focus"}`. The island answers
+   `POST /desktop/{op_id}/result {ok, window: "<app id>: <title>"}`, and that window becomes
+   `DesktopSpec.target`, covered by the hash.
+2. Typing into a terminal app (Ptyxis, GNOME Terminal, Console, kitty, Alacritty, xterm, VS Code's
+   terminal) is a high-severity finding: approving it needs Shift+Enter.
+3. `press_keys` takes `((ctrl|shift|alt)+){0,3}<key>`. Launcher keys are refused: super and its
+   combinations, alt+F2, ctrl+alt+t, ctrl+alt+Delete.
+4. After approval the core sends `desktop.action {op_id, kind: "type"|"keys", text, window}`. The
+   island types only while that window has the focus, and answers `{ok, message?}`.
+
+The `op_id` rules (point 7):
+- it is random, single-use and scoped to the session;
+- the result route gives 404 for an unknown, finished or expired op;
+- the core waits 10 s plus 50 ms per character, and ignores a late result;
+- with no answer, or no ready island, the tool fails with `desktop_unavailable`.
+
+`ClientReady.desktop: true` is how an island says it can type. The core records it per session.
+
+Opening apps and paths runs in the core (`gtk-launch`, `gio open`), with or without the island.
+
+### 9.1 Publishing to GitHub (Proposed (David))
+
+`publish_github {repo, public, description?}` publishes the current project as a new repository in
+the developer's own GitHub account (`gh api user`). Approval `kind` is `publish`, and it is decided
+on the keyboard only, never by voice (§5.4).
+- The dialog names the repository (`owner/repo`), private or public, and every file.
+- `public: true` is a high-severity finding, so it needs the override key.
+- **The push never comes from the project folder.** The gate copies the project's files (`project_files`,
+  never `.env` or `.git`, minus anything `.gitignore` excludes) byte for byte into a fresh private
+  folder. It runs `git init` there with hooks, fsmonitor, templates and system/global config off, and
+  pushes from there. So an existing `.git` (its history, index, hooks, config or `origin`) can't add
+  anything, and publishing again works.
+- Files that look like they hold a key, token, password or private key, by name or content, stop the
+  publish before anyone is asked.
+- The dialog lists every file (`Approval.files`). The spoken summary names the first eight and the
+  description.
+- The hash covers the repository, the visibility, the description and every file's name and bytes. A
+  fresh copy is hashed again after the decision, and a change invalidates the approval.
+- On approval: one commit ("First version") as `<id>+<login>@users.noreply.github.com`, then `gh repo
+  create owner/repo --private|--public --source . --remote origin --push` from the private copy. `gh`
+  gets the session environment for its keyring login, with hooks still off, and none of Artemis's
+  keys. A timeout kills gh's whole process group.
+
+## 10. The plan and the ring (Proposed (David), for Avery to merge)
+
+- **The plan comes first.** For each request the agent calls `plan {goal, steps: [{say, action, target?}]}`
+  before any other tool, where `action` is one of think, read, write, run, open, type or explain.
+  Any other tool called first fails with `plan_required`. The agent may call `plan` again to re-plan,
+  for example after a rejection.
+- The core emits `agent.plan {goal, steps}` once per plan. The island lists the steps up front.
+  It is announced at normal: the steps' `say` in order (the first four, then "Then N more steps, in
+  the panel."), with "New plan." before a re-plan (**Proposed (David)**).
+- **The ring follows real tool calls, never the plan alone.** On each tool call, the gate emits
+  `ring.cue {step?, action, target?}`: the matching plan step, if there is one, and what is really
+  happening. When the task ends it emits `ring.cue {action: "done"}`. The island moves the ring to
+  the target (editor, terminal, a window) and gives each action its own look, which is Jun's call.
+- Spoken lines stay the agent's own: a step's `say` is short enough to speak as is.

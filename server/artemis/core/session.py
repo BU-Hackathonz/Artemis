@@ -32,10 +32,12 @@ from artemis.contracts import (
 )
 from artemis.conversation import Controller
 from artemis.conversation.controller import NVDA_RATE_LINE
+from artemis.conversation.prefs import load_style, save_style
 from artemis.policy.gateway import ToolGateway
 
 from .approvals import SessionApprovals
 from .bus import EventBus
+from .desktop import DesktopOps
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +62,13 @@ APPROVAL_WORDS = {"approve", "yes", "reject", "no"}
 HEARTBEAT_S = 3.0
 HEARTBEAT_STATES = {"working", "running"}  # never queued, awaiting_approval or a final state
 STILL_WORKING = "Still working."
+HEARTBEAT_MAX_S = 9.0  # the cue repeats after 3 s, then 6 s, then every 9 s: present, not nagging
+# An approval still open this long after it was asked is said again, once, when the voice is quiet:
+# the line may have been cut off or lost, and the dialog waits silently for a key the user never heard of.
+APPROVAL_REMIND_S = 10.0
+APPROVAL_HEARD_START_S = 0.3  # an approval's summary reaches the speaker within this
+APPROVAL_HEARD_MAX_S = 60.0  # the longest the core waits for it to be said (queued behind a long answer)
+APPROVAL_REMIND_QUIET_S = 6.0  # the longest the reminder waits for Artemis to stop speaking
 EMPTY_PAIR_S = 1.5  # a second empty transcript this soon after the first is the same tap
 # A push-to-talk hold that recorded no sound (contracts.md 3.3): fixed text, never free text.
 NO_SPEECH = ("I didn't hear anything.", "Check the microphone.")
@@ -117,6 +126,12 @@ def _result_cue(draft: EventDraft) -> str | None:
     return None
 
 
+def _requires_plan(agent: object) -> bool:
+    """§10: the real agent must plan first. By class in the MRO, so a subclass or wrapper-subclass of
+    ClaudeAgent still counts (the SDK is not imported here: the stub runs without it)."""
+    return any(c.__name__ == "ClaudeAgent" for c in type(agent).__mro__)
+
+
 class TaskActive(Exception):
     def __init__(self, task_id: str):
         self.task_id = task_id
@@ -130,6 +145,7 @@ class Task:
         self.job: asyncio.Task | None = None
         self.heartbeat: asyncio.Task | None = None
         self.cancel_reported = False  # the job already said what its cancel stopped
+        self.done_cued = False  # ring.cue done was sent (once, after the final task.state)
 
     @property
     def active(self) -> bool:
@@ -150,11 +166,16 @@ class Session:
         on_project: Callable[[object], None] | None = None,
         heartbeat_s: float = HEARTBEAT_S,
         conversation: bool | None = None,
+        prefs_path: Path | None = None,
         result_earcons: bool | None = None,
         earcon: Callable[[str], float] | None = None,
+        require_plan: bool | None = None,  # None: only for a ClaudeAgent (or a subclass of it)
+        on_question: Callable[[], None] | None = None,  # a task ended by asking the user something
+        approval_remind_s: float = APPROVAL_REMIND_S,
     ):
         self.session_id = session_id
         self.voice = voice
+        self._summaries: dict[str, str] = {}  # approval id -> its spoken summary, until it is decided
         self.runner = runner
         self.heartbeat_s = heartbeat_s
         self._quiet_since = time.monotonic()  # last announcement or task state change
@@ -165,7 +186,17 @@ class Session:
             log_path=(log_dir / f"{session_id}.jsonl") if log_dir else None,
         )
         self.approvals = SessionApprovals()
-        self.gateway = ToolGateway(runner, self.approvals, self.emit, projects_dir=projects_dir, scan=scan)
+        self.desktop_ready = False  # set by /ready when the island can type (contracts.md §9)
+        self.desktop = DesktopOps(
+            self.emit, ready=lambda: self.desktop_ready, subscribers=lambda: self.bus.subscriber_count,
+            forget=self.bus.forget_desktop_text,
+        )
+        self.gateway = ToolGateway(
+            runner, self.approvals, self.emit, projects_dir=projects_dir, scan=scan,
+            desktop=self._desktop_bridge,
+            # §10: the real agent plans before it acts; scripted agents (stub, tests) may skip it
+            require_plan=_requires_plan(agent) if require_plan is None else require_plan,
+        )
         self.agent = agent
         self.tasks: dict[str, Task] = {}
         self._by_request: dict[str, str] = {}  # client_request_id -> task_id (idempotency)
@@ -173,10 +204,22 @@ class Session:
         self.reported: set[tuple[str, str | None]] = set()  # (code, shortcut) already spoken
         self.greeted = False  # the ready line (POST /sessions/{sid}/ready) is spoken once
         self._on_project = on_project
+        self._on_question = on_question
+        self.approval_remind_s = approval_remind_s
+        self._reminders: dict[str, asyncio.Task] = {}  # approval id -> its reminder
+        self._heard_watch: set[asyncio.Task] = set()  # waits for an approval's summary to be heard (§5.4)
         # contracts.md §5.4, off by default: None means today's §5.2 rules, unchanged.
         if conversation is None:
             conversation = os.environ.get("ARTEMIS_CONVERSATION", "off").lower() == "on"
-        self.conversation: Controller | None = Controller() if conversation else None
+        self.conversation: Controller | None = None
+        if conversation and prefs_path is not None:
+            # The answer style is remembered only in conversation mode, and only when the caller
+            # names the file (main.py does; tests and the in-memory demo never do).
+            self.conversation = Controller(
+                style=load_style(prefs_path), on_style=lambda style: save_style(prefs_path, style)
+            )
+        elif conversation:
+            self.conversation = Controller()
         # ARTEMIS_RESULT_EARCONS, off by default (contracts.md 5.5): a short tone just before a run
         # result or an approval request is spoken. The words are always said; never while listening.
         if result_earcons is None:
@@ -206,13 +249,43 @@ class Session:
                 # Let the tone finish (capped) so the spoken line does not talk over it.
                 await asyncio.sleep(_cue_wait(duration))
         await self.bus.emit(draft, speak=speak)
+        if draft.type == "approval.requested" and self.approval_remind_s > 0:
+            aid = draft.data.get("approval_id")
+            reminder = asyncio.create_task(self._remind_approval(draft.task_id, draft.data))
+            self._reminders[aid] = reminder
+            reminder.add_done_callback(lambda _t, aid=aid: self._reminders.pop(aid, None))
+        if draft.type == "approval.requested" and self.conversation:
+            self._watch_heard(draft.data.get("approval_id"))
+        if draft.type == "approval.requested":
+            self._summaries[draft.data.get("approval_id")] = draft.data.get("summary") or ""
+        if draft.type == "approval.resolved":
+            reminder = self._reminders.pop(draft.data.get("approval_id"), None)
+            if reminder is not None and reminder is not asyncio.current_task():
+                reminder.cancel()  # decided: nothing to remind
+            summary = self._summaries.pop(draft.data.get("approval_id"), None)
+            if draft.data.get("by") == "user":
+                await self._cut_decided(summary)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
+            await self._cue_done(self.tasks[draft.task_id])
         if self.conversation:
             try:
                 self.conversation.observe(draft)
             except Exception:  # a controller bug must never break the event stream
                 log.exception("conversation controller failed to observe %s", draft.type)
+
+    async def _cue_done(self, task: Task) -> None:
+        """A task reached a final state: tell the ring, once (contracts.md section 10)."""
+        if task.active or task.done_cued:
+            return
+        task.done_cued = True
+        await self.gateway.ring_done(task.task_id)  # the ring goes home, and the gate forgets the plan
+
+    async def _desktop_bridge(self, task_id: str, _op_id: str, kind: str, text: str, window: str | None):
+        """The gate's typing bridge (contracts.md §9): (ok, message, window). The core mints its own
+        op_id (random, single-use), so the gate's is not used."""
+        result = await self.desktop.request(kind, text, task_id, window=window)
+        return result.ok, result.message, result.window
 
     @property
     def active_task(self) -> Task | None:
@@ -233,7 +306,11 @@ class Session:
         self._by_request[request.client_request_id] = task.task_id
         if self.conversation:
             self.conversation.begin(task.task_id, request.text)
-        await self._state(task.task_id, "queued", f"Working on: {request.text}", "normal")
+        # A spoken request isn't read back (David's test run: after "Hey Artemis" it was redundant and
+        # slow); the agent's plan is the first thing heard, and the island shows the request. A typed
+        # one is still read back once.
+        readback = None if request.source == "voice" else f"Working on: {request.text}"
+        await self._state(task.task_id, "queued", readback, "normal")
         task.job = asyncio.create_task(self._run(task))
         task.heartbeat = asyncio.create_task(self._heartbeat(task))
         # However the job ends (even canceled before it starts), the heartbeat stops with it.
@@ -242,10 +319,17 @@ class Session:
 
     async def _heartbeat(self, task: Task) -> None:
         """While the task is working or running and nothing has been announced for heartbeat_s,
-        give a quiet "still working" cue, and repeat it every heartbeat_s until something else is
+        give a quiet "still working" cue. In one stretch of silence it repeats after twice the
+        interval, then every HEARTBEAT_MAX_S (never less than heartbeat_s), until something else is
         announced or the state leaves working/running. Never raises into the task."""
+        repeats = 0
+        cued_at = None  # when the last cue was given; any other line since starts the count over
         while task.active:
-            wait = self._quiet_since + self.heartbeat_s - time.monotonic()
+            if cued_at is None or self._quiet_since != cued_at:
+                repeats = 0
+            interval = self.heartbeat_s if repeats == 0 else max(
+                self.heartbeat_s, min(self.heartbeat_s * (repeats + 1), HEARTBEAT_MAX_S))
+            wait = self._quiet_since + interval - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
                 continue
@@ -254,7 +338,8 @@ class Session:
                     await self._still_working(task.task_id)
                 except Exception:  # a cue failing must never stop the task
                     log.exception("still-working cue failed")
-            self._quiet_since = time.monotonic()  # next check a full interval later
+                repeats += 1
+            self._quiet_since = cued_at = time.monotonic()  # next check a full interval later
 
     async def _still_working(self, task_id: str) -> None:
         """The heartbeat: a low-priority "Still working." progress line, which the Announcer drops
@@ -308,6 +393,11 @@ class Session:
         if isinstance(outcome, Answered):
             outcome_text = outcome.text
             await self._state(tid, "succeeded")
+            if outcome.text.rstrip().endswith("?") and self._on_question is not None:
+                try:  # hands-free: listen for the reply once the question has been said
+                    self._on_question()
+                except Exception:
+                    log.exception("on_question hook failed")
         elif isinstance(outcome, Canceled):
             outcome_text = "canceled"
             # A second high-priority "Canceled." would cut off the report of what was already
@@ -351,6 +441,7 @@ class Session:
         if not task or not task.active or not task.job:
             return False
         task.job.cancel()
+        self.desktop.cancel_all()
         try:
             await asyncio.wait_for(asyncio.shield(task.job), timeout=5)
         except (asyncio.CancelledError, asyncio.TimeoutError):
@@ -373,6 +464,33 @@ class Session:
                 data=TaskStateData(state=state, reason=reason).model_dump(),
             )
         )
+
+    async def _remind_approval(self, task_id: str | None, data: dict) -> None:
+        """Say an approval again if it is still open after approval_remind_s, once Artemis is quiet."""
+        approval_id = data.get("approval_id")
+        open_ = lambda: any(a.approval_id == approval_id for a in self.approvals.pending())  # noqa: E731
+        try:
+            await asyncio.sleep(self.approval_remind_s)
+            waited = 0.0
+            while open_() and self._speaking() and waited < APPROVAL_REMIND_QUIET_S:
+                await asyncio.sleep(0.2)
+                waited += 0.2
+            if not open_():
+                return
+            summary = data.get("summary") or "An approval is open."  # the event's copy: already redacted
+            text = f"Still waiting for your approval. {summary}"
+            await self.emit(
+                EventDraft(
+                    task_id=task_id,
+                    type="agent.message",
+                    announce=Announce(text=text, priority="normal"),
+                    data=AgentMessageData(text=text, kind="progress").model_dump(),
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # a reminder failing must never touch the task
+            log.exception("approval reminder failed")
 
     # ----- voice (§5.1, §5.2) -----
 
@@ -399,10 +517,15 @@ class Session:
                     task_id=active.task_id if active else None,
                 )
             return
+        words = normalize(text)
+        # A request that becomes a task is read back once, by "Working on: ..." (same words).
+        starts_task = (
+            bool(text.strip()) and not self.active_task and words not in CANCEL_WORDS and words not in REPEAT_WORDS
+        )
         await self.emit(
             EventDraft(
                 type="transcript.final",
-                announce=Announce(text=f"Heard: {text}", priority="normal") if text else None,
+                announce=Announce(text=f"Heard: {text}", priority="normal") if text and not starts_task else None,
                 data=TranscriptData(text=text, client_request_id=client_request_id).model_dump(),
             )
         )
@@ -410,7 +533,6 @@ class Session:
             # An accidental tap of push-to-talk records nothing: stay quiet (Yaovi's review on #20).
             # The stop earcon already told the user the mic closed.
             return
-        words = normalize(text)
         active = self.active_task
         if words in CANCEL_WORDS:
             if active:
@@ -446,7 +568,10 @@ class Session:
         await self.emit(
             EventDraft(
                 type="transcript.final",
-                announce=Announce(text=f"Heard: {text}", priority="normal") if text else None,
+                # "submit" is read back once, by "Working on: ..." (same words): no "Heard:" then.
+                announce=Announce(text=f"Heard: {text}", priority="normal")
+                if text and decision.action != "submit"
+                else None,
                 data=TranscriptData(
                     text=text,  # always the raw transcript
                     client_request_id=client_request_id,
@@ -472,6 +597,20 @@ class Session:
             if decision.say and not was_speaking:
                 # Nothing was being said, so "stop" may have meant the task: never stay silent.
                 await self.say(tid, decision.say)
+        elif action == "decide":
+            # Voice approval (§5.4): the same path as the dialog's POST /approvals, with the hash the
+            # approval carried, so a changed or already-decided approval can't be decided by voice.
+            try:
+                self.approvals.resolve(decision.approval_id, decision.verdict, decision.approval_hash)
+            except Exception:
+                await self.say(tid, "That approval isn't open any more.", "high")
+            else:
+                await self.say(tid, decision.say, decision.priority)
+        elif action == "say" and decision.rearm_heard:
+            await self.say(tid, decision.say, decision.priority)
+            aid = (self.conversation.open_approval or {}).get("id")
+            if aid:
+                self._watch_heard(aid)
         elif action == "rate":
             set_rate = getattr(self.voice, "set_rate", None)  # optional (SAPI only, Yaovi)
             if set_rate is None:
@@ -506,6 +645,53 @@ class Session:
             return bool(announcer.status()[0])
         except Exception:
             return False
+
+    def _listening(self) -> bool:
+        return bool(getattr(self.voice, "busy_listening", getattr(self.voice, "listening", False))
+                    or getattr(self.voice, "transcribing", False))
+
+    def _watch_heard(self, approval_id: str | None) -> None:
+        """Tell the controller when Artemis has finished saying this approval's summary (§5.4).
+
+        The summary is queued after what Artemis is saying (#192), and push-to-talk cuts speech, so
+        the voice approval's reveal guard starts only when speech falls silent with no one talking.
+        Cut off by push-to-talk, it is not heard: "approve" then gets the summary read again."""
+        if not approval_id or self.conversation is None:
+            return
+
+        async def watch() -> None:
+            open_ = lambda: any(a.approval_id == approval_id for a in self.approvals.pending())  # noqa: E731
+            try:
+                await asyncio.sleep(APPROVAL_HEARD_START_S)
+                waited = APPROVAL_HEARD_START_S
+                while open_() and self._speaking() and waited < APPROVAL_HEARD_MAX_S:
+                    if self._listening():
+                        return  # push-to-talk cut it off
+                    await asyncio.sleep(0.1)
+                    waited += 0.1
+                if open_() and not self._listening():
+                    self.conversation.approval_heard(approval_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # never touches the task
+                log.exception("approval heard watch failed")
+
+        job = asyncio.create_task(watch())
+        self._heard_watch.add(job)
+        job.add_done_callback(self._heard_watch.discard)
+
+    async def _cut_decided(self, summary: str | None) -> None:
+        """Decided before the summary finished: stop reading it (David's test run). Only when the line
+        playing is that approval's own summary (or its reminder): if anything else has started since (an
+        error, a blocked warning, a failure), that is something the developer has to hear, and it plays."""
+        announcer = getattr(self.voice, "announcer", None)
+        last = getattr(announcer, "last", None)
+        if not summary or not last or not self._speaking() or not last.strip().endswith(summary.strip()):
+            return
+        try:
+            await self.voice.stop_speech()
+        except Exception:  # a voice that can't stop just finishes the line
+            log.exception("could not stop the decided approval's summary")
 
     def _speaking(self) -> bool:
         """True only when we know Artemis is speaking. NVDA can't tell us, so that is False."""
