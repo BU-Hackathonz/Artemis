@@ -683,7 +683,7 @@ class ToolGateway(DesktopTools):
                 "The files changed twice while waiting for approval. Nothing was written.",
             )
 
-        await self._cue(task_id, "write_files", None)  # approved: the write really starts now
+        await self._cue(task_id, "write_files", "editor")  # approved: the write really starts now
         # No await between the first and the last write, so a cancel can't split the batch.
         changes = []
         try:
@@ -811,7 +811,7 @@ class ToolGateway(DesktopTools):
                 "invalidated", f"{a.entry} changed twice while waiting for approval. {nothing}"
             )
 
-        await self._cue(task_id, "run_program", None)  # approved: the run really starts now
+        await self._cue(task_id, "run_program", "terminal")  # approved: the run really starts now
         await self._state(task_id, "running", f"Running {entry}.")
         try:
             result = await self._runner.run(project, entry, list(a.args), self._run_timeout_s)

@@ -387,7 +387,8 @@ def test_acting_waits_for_the_plan(home):
     assert run(g.call("t1", "plan", plan)).ok
     assert run(g.call("t1", "run_command", {"command": "ls", "cwd": None})).ok
     cues = [e.data for e in log.of("ring.cue")]
-    assert cues == [{"step": 0, "action": "run", "target": "terminal"}]
+    assert cues == [{"step": None, "action": "think", "target": None},
+                    {"step": 0, "action": "run", "target": "terminal"}]
     assert log.of("agent.plan")[0].data["goal"] == "List the folder"
 
 

@@ -66,6 +66,13 @@ TOOL_ACTIONS = {
     "edit_file": "write", "run_program": "run", "run_command": "run", "open_app": "open",
     "open_path": "open", "type_text": "type", "press_keys": "type",
 }
+# Where the ring flies for each acting tool, when the call itself names no more (the app, the window):
+# the editor, the terminal, the browser or the file. Every acting tool cues, with or without a plan.
+TOOL_TARGETS = {
+    "create_project": "editor", "open_project": "editor", "write_files": "editor", "edit_file": "editor",
+    "list_files": "file", "read_file": "file", "read_path": "file", "scan_project": "file",
+    "inspect_page": "browser", "run_program": "terminal", "run_command": "terminal",
+}
 # Tools that change something or reach outside the project: the plan comes first (§10).
 NEEDS_PLAN = {"write_files", "edit_file", "run_program", "run_command", "open_app", "open_path",
               "read_path", "type_text", "press_keys"}
@@ -543,6 +550,7 @@ class DesktopTools:
         self._plans[task_id] = a
         self._cued.pop(task_id, None)
         await self._emit(task_id, "agent.plan", AgentPlanData(goal=a.goal, steps=[s.model_dump() for s in a.steps]))
+        await self._emit(task_id, "ring.cue", RingCueData(action="think"))  # the plan is made: the ring thinks
         return {"planned": len(a.steps), "note": "Now carry out the steps. Each action still asks the developer."}
 
     def _plan_check(self, task_id: str, name: str) -> None:
@@ -550,20 +558,21 @@ class DesktopTools:
             raise self._tool_error("plan_required", "Call plan first: say the goal and the steps, then act.")
 
     async def _cue(self, task_id: str, name: str, target: str | None) -> None:
-        """The ring's cue for a real tool call, with the plan step it carries out when one fits."""
+        """The ring's cue for a real tool call: where the work is (the call's own target, else the tool's),
+        with the plan step it carries out when one fits. Without a plan the step is None."""
         action = TOOL_ACTIONS.get(name)
+        if action is None:
+            return
+        step, plan_target = None, None
         plan = self._plans.get(task_id)
-        if action is None or plan is None:
-            return  # the ring acts out a plan: without one, it keeps its working look
-        step = None
         if plan is not None:
             done = self._cued.setdefault(task_id, set())
             for i, s in enumerate(plan.steps):
                 if s.action == action and i not in done:
-                    step = i
+                    step, plan_target = i, s.target
                     done.add(i)
-                    target = target or s.target
                     break
+        target = target or TOOL_TARGETS.get(name) or plan_target
         await self._emit(task_id, "ring.cue", RingCueData(step=step, action=action, target=target))
 
     async def ring_done(self, task_id: str) -> None:
@@ -679,7 +688,7 @@ class DesktopTools:
         if asked:
             await self._approve_desktop(task_id, "open", spec(), f"Open {spoken_path(path)}{where}.", "Nothing was opened.",
                                         findings=findings, still=spec)
-        await self._cue(task_id, "open_path", app[1] if app else path.name)
+        await self._cue(task_id, "open_path", app[1] if app else "file")
         try:
             await _spawn_detached(["gtk-launch", app[0], str(path)] if app else ["gio", "open", str(path)])
         except Exception as exc:
@@ -696,7 +705,7 @@ class DesktopTools:
 
         approved = spec()
         await self._approve_desktop(task_id, "read_outside", approved, f"Read {spoken_path(path)}.", "Nothing was read.", still=spec)
-        await self._cue(task_id, "read_path", path.name)
+        await self._cue(task_id, "read_path", "file")
         data = read_capped(path)
         if hashlib.sha256(data).hexdigest() != approved.sha256:
             raise self._tool_error("invalidated", f"{path.name} changed after you approved it. Nothing was read.")

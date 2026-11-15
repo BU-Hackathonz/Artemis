@@ -76,9 +76,10 @@ def test_happy_path_event_order(tmp_path):
     assert wrote.ok and ran.ok
     assert (w.projects / "hello-world" / "main.py").read_bytes() == HELLO.encode()
     assert w.log.types() == [
+        "ring.cue",  # create_project: think, at the editor (no plan needed)
         "agent.message",
-        "task.state", "approval.requested", "approval.resolved", "file.changed", "task.state",
-        "task.state", "approval.requested", "approval.resolved", "task.state", "run.result", "task.state",
+        "task.state", "approval.requested", "approval.resolved", "ring.cue", "file.changed", "task.state",
+        "task.state", "approval.requested", "approval.resolved", "ring.cue", "task.state", "run.result", "task.state",
     ]
     assert [e.data["state"] for e in w.log.of("task.state")] == [
         "awaiting_approval", "working", "awaiting_approval", "running", "working",

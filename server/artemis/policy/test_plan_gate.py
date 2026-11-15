@@ -33,7 +33,22 @@ def test_read_only_tools_need_no_plan(tmp_path):
     g, log = gate(tmp_path)
     results = run(_flow(g, [("create_project", {"name": "demo"}), ("list_files", {"dir": None})]))
     assert all(r.ok for r in results)
-    assert log.of("ring.cue") == []  # no plan: the ring keeps its working look
+    cues = [(e.data["step"], e.data["action"], e.data["target"]) for e in log.of("ring.cue")]
+    assert cues == [(None, "think", "editor"), (None, "read", "file")]  # no plan: no step, but a real target
+
+
+def test_acting_tools_cue_where_the_work_is_without_a_plan(tmp_path):
+    g, log = gate(tmp_path, require_plan=False)
+    run(_flow(g, [("create_project", {"name": "demo"}), ("write_files", FILES), ("list_files", {"dir": None})]))
+    cues = [(e.data["step"], e.data["action"], e.data["target"]) for e in log.of("ring.cue")]
+    assert cues == [(None, "think", "editor"), (None, "write", "editor"), (None, "read", "file")]
+
+
+def test_the_plan_is_announced_with_a_think_cue(tmp_path):
+    g, log = gate(tmp_path)
+    run(g.call("t1", "plan", PLAN))
+    assert [e.type for e in log.events] == ["agent.plan", "ring.cue"]
+    assert log.of("ring.cue")[0].data == {"step": None, "action": "think", "target": None}
 
 
 def test_plan_required_says_how_to_recover(tmp_path):
@@ -58,7 +73,7 @@ def test_a_rejected_write_is_not_cued(tmp_path):
     g, log = gate(tmp_path, [Decision.reject])
     run(g.call("t1", "create_project", {"name": "demo"}))
     assert run(_flow(g, [("plan", PLAN), ("write_files", FILES)]))[1].error == "rejected_by_user"
-    assert log.of("ring.cue") == []
+    assert [e.data["action"] for e in log.of("ring.cue")] == ["think", "think"]  # create, plan: no write
     run(g.call("t1", "write_files", FILES))
     assert [e.data["step"] for e in log.of("ring.cue") if e.data["action"] == "write"] == [0]
 
@@ -70,7 +85,7 @@ def test_a_self_cued_tool_is_not_cued_before_its_approval(tmp_path):
     run(g.call("t1", "plan", plan))
     result = run(g.call("t1", "run_command", {"command": "ls", "cwd": None}))
     assert result.error == "rejected_by_user"
-    assert log.of("ring.cue") == []
+    assert [e.data["action"] for e in log.of("ring.cue")] == ["think"]  # only the plan's think, no run
 
 
 def test_ring_done_frees_the_plan_and_the_cues(tmp_path):

@@ -26,7 +26,8 @@ def test_happy_path_event_order(tmp_path):
     assert (tmp_path / "hello-world" / "main.py").read_text() == 'print("Hello, World!")\n'
     assert log.types() == [
         "agent.plan",          # write main.py, then run it (contracts.md §10)
-        "ring.cue",            # create_project: think
+        "ring.cue",            # the plan is made: think
+        "ring.cue",            # create_project: think, at the editor
         "agent.message",       # Starting project hello-world.
         "task.state",          # awaiting_approval
         "approval.requested",  # write_files
@@ -46,7 +47,8 @@ def test_happy_path_event_order(tmp_path):
     assert all(e.task_id == "tsk_1" for e in log.events)
     assert [a.kind for a in approvals.requests] == ["write_files", "run_program"]
     cues = [e.data for e in log.of("ring.cue")]
-    assert [(c["step"], c["action"], c["target"]) for c in cues] == [(None, "think", None), (0, "write", "editor"), (1, "run", "terminal")]
+    assert [(c["step"], c["action"], c["target"]) for c in cues] == [
+        (None, "think", None), (None, "think", "editor"), (0, "write", "editor"), (1, "run", "terminal")]
     assert log.spoken() == [
         "Starting project hello-world.",
         "Create project hello-world with 1 file: main.py, 1 line. Not scanned: the security scanner isn't installed. Enter to approve, Escape to reject.",
