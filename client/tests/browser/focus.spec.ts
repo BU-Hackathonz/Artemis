@@ -1,12 +1,14 @@
 import {test, expect, type Page} from '@playwright/test';
 import {createServer, type ServerResponse} from 'node:http';
 
-async function fixture(approvalAtStart = false, activeTask = false) {
+// startApproval overrides the approval sent at connect; decisions records what the core was told.
+async function fixture(approvalAtStart = false, activeTask = false, startApproval?: object) {
   let events: ServerResponse | undefined;
   let seq = 0;
   const commands: string[] = [];
+  const decisions: string[] = [];
   const emit = (type: string, data: object) => events!.write(`id: ${++seq}\ndata: ${JSON.stringify({seq, session_id:'ses_focus', task_id:'tsk_focus', at:new Date().toISOString(), type, data, announce:null})}\n\n`);
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     res.setHeader('access-control-allow-origin', 'http://127.0.0.1:1420');
     res.setHeader('access-control-allow-headers', 'Authorization,Content-Type,Last-Event-ID');
     res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
@@ -17,10 +19,13 @@ async function fixture(approvalAtStart = false, activeTask = false) {
       res.writeHead(200, {'content-type':'text/event-stream'});
       res.write(': connected\n\n');
       if (activeTask && seq === 0) emit('task.state', {state:'working'});
-      if (approvalAtStart && seq === 0) emit('approval.requested', {approval_id:'apr_focus', approval_hash:'sha256:focus', kind:'write_files', summary:'Focus fixture proposal', files:[], diff:null, run:null, findings:[]});
+      if (approvalAtStart && seq === 0) emit('approval.requested', startApproval ?? {approval_id:'apr_focus', approval_hash:'sha256:focus', kind:'write_files', summary:'Focus fixture proposal', files:[], diff:null, run:null, findings:[]});
       return;
     }
     if (req.url === '/approvals/apr_focus') {
+      let body = ''; req.on('data', c => body += c);
+      await new Promise(r => req.on('end', r));
+      decisions.push(JSON.parse(body).decision);
       emit('approval.resolved', {approval_id:'apr_focus', decision:'reject', by:'user'});
       res.writeHead(204).end(); return;
     }
@@ -32,7 +37,7 @@ async function fixture(approvalAtStart = false, activeTask = false) {
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   return {
-    commands,
+    commands, decisions,
     drop: () => events!.end(),
     async connect(page: Page) {
       await page.goto('/');
@@ -127,5 +132,32 @@ test('offline task and speech controls retain focus and ignore Enter; manual rec
     await reconnect.click();
     await expect(page.getByRole('status')).toHaveText('Connected');
     await expect(page.locator('#request')).toBeFocused();
+  } finally {await core.close();}
+});
+
+const desk = {approval_id:'apr_focus', approval_hash:'sha256:focus', summary:'Desktop step', files:[], diff:null, run:null, findings:[]};
+
+test('desktop approval shows the exact command word for word', async ({page}) => {
+  const core = await fixture(true, false, {...desk, kind:'run_command', desktop:{action:'run_command', target:'~/proj', text:'echo "a  b" && ls'}});
+  try {
+    await core.connect(page);
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('echo "a  b" && ls');
+    await expect(dialog).toContainText('~/proj');
+    await expect(dialog.getByRole('button', {name:'Approve', exact:true})).toBeVisible();
+  } finally {await core.close();}
+});
+
+test('approval the client cannot show offers only Reject, and Enter rejects it', async ({page}) => {
+  const core = await fixture(true, false, {...desk, kind:'run_command'});
+  try {
+    await core.connect(page);
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText("Can't show this approval, rejecting it");
+    await expect(dialog.getByRole('button')).toHaveCount(1);
+    await expect(dialog.getByRole('button', {name:'Reject', exact:true})).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    expect(core.decisions).toEqual(['reject']);
   } finally {await core.close();}
 });
