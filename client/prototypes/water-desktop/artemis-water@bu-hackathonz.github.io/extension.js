@@ -1,10 +1,10 @@
 // Artemis: liquid glass for the GNOME desktop.
 //
 // Driver (setting "driver"):
-//   agent (default): Artemis is a small liquid-glass sphere resting in the bottom-left corner. Your
-//                    mouse doesn't stir anything. Pick a command (top-bar button, or click the
-//                    sphere) and the sphere zips through it: it refracts whatever it passes over,
-//                    drags a water wake behind it, rings the water at each step, then flies home.
+//   agent (default): Artemis is a small liquid-glass sphere resting in the bottom-left corner, or
+//                    the island under the top bar (agent-look). Your mouse doesn't stir anything.
+//                    Ask it for a task (type on the island, or hold push-to-talk); the ring takes
+//                    on the colour of each state, and an approval opens its own dialog.
 //   pointer:         the original cursor effects. Style "lens" (a glass lens follows the pointer)
 //                    or "water" (the pointer drags ripples through the screen).
 //
@@ -14,6 +14,7 @@
 
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -26,14 +27,21 @@ import {LensEffect} from './lensEffect.js';
 import {OrbEffect} from './orbEffect.js';
 import {RingEffect} from './ringEffect.js';
 import {Island} from './island.js';
-import {CaretTracker} from './caret.js';
-import {CommandRunner, COMMANDS} from './presets.js';
+import {CoreClient} from './core.js';
+import {ApprovalDialog} from './approvalDialog.js';
+import {initial, reduce, setConnected, view, expireDone, DONE_MS} from './islandState.js';
+import {ringLook} from './ringLook.js';
 
 // Loop.
 const ACTIVE_MS = 16;           // frame interval while anything moves
 const IDLE_MS = 60;             // pointer polling while still (pointer driver)
 const AGENT_IDLE_MS = 250;      // orb frozen at rest: only watch for overview/fullscreen changes
 const ORB_LIVE_MS = 33;         // orb at rest but alive (slow morph and tumble): ~30 fps
+
+// Push-to-talk: the shortcut as the core and the shortcut plugin spell it, and how often the
+// poll checks that Control and Shift are still held.
+const SHORTCUT = 'Control+Shift+Space';
+const TALK_POLL_MS = 50;
 
 // Water (how the wake answers speed).
 const MIN_SPEED = 60;           // px/s: slower movement makes no water
@@ -105,6 +113,20 @@ export default class ArtemisWaterExtension extends Extension {
         this._lensOn = false;
         this._lens = null;
         this._agent = null;
+        this._state = initial(false);   // the island's view of the core (islandState.js)
+        this._shown = 'idle';           // the state the ring is drawn in
+        this._look = ringLook('idle', false);
+        this._stopItems = [];
+        this._dialog = null;            // the open approval dialog
+        this._listening = false;        // push-to-talk is open
+        this._readySid = null;          // the session ready was last sent for
+        this._doneTimer = 0;
+        this._talkTimer = 0;
+
+        this._core = new CoreClient({
+            onEvent: (event) => this._onEvent(event),
+            onConnected: (connected, sid) => this._onConnected(connected, sid),
+        });
 
         this._attachAll();
         this._monitorsId = Main.layoutManager.connect('monitors-changed', () => this._reattachSoon());
@@ -116,17 +138,25 @@ export default class ArtemisWaterExtension extends Extension {
             this._settings.connect(`changed::${k}`, () => { this._drops = []; this._lens = null; this._orb = null; this._morph = null; this._setupAgent(); this._reattachSoon(); }));
         this._workAreaId = global.display.connect('workareas-changed', () => this._agentGoHome(true));
 
-        this._runner = new CommandRunner(this._agentBody(), (x, y, strength) => this.ripple(x, y, strength));
+        this._addPushToTalk();
         this._addPanelButton();
         this._setupAgent();
+        this._core.start();
+        this._render();
         this._schedule(IDLE_MS);
     }
 
     disable() {
-        this._runner?.destroy();
-        this._caret?.destroy();
-        this._caret = null;
-        this._runner = null;
+        this._core?.destroy();
+        this._core = null;
+        this._closeApproval();
+        if (this._doneTimer) GLib.source_remove(this._doneTimer);
+        this._doneTimer = 0;
+        if (this._talkTimer) GLib.source_remove(this._talkTimer);
+        this._talkTimer = 0;
+        this._listening = false;
+        if (this._shortcutBound) Main.wm.removeKeybinding('push-to-talk');
+        this._shortcutBound = false;
         this._teardownAgentUI();
         this._button?.destroy();
         this._button = null;
@@ -245,9 +275,8 @@ export default class ArtemisWaterExtension extends Extension {
         this._lens = null;
         if (this._isIsland()) {
             this._island = new Island({
-                commands: COMMANDS,
-                onRun: (cmd) => this._runCommand(cmd),
-                onStop: () => this._runner.stop(),
+                onAsk: (text) => this._ask(text),
+                onStop: () => this._cancelTask(),
                 onSettings: () => this.openPreferences(),
                 font: this._settings.get_string('ui-font'),
                 // the pill resizes with its status: follow its ring, but never mid-flight
@@ -257,33 +286,7 @@ export default class ArtemisWaterExtension extends Extension {
         } else {
             this._addSphereButton();
         }
-        this._wake();
-    }
-
-    // What commands drive: the sphere's position.
-    _agentBody() {
-        return {
-            pos: () => (this._agent ? {x: this._agent.x, y: this._agent.y} : {x: 0, y: 0}),
-            moveTo: (x, y) => {
-                if (!this._agent) return;
-                this._agent.x = x;
-                this._agent.y = y;
-                this._wake();
-            },
-            setAwake: (on) => {
-                if (!this._agent) return;
-                if (this._homeTimer) { GLib.source_remove(this._homeTimer); this._homeTimer = 0; }
-                if (on && this._island) Object.assign(this._agent, this._homePos()); // leave from the island's ring
-                this._agent.awake = on;
-                if (on) this._kick(0.8, 1.6); // a little pop: "on it"
-                this._wake();
-            },
-            flyHome: () => this._agentGoHome(false),
-            caret: () => (this._caret ??= new CaretTracker()).position(),
-            setTyping: (on) => { this._typing = on; this._wake(); },
-            // ms a command waits before moving, so the ring can collapse into its droplet first
-            startDelay: () => (this._isRing() ? MORPH_SECONDS * 1000 + 80 : 0),
-        };
+        this._render();
     }
 
     // Fly back to the corner (not cancellable by commands), then rest.
@@ -291,7 +294,6 @@ export default class ArtemisWaterExtension extends Extension {
         if (!this._agent) return;
         const home = this._homePos();
         this._placeSphereButton(home);
-        if (this._runner?.running) return; // a command is still using the sphere
         if (snap) { Object.assign(this._agent, home); this._wake(); return; }
         if (this._homeTimer) GLib.source_remove(this._homeTimer);
         const from = {x: this._agent.x, y: this._agent.y};
@@ -368,10 +370,9 @@ export default class ArtemisWaterExtension extends Extension {
         this._sphereButton = null;
     }
 
-    // --- Commands menu (top bar and sphere) ----------------------------------------------------
+    // --- Menus, island and approvals -----------------------------------------------------------
 
     _addPanelButton() {
-        this._stopItems = [];
         this._button = new PanelMenu.Button(0.0, 'Artemis');
         this._button.add_child(new St.Icon({icon_name: 'weather-showers-symbolic', style_class: 'system-status-icon'}));
         this._fillMenu(this._button.menu);
@@ -379,31 +380,127 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     _fillMenu(menu) {
-        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Artemis commands'));
-        for (const cmd of COMMANDS) {
-            menu.addAction(cmd.name, () => this._runCommand(cmd));
-        }
-        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        const stop = menu.addAction('Stop', () => this._runner.stop());
-        stop.visible = this._runner?.running ?? false;
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Artemis'));
+        const stop = menu.addAction('Stop', () => this._cancelTask());
+        stop.visible = this._taskActive();
         this._stopItems.push(stop);
         stop.connect('destroy', () => { this._stopItems = this._stopItems?.filter((i) => i !== stop) ?? []; });
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         menu.addAction('Put the orb back in the corner', () => this._settings.reset('orb-home'));
         menu.addAction('Settings…', () => this.openPreferences());
     }
 
-    /** Run one of the agent's commands (from any menu, or a typed request on the island). */
-    _runCommand(cmd) {
-        this._stopItems.forEach((i) => { i.visible = true; });
-        this._island?.setState('working', cmd.name.split(':')[0]);
-        this._runner.run(cmd.name, (r) => cmd.run(r), () => {
-            if (this._runner?.running) return; // another command took over
-            this._stopItems?.forEach((i) => { i.visible = false; });
-            const err = this._runner.lastError;
-            this._island?.setState('done', '', err ? `Stopped: ${err}` : (cmd.summary ?? `Finished: ${cmd.name}`));
-            if (!err) this._doneGlow = 1; // the ball lights up green as it comes home
-            this._wake();
+    _taskActive() {
+        const s = this._state;
+        return !!s.taskId && ['thinking', 'editing', 'running'].includes(s.phase);
+    }
+
+    _cancelTask() {
+        const id = this._state.taskId;
+        if (id && this._core) this._core.cancel(id);
+    }
+
+    /** A typed request from the island: the core's answer, as the island's message. */
+    async _ask(text) {
+        const r = this._core ? await this._core.submitTask(text) : {ok: false, reason: 'not_connected'};
+        if (r.ok) return {ok: true};
+        const message = {
+            task_active: 'Still working on the last request.',
+            not_connected: 'Artemis core is not running.',
+        }[r.reason] ?? 'That request could not be sent. Try again.';
+        return {ok: false, message};
+    }
+
+    // The one place the island and the ring are drawn from the core's state. The done state
+    // goes back to idle after DONE_MS: the only timer for states.
+    _render() {
+        if (!this._settings) return;
+        const v = view(this._state);
+        this._shown = v.state;
+        this._look = ringLook(v.state, v.waiting);
+        this._island?.setView(v);
+        const active = this._taskActive();
+        this._island?.setStopVisible(active);
+        for (const item of this._stopItems) item.visible = active;
+        if (this._doneTimer) GLib.source_remove(this._doneTimer);
+        this._doneTimer = 0;
+        if (v.state === 'done') {
+            this._doneTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, DONE_MS, () => {
+                this._doneTimer = 0;
+                this._state = expireDone(this._state);
+                this._render();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+        this._wake();
+    }
+
+    _onEvent(event) {
+        if (!this._settings) return;
+        this._state = reduce(this._state, event);
+        if (event.type === 'approval.requested') this._openApproval(event.data ?? {});
+        else if (event.type === 'approval.resolved' && this._dialog && event.data?.approval_id === this._dialog.approvalId) this._closeApproval();
+        this._render();
+    }
+
+    _onConnected(connected, sid) {
+        if (!this._settings) return;
+        if (!connected) this._closeApproval();
+        this._state = setConnected(this._state, connected);
+        const session = sid || 'none';
+        if (connected && session !== this._readySid && this._core) {
+            this._readySid = session;
+            if (this._shortcutFailed) this._core.diagnostics('shortcut_registration_failed', SHORTCUT);
+            this._core.ready(this._shortcutFailed ? null : SHORTCUT);
+        }
+        this._render();
+    }
+
+    _openApproval(approval) {
+        this._closeApproval();
+        const aid = approval.approval_id;
+        const hash = approval.approval_hash;
+        const dialog = new ApprovalDialog(approval, {
+            onDecide: (decision) => (this._core ? this._core.decide(aid, decision, hash) : Promise.resolve('error')),
         });
+        this._dialog = dialog;
+        dialog.open();
+    }
+
+    _closeApproval() {
+        const dialog = this._dialog;
+        this._dialog = null;
+        dialog?.close();
+    }
+
+    // Push-to-talk: the shortcut opens the microphone; it closes when Control and Shift are both
+    // let go, or when the shortcut is pressed again.
+    _addPushToTalk() {
+        const action = Main.wm.addKeybinding('push-to-talk', this._settings, Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this._pushToTalk());
+        this._shortcutBound = action !== Meta.KeyBindingAction.NONE;
+        this._shortcutFailed = !this._shortcutBound;
+    }
+
+    _pushToTalk() {
+        if (!this._core) return;
+        if (this._listening) { this._stopListening(); return; }
+        this._listening = true;
+        this._core.listen('start').then((ok) => { if (!ok && this._listening) this._stopListening(false); });
+        this._talkTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, TALK_POLL_MS, () => {
+            const [, , mods] = global.get_pointer();
+            if (mods & (Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.SHIFT_MASK)) return GLib.SOURCE_CONTINUE;
+            this._talkTimer = 0;
+            this._stopListening();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _stopListening(send = true) {
+        if (this._talkTimer) GLib.source_remove(this._talkTimer);
+        this._talkTimer = 0;
+        this._listening = false;
+        if (send && this._core) this._core.listen('stop');
     }
 
     /** Drop one ring into the water at (x, y). */
@@ -545,16 +642,14 @@ export default class ArtemisWaterExtension extends Extension {
         const animate = this._interface.enable_animations;
 
         // The sphere's own motion stirs the water (not the mouse).
-        if (!hidden && animate && !this._typing) this._trailSample(A.x, A.y, now, s);
+        if (!hidden && animate) this._trailSample(A.x, A.y, now, s);
         else this._drops = [];
         this._last = {x: A.x, y: A.y, t: now};
         const water = this._tickWater(now, s, TRAIL_LIFE);
         // Ring look: the whole ring collapses into a droplet that flies the command (leaving the
         // trail) and opens back into the ring at home.
         const morph = this._isRing() ? this._tickMorph(now, A) : {value: 0, busy: false};
-        // Top-edge island: at home the droplet hides behind the pill's ring; it only shows in flight.
-        const tucked = false; // island: the ring rests, small, in the pill's slot
-        const orb = this._tickOrb(now, A.x, A.y, hidden || tucked || this._typing, s, morph);
+        const orb = this._tickOrb(now, A.x, A.y, hidden, s, morph);
         if (this._sphereButton) this._sphereButton.visible = !hidden && !A.awake && morph.value === 0;
 
         if (water || orb === 'busy' || A.awake) { this._sleeping = false; this._schedule(ACTIVE_MS); }
@@ -639,8 +734,6 @@ export default class ArtemisWaterExtension extends Extension {
         // Moving fast churns it; otherwise any wobble calms down.
         O.energy = Math.max(O.energy * Math.exp(-dt * ORB_ENERGY_DECAY), Math.min(speed / 2500, 0.45));
         O.flash *= Math.exp(-dt * RING_FLASH_DECAY);
-        this._doneGlow = (this._doneGlow ?? 0) * Math.exp(-dt * 0.7);
-        if (this._doneGlow < 0.01) this._doneGlow = 0;
         if (O.flash < 0.01) O.flash = 0;
         // Held: while its menu is open the ring stays lively: a steady jiggle, more glow, and
         // little random pokes to its jelly spring so the physics keeps going.
@@ -664,26 +757,25 @@ export default class ArtemisWaterExtension extends Extension {
 
         const live = s.get_boolean('orb-motion') && this._interface.enable_animations;
         const settled = speed < 1 && Math.hypot(x - O.x, y - O.y) < 0.5 && O.stretch < 0.002 &&
-            Math.abs(O.scale - 1) < 0.002 && Math.abs(O.sv) < 0.01 && O.energy < 0.02 && O.flash === 0 && !this._doneGlow && !O.hold && O.vis === 1 &&
-            !morph.busy;
+            Math.abs(O.scale - 1) < 0.002 && Math.abs(O.sv) < 0.01 && O.energy < 0.02 && O.flash === 0 && !O.hold && O.vis === 1 &&
+            !morph.busy && this._shown === 'idle';
         if (live || !settled) {
             // The slow life of the orb: its outline morphs and it tumbles, both faster when stirred.
             O.morph += dt * (1 + O.energy * 1.6);
             // spins up while a command runs (the ring's "thinking swirl")
-            O.spin += dt * (0.4 + O.energy * 1.4 + speed / 900) * (this._agent?.awake ? 3 : 1);
+            O.spin += dt * (0.4 + O.energy * 1.4 + speed / 900) * this._look.spin * (this._agent?.awake ? 3 : 1);
         }
         if (live || !settled || !this._lensOn) {
             const radius = s.get_double('orb-size') / 2 * Math.max(O.scale, 0.3) * (this._isIsland() && !this._agent?.awake ? 0.42 : 1);
             const shape = [O.dir[0], O.dir[1], O.stretch, live ? O.energy : O.energy * (settled ? 0 : 1)];
             const light = [s.get_double('highlights'), ORB_DISPERSION, O.morph % 1000, O.spin % 6283.1853];
-            const working = this._agent?.awake ? 0.45 : 0; // shines while it works
-            const glow = RING_GLOW + working + RING_FLASH_GLOW * O.flash + HOLD_GLOW * O.hold + 0.1 * Math.min(O.energy, 1);
+            const glow = RING_GLOW + this._look.glow + RING_FLASH_GLOW * O.flash + HOLD_GLOW * O.hold + 0.1 * Math.min(O.energy, 1);
             const wobble = Math.max(O.flash, HOLD_WOBBLE * O.hold);
             for (const {actor, rect} of this._targets()) {
                 const orb = this._effects.get(actor)?.lens;
                 if (!orb) continue;
                 orb.update([rect.width, rect.height], [O.x - rect.x, O.y - rect.y, radius, O.vis], shape, light, glow, morph.value, wobble, O.seed ?? 0, O.flash,
-                    this._agent?.awake ? [0.85, 0.6, 1.0, 0.3] : [1, 1, 1, 0]);
+                    this._agent?.awake ? [0.85, 0.6, 1.0, 0.3] : this._look.tint);
             }
         }
         this._setLens(true);
