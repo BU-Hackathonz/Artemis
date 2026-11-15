@@ -17,6 +17,8 @@ import logging
 import json
 import os
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -218,7 +220,13 @@ ELEVEN_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
 ELEVEN_PCM_RATE = 22_050  # output_format=pcm_22050: 16-bit mono, playable as each chunk arrives
 SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
 FAILURES_BEFORE_SAPI = 3
-FALLBACK_NOTICE = "My natural voice isn't reachable, so I'm using the Windows voice."
+def fallback_notice() -> str:
+    """The give-up line. On Linux it never names Windows, SAPI or NVDA."""
+    local = "the Windows voice" if sys.platform == "win32" else "the offline voice"
+    return f"My natural voice isn't reachable, so I'm using {local}."
+
+
+FALLBACK_NOTICE = fallback_notice()
 # Short fixed lines worth keeping as audio so they play at once. Only these exact strings are cached:
 # never transcripts, code, file contents or anything the agent wrote.
 CACHED_LINES = frozenset({
@@ -520,14 +528,15 @@ class ElevenLabsSpeaker:
         if not self._current(gen):
             return  # canceled meanwhile: say nothing
         self._failures += 1
-        log.warning("ElevenLabs failed (%s); this line uses the Windows voice", reason)
+        log.warning("ElevenLabs failed (%s); this line uses the local voice", reason)
         if self._failures >= FAILURES_BEFORE_SAPI and not self.gave_up:
             self.gave_up = True
-            log.warning("ElevenLabs failed %d times in a row; using the Windows voice for this session", self._failures)
+            log.warning("ElevenLabs failed %d times in a row; using the local voice for this session", self._failures)
+            notice = fallback_notice()
             if self.on_give_up is not None:
-                self._on_loop(self.on_give_up, FALLBACK_NOTICE)
+                self._on_loop(self.on_give_up, notice)
             else:
-                log.warning("Not spoken yet (the core doesn't wire it): %s", FALLBACK_NOTICE)
+                log.warning("Not spoken yet (the core doesn't wire it): %s", notice)
         if self.fallback is not None and self.fallback.available():
             self._on_loop(self.fallback.speak, text, False)
 
@@ -555,6 +564,220 @@ class NullSpeaker:
 
     def busy(self) -> bool:
         return False
+
+
+# ----- Linux: the offline voice (speech-dispatcher), and Orca detection -----
+
+
+def orca_running(proc: Path = Path("/proc")) -> bool:
+    """True while the Orca screen reader runs (Linux). Detection only: voice.status can't report it yet."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        for comm in proc.glob("[0-9]*/comm"):
+            try:
+                if comm.read_text(encoding="utf-8", errors="ignore").strip() == "orca":
+                    return True
+            except OSError:
+                continue  # the process ended while we looked
+    except OSError:
+        pass
+    return False
+
+
+
+# Artemis's priorities as speech-dispatcher levels (approved by Avery). high speaks over Orca and Orca can't
+# cut it; normal shares Orca's level, so each cuts the other; low never interrupts Orca and is dropped if
+# anything else speaks.
+SSIP_PRIORITY = {"high": "message", "normal": "text", "low": "notification"}
+
+
+class SpeechDispatcherSpeaker:
+    """Offline Linux voice: speech-dispatcher (ships with Ubuntu and Orca), spoken to directly over its
+    SSIP socket with the standard library, no new dependency.
+
+    Why not spd-say: its --cancel cancels every client's speech, Orca's included, and as a separate
+    process it can land after the next line and wipe that out. On our own connection, CANCEL self stops
+    only Artemis's messages, and commands are handled in order, so a cancel always lands before the
+    line that follows it. busy() and speaking() come from speech-dispatcher's own BEGIN/END events.
+    """
+
+    name = "speechd"  # what Announcer.speaking_engine() reports (#141, the wake word)
+    REPLY_TIMEOUT_S = 1.0
+    RETRY_S = 5.0  # after a failed connect, don't try again on every announce
+
+    def __init__(self, connect=None, clock: Callable[[], float] = time.monotonic) -> None:
+        self._connect = connect or _speechd_connect
+        self._clock = clock
+        self._sock = None
+        self._failed_at: float | None = None
+        self._send_lock = threading.Lock()
+        self._replies: queue.Queue = queue.Queue()
+        self._queued: set[str] = set()  # message ids speech-dispatcher still has for us
+        self._playing = threading.Event()
+        self._state = threading.Lock()
+        self._level: str | None = None  # the SSIP priority last set on this connection
+
+    # connection
+
+    def _ensure(self):
+        if self._sock is not None:
+            return self._sock
+        if self._failed_at is not None and self._clock() - self._failed_at < self.RETRY_S:
+            return None
+        try:
+            sock = self._connect()
+            self._sock = sock
+            threading.Thread(target=self._read, args=(sock,), name="artemis-speechd", daemon=True).start()
+            self._command("SET self CLIENT_NAME user:artemis:voice")
+            self._command("SET self NOTIFICATION all on")
+            self._failed_at = None
+            return sock
+        except Exception as e:  # no speech-dispatcher: the router falls back to silence
+            log.warning("speech-dispatcher is not reachable: %s", type(e).__name__)
+            self._drop()
+            self._failed_at = self._clock()
+            return None
+
+    def _drop(self) -> None:
+        sock, self._sock = self._sock, None
+        self._level = None  # a new connection starts at speech-dispatcher's default again
+        with self._state:
+            self._queued.clear()
+        self._playing.clear()
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _send(self, *lines: str) -> None:
+        self._sock.sendall("".join(line + "\r\n" for line in lines).encode("utf-8"))
+
+    def _reply(self) -> list[str]:
+        lines = self._replies.get(timeout=self.REPLY_TIMEOUT_S)
+        if not lines[-1][:1] == "2":  # 2xx is success; 3xx/4xx/5xx are errors
+            raise OSError(f"speech-dispatcher said {lines[-1][:3]}")
+        return lines
+
+    def _command(self, line: str) -> list[str]:
+        with self._send_lock:
+            self._send(line)
+            return self._reply()
+
+    def _read(self, sock) -> None:
+        """Reader thread: split replies (to the waiting command) from events (7xx, which update state)."""
+        buffer, block = b"", []
+        try:
+            while True:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                buffer += data
+                while b"\r\n" in buffer:
+                    raw, buffer = buffer.split(b"\r\n", 1)
+                    line = raw.decode("utf-8", "replace")
+                    block.append(line)
+                    if len(line) >= 4 and line[3] == "-":
+                        continue  # more lines of this block follow
+                    if line.startswith("7"):
+                        self._event(block)
+                    else:
+                        self._replies.put(block)
+                    block = []
+        except OSError:
+            pass
+        if self._sock is sock:
+            self._drop()
+
+    def _event(self, block: list[str]) -> None:
+        code = block[-1][:3]
+        msg_id = block[0][4:] if len(block) > 1 else ""
+        if code == "701":  # BEGIN
+            self._playing.set()
+        elif code in ("702", "703"):  # END, CANCELED
+            with self._state:
+                self._queued.discard(msg_id)
+                if not self._queued:
+                    self._playing.clear()
+
+    # Speaker protocol
+
+    def available(self) -> bool:
+        return self._ensure() is not None
+
+    def speak(self, text: str, interrupt: bool, priority: Priority | None = None) -> None:
+        if self._ensure() is None:
+            return
+        # SSIP data: one line per line; a line that starts with "." gets a second "." (dot-stuffing).
+        lines = [("." + line) if line.startswith(".") else line for line in text.replace("\r", "").split("\n")]
+        level = SSIP_PRIORITY.get(priority or ("high" if interrupt else "normal"), "text")
+        try:
+            with self._send_lock:
+                if interrupt:
+                    self._send("CANCEL self")  # only Artemis's own messages; never Orca's
+                    self._reply()
+                    with self._state:
+                        self._queued.clear()
+                    self._playing.clear()
+                if level != self._level:  # one round trip only when the level changes
+                    self._send(f"SET self PRIORITY {level}")
+                    self._reply()
+                    self._level = level
+                self._send("SPEAK")
+                self._reply()  # 230 OK RECEIVING DATA
+                self._send(*lines, ".")
+                queued = self._reply()  # 225-<msg id> / 225 OK MESSAGE QUEUED
+            # A notification can be discarded silently, with no END or CANCELED event, so it is never
+            # counted: otherwise busy() would stay true for the session and every later low line be lost.
+            if len(queued) > 1 and level != "notification":
+                with self._state:
+                    self._queued.add(queued[0][4:])
+        except Exception as e:
+            log.warning("speech-dispatcher failed to speak: %s", type(e).__name__)
+            self._drop()
+
+    def cancel(self) -> None:
+        if self._sock is None:
+            return
+        try:
+            self._command("CANCEL self")
+        except Exception:
+            self._drop()
+            return
+        with self._state:
+            self._queued.clear()
+        self._playing.clear()
+
+    def busy(self) -> bool:
+        with self._state:
+            return bool(self._queued)
+
+    def speaking(self) -> bool:
+        """Audio is playing now: between speech-dispatcher's BEGIN and END events for our message."""
+        return self._playing.is_set()
+
+
+def _speechd_connect():
+    """Connect to speech-dispatcher's socket, starting it once (argv only) if it isn't running yet."""
+    import socket
+
+    address = os.environ.get("SPEECHD_ADDRESS", "")
+    if address.startswith("unix_socket:"):
+        path = Path(address.split(":", 1)[1])
+    else:
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        path = Path(runtime) / "speech-dispatcher" / "speechd.sock"
+    if not path.exists():
+        spawn = shutil.which("speech-dispatcher")
+        if spawn is None:
+            raise FileNotFoundError("speech-dispatcher")
+        subprocess.run([spawn, "--spawn"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=5, check=False)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(None)
+    sock.connect(str(path))
+    return sock
 
 
 class _Fallback:
@@ -599,7 +822,9 @@ class Announcer:
     def __init__(self, nvda: Speaker | None = None, sapi: Speaker | None = None, is_nvda_running: Callable[[], bool] = nvda_running,
                  eleven: Speaker | None = None) -> None:
         self.nvda = nvda or NvdaSpeaker()
-        self.sapi = sapi or SapiSpeaker()
+        # The local voice: SAPI on Windows, speech-dispatcher elsewhere. NVDA only ever runs on Windows
+        # (nvda_running() is False elsewhere), so on Linux the order is ElevenLabs, offline, silence.
+        self.sapi = sapi or (SapiSpeaker() if sys.platform == "win32" else SpeechDispatcherSpeaker())
         self.is_nvda_running = is_nvda_running
         self.engine = voice_engine()
         if eleven is None and self.engine == "elevenlabs":
@@ -718,7 +943,10 @@ class Announcer:
             return  # contracts.md: low may be dropped while speech is busy
         if priority != "low":
             self.last = text
-        speaker.speak(text, interrupt=priority == "high")
+        if isinstance(speaker, SpeechDispatcherSpeaker):  # the level decides who may cut whom; no probe of other speakers
+            speaker.speak(text, interrupt=priority == "high", priority=priority)
+        else:  # NVDA, SAPI, ElevenLabs: unchanged
+            speaker.speak(text, interrupt=priority == "high")
 
     async def stop_speech(self) -> None:
         self.current().cancel()
