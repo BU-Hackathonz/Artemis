@@ -61,8 +61,8 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 |---|---|
 | `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal unless it starts a task (then it is silent and "Working on: …" says the same words once, §5.1); an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
 | `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
-| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`) is `progress` at `low` |
-| `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval` |
+| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`, then 6 s, then every 9 s while nothing else is said) is `progress` at `low`. A sentence the agent writes beside a tool call is said as `progress` at `low` |
+| `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval`. Still open 10 s later, it is said once more, when Artemis is quiet, as an `agent.message` `progress` at high: "Still waiting for your approval. <summary>" (**Proposed (David)**) |
 | `approval.resolved` | `{approval_id, decision: "approve"\|"reject", by: "user"\|"invalidated"}`, not announced. An invalidated one (files changed, or the task was canceled) carries `"reject"` |
 | `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}`, announced "Created main.py, 1 line." at normal. No tool deletes, so `deleted` is never sent today |
 | `run.result` | `{op_id, preset, exit_code, timed_out, duration_ms, stdout_tail, stderr_tail, truncated}`, announced at high by the gateway (§4 samples 4 and 5). `exit_code` is null when the run timed out |
@@ -408,6 +408,9 @@ It starts nothing that typing couldn't, and every write and run still needs a ke
 - Speech that doesn't start with the wake phrase is never kept or logged; only its word count is.
 - `voice.activity` is `listening` from a bare "Hey Artemis" until the request or the window's end,
   never while it is only waiting for the phrase.
+- A task that ends with a question (its answer ends with "?") opens the same window, with the
+  listening tone, for 10 s once the question has been said: the reply needs no "Hey Artemis"
+  (**Proposed (David)**).
 - Push-to-talk keeps working alongside. Without the variable nothing changes.
 
 ## 6. Launcher and launch token (decided 2026-11-14)
@@ -618,6 +621,8 @@ Opening apps and paths runs in the core (`gtk-launch`, `gio open`), with or with
   Any other tool called first fails with `plan_required`. The agent may call `plan` again to re-plan,
   for example after a rejection.
 - The core emits `agent.plan {goal, steps}` once per plan. The island lists the steps up front.
+  It is announced at normal: the steps' `say` in order (the first four, then "Then N more steps, in
+  the panel."), with "New plan." before a re-plan (**Proposed (David)**).
 - **The ring follows real tool calls, never the plan alone.** On each tool call, the gate emits
   `ring.cue {step?, action, target?}`: the matching plan step, if there is one, and what is really
   happening. When the task ends it emits `ring.cue {action: "done"}`. The island moves the ring to

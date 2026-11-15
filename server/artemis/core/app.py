@@ -138,6 +138,7 @@ class Core:
             on_project=self._on_project,
             heartbeat_s=self.heartbeat_s,
             prefs_path=self.prefs_path,
+            on_question=self.expect_reply,
         )
         self.sessions[sid] = session
         return session
@@ -269,6 +270,12 @@ class Core:
             log.warning("Wake word: a request was heard before any session; ignoring it")
             return
         self.spawn(session.spoken(text, new_id("cr")))
+
+    def expect_reply(self) -> None:
+        """A task ended with a question: with the wake word on, the reply needs no "Hey Artemis". The
+        listener opens its window once the question has been said (the listening tone marks it)."""
+        if self.wake is not None:
+            self.wake.expect_reply()
 
     def start_wake(self) -> None:
         """Start hands-free listening if ARTEMIS_LISTEN_MODE=wake and the voice can transcribe."""
