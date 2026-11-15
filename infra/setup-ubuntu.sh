@@ -207,6 +207,21 @@ else
     rm -rf -- "$dest"
     mkdir -p -- "$dest"
     cp -rL -- "$EXT_DIR/." "$dest/"
+    # GNOME Shell loads settings from schemas/gschemas.compiled, which is not in git. Without it the
+    # extension fails to enable (State: ERROR, GLib.FileError), so compile it on every install.
+    if compgen -G "$dest/schemas/*.gschema.xml" >/dev/null; then
+        command -v glib-compile-schemas >/dev/null 2>&1 \
+            || die "glib-compile-schemas was not found. Install it with: sudo apt-get install -y libglib2.0-bin"
+        glib-compile-schemas --strict "$dest/schemas" \
+            || die "glib-compile-schemas could not compile the extension's settings in $dest/schemas."
+        [[ -f "$dest/schemas/gschemas.compiled" ]] \
+            || die "glib-compile-schemas ran but $dest/schemas/gschemas.compiled is missing."
+        note "   Compiled the extension's settings (schemas/gschemas.compiled)."
+    fi
+    # Record which checkout was installed, so a stale copy is easy to spot after a pull.
+    commit="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    printf '%s\n' "$commit" > "$dest/installed-from"
+    note "   Installed the extension from commit $commit (written to $dest/installed-from)."
     if command -v gnome-extensions >/dev/null 2>&1; then
         if gnome-extensions enable "$uuid" 2>/dev/null; then
             note "   Enabled $uuid with gnome-extensions."
@@ -220,6 +235,8 @@ else
         note "   You are on Wayland: log out and log back in so GNOME Shell loads the extension, then run:"
         note "     gnome-extensions enable $uuid"
     fi
+    note "   Check it loaded: gnome-extensions info $uuid   (it must say State: ACTIVE)."
+    note "   Check it is current: cat $dest/installed-from   (must match: git -C $REPO rev-parse --short HEAD)."
 fi
 
 note ""

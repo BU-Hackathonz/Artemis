@@ -125,9 +125,9 @@ async def test_types_into_the_approved_window(launch):
         for kind in order:
             at = seq.index(kind, at + 1)
         cues = [e["data"] for e in island.events if e["type"] == "ring.cue" and e["task_id"] == tid]
-        assert [c["action"] for c in cues] == ["type", "done"]
-        assert cues[0]["target"] == "notes.txt in TextEditor"
-        assert seq.index("ring.cue") > seq.index("approval.resolved")
+        assert [c["action"] for c in cues] == ["think", "type", "done"]  # the plan's think, the type, the done
+        assert cues[1]["target"] == "notes.txt in TextEditor"
+        assert seq.index("ring.cue", seq.index("approval.resolved")) > seq.index("approval.resolved")
         assert [e["data"]["action"] for e in island.events if e["type"] == "ring.cue"].count("done") == 1
 
         # the session log keeps the op, never the text

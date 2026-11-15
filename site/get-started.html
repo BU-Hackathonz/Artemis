@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <title>Get started | artemis.</title>
-<meta name="description" content="What you need to run Artemis on Windows, and how to set it up.">
+<meta name="description" content="What you need to run Artemis on Ubuntu, and how to set it up.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
 <script src="motion.js" defer></script>
@@ -32,47 +32,50 @@
 <div class="wrap">
   <div class="page-head">
     <h1>Get started</h1>
-    <p class="lede">Artemis runs on Windows 11. Setup is a few commands in a terminal.</p>
+    <p class="lede">Artemis runs on Ubuntu 24.04 with the GNOME desktop. Setup is a few commands in a terminal.</p>
   </div>
 
   <section class="block panel prose" aria-labelledby="status-title">
     <h2 id="status-title">Before you start</h2>
     <div class="status">
-      <p>Artemis is in active development. The launcher starts the core and the desktop app together, with a scripted agent or, with your Anthropic API key, Claude.</p>
+      <p>Artemis is in active development. The launcher starts the core, and the notch at the top of your screen connects to it. It uses a scripted agent or, with your Anthropic API key, Claude.</p>
     </div>
   </section>
 
   <section class="block panel prose" aria-labelledby="needs-title">
     <h2 id="needs-title">What you need</h2>
     <ul>
-      <li>Windows 11 and a microphone</li>
-      <li><a href="https://www.nvaccess.org/download/">NVDA</a>, the free screen reader, recommended</li>
-      <li>Python 3.12 and <a href="https://docs.astral.sh/uv/">uv</a></li>
-      <li>Git and Node.js</li>
-      <li>For the desktop app: Rust and the Microsoft C++ Build Tools</li>
+      <li>Ubuntu 24.04 (GNOME 46) and a microphone</li>
+      <li>Orca, the screen reader that comes with Ubuntu (turn it on with <kbd>Super</kbd>+<kbd>Alt</kbd>+<kbd>S</kbd>)</li>
+      <li>Git</li>
+      <li>Optional: an ElevenLabs API key, for the Morgan voice. Without one, the offline voice speaks.</li>
     </ul>
   </section>
 
-  <section class="block panel prose" aria-labelledby="voice-title">
-    <h2 id="voice-title">Set up voice</h2>
-    <p>Get the code and install the core with its voice tools:</p>
+  <section class="block panel prose" aria-labelledby="setup-title">
+    <h2 id="setup-title">Set up once</h2>
+    <p>Get the code and run the setup script. It says what each step does before it does it, asks before installing anything except system packages, and never asks for an API key:</p>
 <pre tabindex="0"><code>git clone https://github.com/BU-Hackathonz/Artemis.git
-cd Artemis/server
-uv sync --group voice --group dev --group security</code></pre>
-    <p>Download the speech model and NVDA's connector once, before you need them:</p>
-<pre tabindex="0"><code>uv run --group voice python -m artemis.voice.setup</code></pre>
-    <p>Check your microphone. It asks you to speak for four seconds, then says what it heard:</p>
-<pre tabindex="0"><code>uv run --group voice python -m artemis.voice.listen</code></pre>
+cd Artemis
+bash infra/setup-ubuntu.sh</code></pre>
+    <p>Install the notch, then log out and back in so GNOME finds it:</p>
+<pre tabindex="0"><code>client/prototypes/water-desktop/install.sh</code></pre>
+    <p>After you log back in, turn it on:</p>
+<pre tabindex="0"><code>gnome-extensions enable artemis-water@bu-hackathonz.github.io</code></pre>
   </section>
 
-  <section class="block panel prose" aria-labelledby="app-title">
-    <h2 id="app-title">Try the desktop app</h2>
-    <p>Install the app's packages once, from the <code>client</code> folder:</p>
-<pre tabindex="0"><code>npm ci</code></pre>
-    <p>Then, from the repository folder, start the core and the desktop app together:</p>
-<pre tabindex="0"><code>powershell -ExecutionPolicy Bypass -File infra\start.ps1</code></pre>
-    <p>It uses a scripted agent that always makes a Hello World program; the file and the run are real and still need your approval. Add <code>-Agent claude</code>, with an Anthropic API key set in that window, to use Claude.</p>
-    <p>To practise the approval flow without the core, run <code>npm run dev</code> in <code>client</code>, open <code>http://127.0.0.1:1420</code> in a browser and choose <strong>Try in-memory demo</strong>. It creates no files and runs no code.</p>
+  <section class="block panel prose" aria-labelledby="run-title">
+    <h2 id="run-title">Start Artemis</h2>
+    <p>From the repository folder, start the core with &ldquo;Hey Artemis&rdquo; on:</p>
+<pre tabindex="0"><code>ARTEMIS_LISTEN_MODE=wake infra/start.sh</code></pre>
+    <p>Push-to-talk (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>) works with or without the wake word. Leave out <code>ARTEMIS_LISTEN_MODE=wake</code> to use push-to-talk only.</p>
+    <p>It uses a scripted agent that always makes a Hello World program; the file and the run are real and still need your approval. Add <code>--agent claude</code> to use Claude. It asks for your Anthropic API key with a hidden prompt and never saves it.</p>
+    <p>For the Morgan voice, set <code>ELEVENLABS_API_KEY</code> in that terminal before you start. Keep the key to yourself: never paste it into a chat, an issue or a file in the repository.</p>
+  </section>
+
+  <section class="block panel prose" aria-labelledby="win-title">
+    <h2 id="win-title">On Windows</h2>
+    <p>The Windows 11 build speaks through NVDA. Setup steps are in <a href="https://github.com/BU-Hackathonz/Artemis/blob/main/infra/README.md">infra/README.md</a>.</p>
   </section>
 </div>
 </main>

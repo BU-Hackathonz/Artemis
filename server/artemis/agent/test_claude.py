@@ -498,10 +498,10 @@ def test_system_prompt_is_frozen_and_covers_the_rules():
     assert "202" not in SYSTEM_PROMPT  # no dates or timestamps: the prompt must cache
 
 
-# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when the agent planned
-# first and gained the desktop tools, contracts.md §9 and §10, on top of the two-sentence answers) as it
+# sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when code went into files
+# and VS Code was opened with open_path, not typed, on top of the plan and the desktop tools) as it
 # is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "3c12d33fc63f27ff6859830f547e0d143bcb0954c2daacb1575dd4ca2877f785"
+MAIN_SYSTEM_PROMPT_SHA256 = "ed64f9cd320cdc4344cd47d21b2344f0bb235a222883471b04640f1eff7d7283"
 
 
 def test_spoken_answers_are_short_and_true_to_the_tool_results():
@@ -520,6 +520,15 @@ def test_a_rejected_change_is_not_proposed_again_unless_asked():
     assert "Both hold for the rest of the conversation" in flat
     assert "unless the developer asks for it in words" in flat
     assert "this is the one case where you ask before calling a tool" in flat
+
+
+def test_code_goes_into_files_and_vs_code_is_opened_not_typed():
+    flat = " ".join(SYSTEM_PROMPT.split())
+    assert "Code goes into files, never into a window." in flat
+    assert "Create and change code with write_files and edit_file" in flat
+    assert "Use type_text and press_keys only for text the developer asked you to type into another app" in flat
+    assert "with open_path and with_app set to VS Code" in flat
+    assert "Opening an app or a file in the usual folders happens right away" in flat
 
 
 def test_flag_off_system_prompt_is_mains():

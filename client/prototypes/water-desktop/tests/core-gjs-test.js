@@ -92,6 +92,10 @@ async function testLive(dir) {
     const sid1 = client.sessionId;
     check(typeof sid1 === 'string' && connectedLog.length === 1 && connectedLog[0].on === true,
         'connect: onConnected(true, sid) once for the new session');
+    check(await client.ready(null, {desktop: true}) === true,
+        'ready: the core accepts desktop:true');
+    check(await client.desktopResult('op_not_pending', {ok: false, message: 'test'}) === 'gone',
+        'desktop: an op that is not pending is gone (404), not an error');
 
     // Two submits sent together: one starts a task, the other finds it active.
     const [a, b] = await Promise.all([client.submitTask(TASK_TEXT), client.submitTask(TASK_TEXT)]);
