@@ -166,6 +166,10 @@ async def test_approve_by_voice_writes_the_project_file(tmp_path, monkeypatch):
     monkeypatch.setattr("artemis.conversation.controller.VOICE_REVEAL_S", 0)
     w = await at_first_approval(tmp_path, conversation=True)
     approval = w.pending()
+    for _ in range(100):  # the core marks the summary heard once Artemis is quiet after it
+        if (w.session.conversation.open_approval or {}).get("at") is not None:
+            break
+        await asyncio.sleep(0.02)
     await w.say("Approve.")
     for _ in range(50):
         if list((tmp_path / "projects").glob("**/*.py")):
@@ -399,3 +403,20 @@ async def test_yes_with_nothing_to_approve_is_neither_queued_nor_run(tmp_path):
     await w.until(lambda: not w.session.active_task)
     await asyncio.sleep(0.05)
     assert len(w.tasks()) == 1 and [t.request for t in agent.seen] == ["build a to-do app"]
+
+
+async def test_a_summary_cut_off_by_push_to_talk_is_not_heard(tmp_path, monkeypatch):
+    """Yaovi's #196 review: the summary is queued (#192) and push-to-talk cuts speech, so the reveal
+    guard starts only when Artemis falls silent with no one talking. Cut off, "approve" reads it again."""
+    monkeypatch.setattr("artemis.core.session.APPROVAL_HEARD_START_S", 0.5)
+    speaking = {"on": True}
+    w = await at_first_approval(tmp_path, conversation=True)
+    monkeypatch.setattr(w.session, "_speaking", lambda: speaking["on"])
+    monkeypatch.setattr(w.session, "_listening", lambda: not speaking["on"])
+    await asyncio.sleep(0.6)
+    speaking["on"] = False  # push-to-talk: speech stops and the mic opens
+    await asyncio.sleep(0.3)
+    assert w.session.conversation.open_approval["at"] is None
+    await w.say("Approve.")
+    assert w.voice.spoken[-1].startswith("Let me read it first.")
+    assert w.pending() is not None and not list((tmp_path / "projects").glob("**/*.py"))

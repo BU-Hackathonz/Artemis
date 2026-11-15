@@ -60,6 +60,7 @@ class Decision:
     priority: Literal["low", "normal", "high"] = "normal"
     text: str | None = None  # the developer's words, unchanged, for submit and queue
     delta: int = 0
+    rearm_heard: bool = False  # the approval's summary is said again: the core waits for it to be heard
     verdict: Literal["approve", "reject"] | None = None  # "decide" only
     approval_id: str | None = None
     approval_hash: str | None = None
@@ -181,7 +182,9 @@ class Controller:
             self.approval = data.get("summary") or "An approval is open."
             self.open_approval = {
                 "id": data.get("approval_id"), "hash": data.get("approval_hash"), "kind": data.get("kind"),
-                "blocking": bool(data.get("blocking")), "at": self._clock(),
+                # "at" is when its summary was heard: set by the core once Artemis falls silent after
+                # saying it (approval_heard), never while it is still queued or was cut off.
+                "blocking": bool(data.get("blocking")), "at": None,
             }
             # The approval carries the findings that apply to what it proposes. A clean one replaces
             # an earlier finding, which is no longer true of the code about to be written or run.
@@ -223,6 +226,12 @@ class Controller:
 
     # ----- what the developer said -----
 
+    def approval_heard(self, approval_id: str) -> None:
+        """The core heard Artemis finish the summary of this approval: the reveal guard starts now."""
+        a = getattr(self, "open_approval", None)
+        if a is not None and a.get("id") == approval_id and a.get("at") is None:
+            a["at"] = self._clock()
+
     def _voice_decision(self, words: str) -> Decision:
         """An approval word while an approval is open. "approve" decides a clean project write or run,
         "reject" decides any approval, and "yes" or "no" never decide anything: a misheard "yes" must
@@ -232,15 +241,20 @@ class Controller:
             return Decision("approval_word", "say", KEYBOARD_ONLY, "high")  # an approval voice can't name
         if words not in VOICE_APPROVE | VOICE_REJECT:
             return Decision("approval_word", "say", VOICE_WORDS, "high")  # "yes" and "no" never decide
-        if self._clock() - a["at"] < VOICE_REVEAL_S:
-            return Decision("approval_word", "say", "Let me finish reading it first. Then say approve or reject.", "high")
-        if words in VOICE_REJECT:
+        if words in VOICE_REJECT:  # rejecting is always safe, heard or not
             return Decision("approval_word", "decide", "Rejected.", "high", verdict="reject",
                             approval_id=a["id"], approval_hash=a["hash"])
         if a["kind"] not in VOICE_APPROVABLE or a["blocking"]:
             why = "the security scan flagged it" if a["blocking"] else "it reaches outside the project"
             return Decision("approval_word", "say",
                             f"That one needs the keyboard, because {why}. Press Enter on the dialog to approve, or say reject.", "high")
+        if a["at"] is None:
+            # Not heard yet: still queued behind other speech, or push-to-talk cut it off. Say it now.
+            summary = self.approval or "An approval is open."
+            return Decision("approval_word", "say", f"Let me read it first. {summary} Then say approve or reject.",
+                            "high", rearm_heard=True)
+        if self._clock() - a["at"] < VOICE_REVEAL_S:
+            return Decision("approval_word", "say", "Let me finish reading it first. Then say approve or reject.", "high")
         return Decision("approval_word", "decide", "Approved.", "high", verdict="approve",
                         approval_id=a["id"], approval_hash=a["hash"])
 

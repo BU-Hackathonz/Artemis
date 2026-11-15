@@ -235,7 +235,30 @@ def open_approval(kind="write_files", blocking=False):
     c.observe(event("task.state", state="awaiting_approval"))
     c.observe(event("approval.requested", summary=APPROVAL, approval_id="apr_1", approval_hash="sha256:x",
                     kind=kind, blocking=blocking))
+    c.approval_heard("apr_1")  # Artemis finished saying it (the core tells the controller)
     return c, clock
+
+
+def test_approve_before_the_summary_was_heard_reads_it_first():
+    """Queued behind a long answer, or cut off by push-to-talk: "approve" never decides an
+    approval whose summary wasn't heard. It gets the summary read, then counts once that is heard."""
+    clock = Clock()
+    c = Controller(clock=clock)
+    c.begin("tsk_1", "build a to-do app")
+    c.observe(event("task.state", state="awaiting_approval"))
+    c.observe(event("approval.requested", summary=APPROVAL, approval_id="apr_1", approval_hash="sha256:x",
+                    kind="write_files", blocking=False))
+    clock.t += 30  # however long it has been open
+    d = c.decide("approve")
+    assert d.action == "say" and d.rearm_heard and APPROVAL in d.say
+    assert c.decide("reject").action == "decide"  # rejecting never waits
+    c.approval_heard("apr_2")  # another approval's: ignored
+    assert c.decide("approve").action == "say"
+    c.approval_heard("apr_1")
+    assert c.decide("approve").action == "say"  # heard just now: the reveal guard still runs
+    clock.t += 2
+    d = c.decide("approve")
+    assert d.action == "decide" and d.verdict == "approve" and d.approval_id == "apr_1"
 
 
 @pytest.mark.parametrize("said", ["yes", "Yes.", "no", "okay", "sure"])
