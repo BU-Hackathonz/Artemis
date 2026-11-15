@@ -261,7 +261,8 @@ not the task, and a spoken request during a task waits its turn).
 - **Typed request while a task is active:** `POST /sessions/{sid}/tasks` returns
   `409 {error: "task_active", task_id}`. No second task starts.
 - **Spoken request while a task is active:** the core still emits `transcript.final` (so the text
-  stays in the editable field) but doesn't create a task. It emits `error`
+  stays in the log; since #151 the client no longer copies it into the request field, where a stray
+  Enter could resend it) but doesn't create a task. It emits `error`
   `{code: "task_active", message, recovery}` with `announce` at `high`:
   "Still working on the last request. Say cancel to stop it, or wait."
 - **Spoken control words.** The core checks the final transcript (the voice has already stripped a
