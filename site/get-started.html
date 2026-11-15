@@ -38,7 +38,7 @@
   <section class="block panel prose" aria-labelledby="status-title">
     <h2 id="status-title">Before you start</h2>
     <div class="status">
-      <p>Artemis is in active development. Today you can try the voice tools and the desktop app's simulated demo. The one-step launcher that starts everything together is in review now.</p>
+      <p>Artemis is in active development. The launcher starts the core and the desktop app together, with a scripted agent or, with your Anthropic API key, Claude.</p>
     </div>
   </section>
 
@@ -67,10 +67,12 @@ uv sync --group voice --group dev --group security</code></pre>
 
   <section class="block panel prose" aria-labelledby="app-title">
     <h2 id="app-title">Try the desktop app</h2>
-    <p>From the <code>client</code> folder:</p>
-<pre tabindex="0"><code>npm ci
-npm run tauri dev</code></pre>
-    <p>Choose <strong>Try in-memory demo</strong> to practise the approval flow with a simulated assistant. It creates no files and runs no code.</p>
+    <p>Install the app's packages once, from the <code>client</code> folder:</p>
+<pre tabindex="0"><code>npm ci</code></pre>
+    <p>Then, from the repository folder, start the core and the desktop app together:</p>
+<pre tabindex="0"><code>powershell -ExecutionPolicy Bypass -File infra\start.ps1</code></pre>
+    <p>It uses a scripted agent that always makes a Hello World program; the file and the run are real and still need your approval. Add <code>-Agent claude</code>, with an Anthropic API key set in that window, to use Claude.</p>
+    <p>To practise the approval flow without the core, run <code>npm run dev</code> in <code>client</code>, open <code>http://127.0.0.1:1420</code> in a browser and choose <strong>Try in-memory demo</strong>. It creates no files and runs no code.</p>
   </section>
 </div>
 </main>

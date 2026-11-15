@@ -1,10 +1,15 @@
 # Demo runbook
 
+**On stage, use the one-page [stage runbook](stage-runbook.md).** This file has the details behind it.
+
 How to set up the demo laptop, run the five-part demo for judges, and rehearse it with your eyes
 closed. Spoken lines in quotes are the exact text the core produces (from
-`server/artemis/policy/gateway.py`, `server/artemis/core/session.py` and
-`server/artemis/echo/check.py`). Lines marked *(model)* are written by Claude and vary from run to
-run.
+`server/artemis/policy/gateway.py`, `server/artemis/core/session.py`, `server/artemis/core/app.py`,
+`server/artemis/echo/check.py` and, with `-Conversation`, `server/artemis/conversation/controller.py`).
+Lines marked *(model)* are written by Claude and vary from run to run. Progress lines ("Starting
+project …", "Opening project …", "Reading …", "Checking … for accessibility.", "Scanning … for
+security problems.", "Running main.py.") are low priority: NVDA always speaks them, SAPI skips one
+that arrives while it is still talking. All of them are in the activity log.
 
 > **Pitch line** (docs/architecture.md, Phase 5): Artemis proves its results. Every change is
 > approved and bound to the exact edit, every run is real, and Echo Check reports the real
@@ -69,11 +74,21 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    cd client; npm ci; cd ..
    ```
    Echo Check uses Edge or Chrome if Playwright's Chromium isn't installed.
+   Speech: `$env:ARTEMIS_WHISPER_MODEL` (default `small.en`; `medium.en` is more accurate, slower). Opt-in, off by default: `$env:ARTEMIS_WHISPER_BEAM='5'` (default 1), `$env:ARTEMIS_PTT_POST_ROLL='0.35'` (seconds the mic stays open after release; default 0) and `$env:ARTEMIS_WHISPER_PROMPT='natural'` (spoken-style prompt).
+   Use the opt-in ones on stage only after row 3 passes word for word with them on, on this laptop. Set them in the same window before `artemis.voice.setup` (so it downloads that model) and `start.ps1`.
 3. **NVDA.** Decide on or off before starting, and rehearse the same way.
    - On (recommended, it is what our users run): the core speaks through NVDA's controller DLL in
      the user's NVDA voice. If the DLL is missing, the core goes silent and the app's activity log
      speaks through NVDA instead.
    - Off: the core speaks with Windows SAPI. Never both at once.
+   - **Clearer voice (NVDA on).** What you hear is NVDA's own synthesizer; Artemis never changes its
+     voice or rate (in conversation mode "faster" and "slower" only say so), so tune NVDA first: NVDA
+     menu (NVDA+N) → Preferences → Settings → Speech (NVDA+Control+V). **Change...** picks the
+     synthesizer: Windows OneCore voices (NVDA's default) or eSpeak NG (built into NVDA). Then try
+     each **Voice**, set **Rate** (0 to 100) to a pace judges can follow, and leave **Rate boost**
+     off. More OneCore voices: Windows Settings → Time & language → Speech → Manage voices →
+     Add voices, then restart NVDA. Without NVDA the core uses SAPI: the Windows default voice and
+     rate unless `ARTEMIS_SAPI_VOICE` / `ARTEMIS_SAPI_RATE` are set (`infra/README.md`).
 4. **Global shortcut.** Quit apps that may take Ctrl+Shift+Space as a global shortcut (desktop
    assistants' quick-entry keys are likely suspects). Start Artemis and listen: if it says the
    push-to-talk shortcut couldn't be registered, apply another chord (see Keys above) before the
@@ -100,8 +115,10 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    ```powershell
    powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude
    ```
-   Wait for "Core is ready." and the app window. Focus lands in the request field. Core log:
-   `%LOCALAPPDATA%\Artemis\logs\core.log`.
+   Wait for "Core is ready." (printed in the PowerShell window) and the app window. Focus lands in
+   the request field and Artemis says "Artemis is ready. Hold Control Shift Space and speak, or type
+   a request." (if no shortcut registered: "Artemis is ready. Use the Start listening button and
+   speak, or type a request."). Core log: `%LOCALAPPDATA%\Artemis\logs\core.log`.
 9. **Smoke test** before the judges arrive: run demo 1, then re-run `setup-demo.ps1` and restart.
 10. Volume up, notifications off (Focus assist), laptop on power, screen mirrored for the judges.
 
@@ -113,14 +130,18 @@ before/after comparison is kept in memory for the session.
 ### 1. Hello World
 
 - **Type** (or hold the push-to-talk shortcut, Ctrl+Shift+Space by default, and say "Artemis, create a Python
-  program that prints Hello World"; release):
+  program that prints Hello World, and run it"; release):
   `Create a Python program that prints Hello World, and run it.`
 - **Hear:**
   1. (voice only) "Heard: create a Python program that prints Hello World, and run it"
+     (the transcript as Whisper wrote it, wake word removed)
   2. "Working on: Create a Python program that prints Hello World, and run it."
+     (typed; for a spoken request it repeats the transcript: "Working on: create a Python program …")
   3. "Starting project hello-world."
   4. "Create project hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject."
-     (the line count is whatever Claude wrote; "No security findings" only when the scan from #11 is present)
+     (the project name and line count are whatever Claude chose; if an earlier `hello-world` is still
+     there, it is `hello-world-2`, `hello-world-3` and so on; "No security findings" only when the
+     scan from #11 is present)
 - **Keys:** Enter (approve the write).
 - **Hear:** "Created main.py, 1 line." then "Run main.py with Python. No security findings. Enter to run, Escape to reject."
 - **Keys:** Enter (approve the run).
@@ -131,10 +152,16 @@ before/after comparison is kept in memory for the session.
   ran for real, with a separate Python, no API keys in its environment and a 10 second limit.
 - **Fallbacks:**
   - Mic misbehaves: type the request. Typing is always available.
-  - API down or slow ("No internet connection to Claude." / "Claude is still busy. Try again in a
-    minute."): restart with `infra\start.ps1 -Agent stub`. The stub always makes `hello-world`
-    with `main.py`; files and the run are still real, but say the agent is scripted. It ends with
-    "I created hello-world with main.py and ran it. It printed Hello, World!"
+  - API down or slow ("The task failed. No internet connection to Claude. You can try again." /
+    "The task failed. Claude is still busy. Try again in a minute. You can try again."): restart
+    with `infra\start.ps1 -Agent stub`. The stub always makes `hello-world` (or the next free
+    `hello-world-2`, `-3` …) with `main.py`; files and the run are still real, but say the agent
+    is scripted. It ends with "I created hello-world with main.py and ran it. It printed Hello,
+    World!" (with that project name)
+  - Key missing or wrong ("The task failed. The Claude API key is missing or invalid. You can
+    try again."): trying again won't help. Close Artemis, set the key again in a new PowerShell
+    window (setup step 7) and start it again. Any other API error is "The task failed. Claude
+    returned an error. You can try again."
   - App won't connect: `infra\start.ps1` prints the reason and the end of `core.log`.
 
 ### 2. A failed run, explained and fixed
@@ -145,7 +172,8 @@ before/after comparison is kept in memory for the session.
   Artemis may reuse it or start `hello-world-2`; both are fine.
 - **Hear** (high priority, interrupts other speech, before any explanation):
   "main.py failed with exit code 1. NameError: name 'pritn' is not defined. Did you mean: 'print'?"
-  (Python 3.12 and later add the "Did you mean" part; the core needs 3.12+.)
+  (the "Did you mean" part comes from the Python that runs the program, not the core's; Python
+  3.11, 3.12 and 3.13 all add it.)
   then one sentence on what went wrong *(model)*.
 - **Type:** `Fix it and run it again.`
 - **Hear:** "Change 1 file in hello-world: modify main.py, 1 line added, 1 removed. No security findings. Enter to approve, Escape to reject." (project name as above)
@@ -181,9 +209,11 @@ Optional live version (depends on what Claude writes):
 - **Type:** `Start a new project called runner, and add a function that runs a shell command the user types.`
 - If Claude writes `subprocess.call(command, shell=True)`, the **write** is blocked before the file
   touches the disk: "Blocked: 1 high-severity issue, main.py line 5, subprocess call with
-  shell=True identified, security issue. Create project runner with 1 file: ... Escape to reject,
-  or use the override key to approve anyway." Escape; Claude proposes a version with `shlex.split`
-  and no shell, which only has low-severity notes and is approved normally (Enter).
+  shell=True identified, security issue, and 1 more. Create project runner with 1 file: ... Escape
+  to reject, or use the override key to approve anyway." (The 1 more is Bandit's low note on
+  `import subprocess`; the line number is wherever Claude put the call.) Escape; Claude proposes a
+  version with `shlex.split` and no shell, which only has low-severity notes and is approved
+  normally (Enter).
 - If Claude writes the safe version first, nothing is blocked. Say that the model got it right and
   the gate is there for when it doesn't, then switch to the primary version.
 - **Fallback (API down):** `-Agent stub` can't do this one. Show
@@ -248,7 +278,8 @@ version is not in the project, so the agent has to make the fix.
   - Agent or API unavailable: show the merged CLI on the fixture pair (prints the outline, the
     findings and the spoken lines; NVDA reads the console):
     `cd server; uv run --group echo python -m artemis.echo ..\fixture\echo-page\before.html ..\fixture\echo-page\after.html`
-  - "Echo Check isn't installed" or "Echo Check needs a browser": re-run step 2 of the setup.
+  - "Echo Check needs a browser. Nothing was checked." (or "Echo Check isn't installed. Nothing
+    was checked."), high priority, then Claude's explanation *(model)*: re-run step 2 of the setup.
 
 ## Pass/fail sheet (demo readiness)
 
@@ -260,7 +291,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 |---|---|---|---|---|---|
 | 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | pass, Sat Nov 14, verified on Yaovi's and David's laptops (registration only; the NVDA line was not checked) |
 | 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
-| 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` is "create a Python program that prints Hello World, and run it" word for word (the wake word is stripped), or the misses are posted | Yaovi | not run |
+| 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` has the words of "create a Python program that prints Hello World, and run it" (the wake word is stripped; punctuation and capitals are ignored, Whisper never writes the comma before "and"), or the misses are posted. Try `ARTEMIS_WHISPER_PROMPT=natural` too (8/10 vs 5/10 on Yaovi's laptop) | Yaovi | not run on the demo laptop; David's laptop failed with the defaults |
 | 4 | Keyboard path to Start listening | NVDA on, Tab from the request field | Reaches **Start listening** past the enabled buttons (Repeat, Stop) and the activity log (Send and Cancel are disabled when idle) | Yaovi | not run |
 | 5 | Start listening toggle | Press, speak, press again | Same result as hold-to-talk | Yaovi | not run |
 | 6 | Demo 1 with `-Agent claude` | Run demo 1 end to end | Both approvals spoken, "Hello, World!" printed and spoken | key holder | not run |
@@ -269,7 +300,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 | 9 | Demo 4 injection | Run demo 4 | No approval dialog, `calc` still has its two files | key holder | not run |
 | 10 | Demo 5 Echo Check | Run demo 5 | "Before: 7 problems. After: 0." or the remainder read out and fixed | key holder | not run |
 | 11 | Demo 3b security scan (optional) | Run demo 3b on `old-app` | "Found 2 security issues in 1 Python file: 1 high, 1 low." and no approval dialog | key holder | not run |
-| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered; the second request gets "I'll do that next." (a typed one still gets 409). "keep it brief" is remembered at the next launch until `setup-demo.ps1 -Force` or "reset my preferences" | key holder | not run |
+| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered ("I'm not working on anything yet." before the first task; "Okay, I'll keep it brief."); the second request gets "I'll do that next." (with an approval open: "I'll do that next. A decision is still waiting: Enter to approve, Escape to reject."), then after the task "Starting the follow-up." and "Working on: …" (a typed one still gets 409). "keep it brief" is remembered at the next launch until `setup-demo.ps1 -Force` or "reset my preferences" | key holder | not run |
 | 13 | Fallbacks | `-Agent stub`, typed requests, `setup-demo.ps1 -Force` between runs | Each recovers in under a minute | anyone | not run |
 
 Launch, in order (full steps are in the setup checklist above): `setup-demo.ps1`, set the API key
@@ -286,7 +317,9 @@ the agent is scripted.
 
 Monitor off, NVDA on (or exactly as it will be on stage), one person at the keyboard, one watching
 the log and timing. Run all five demos twice, then once with a forced failure (Wi-Fi off for the
-API error, Escape on every approval).
+API error, Escape on every approval). With Wi-Fi off, "Working on: ..." (and perhaps "Still
+working.") is followed by "The task failed. No internet connection to Claude. You can try again.",
+said once, and the next request is accepted.
 
 - [ ] Every state change is spoken: request taken ("Working on: ..."), each approval, each file
       written, "Running main.py.", every result, every error, cancel.
@@ -297,7 +330,10 @@ API error, Escape on every approval).
       "Reject" for a blocked one). Enter on a blocked approval's Approve button does nothing.
 - [ ] Escape rejects every dialog, nothing is written or run, and Artemis says so *(model)*.
 - [ ] Cancel works: start a request, Tab to **Cancel task**, Enter: "Canceled." and nothing else
-      happens. During an approval, Escape is the way out.
+      happens. Cancel during a run stops the program (it and anything it started) and then says
+      "Canceled while running main.py." instead; nothing more is written. During an approval,
+      Escape is the way out; a spoken "cancel" there says "Canceled. Nothing was written." (or
+      "Nothing was run.").
 - [ ] **Repeat last speech** repeats the last line; **Stop speech** stops it.
 - [ ] Silence longer than 3 seconds: there should be none. While Artemis works, a quiet "Still
       working." comes after about 3 s; note any silence that has no cue.

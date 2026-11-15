@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -31,10 +32,17 @@ def _is_core_python(path: Path) -> bool:
         resolved = path.resolve()
     except OSError:
         return True
-    if resolved == Path(sys.executable).resolve():
-        return True
-    venv = Path(sys.prefix).resolve()
-    return sys.prefix != sys.base_prefix and venv in resolved.parents
+    in_venv = sys.prefix != sys.base_prefix
+    if in_venv:
+        # In a venv the core's interpreter is the venv's python, and on Linux and macOS that is a
+        # symlink to the base interpreter (/usr/bin/python3.12). Resolving it would make the system
+        # Python count as "ours" and refuse every candidate, so compare the venv paths as given and
+        # resolved, but never the base interpreter the link points at.
+        if _is_core_venv_path(path):
+            return True
+        return Path(sys.prefix).resolve() in resolved.parents or resolved == Path(sys.prefix).resolve()
+    # No venv: the core runs on the system interpreter itself, which user code must not share.
+    return resolved == Path(sys.executable).resolve()
 
 
 def _is_core_venv_path(path: Path) -> bool:
@@ -127,7 +135,12 @@ class _Tail:
 
     def text(self, wait_s: float = 2.0) -> str:
         self._thread.join(wait_s)
-        return bytes(self.buf).decode("utf-8", errors="replace")
+        text = bytes(self.buf).decode("utf-8", errors="replace")
+        if self.truncated:
+            # The cut can go through a secret, and the piece left after it no longer matches,
+            # so redaction would miss it. Drop the cut-off word (secrets have no whitespace).
+            text = re.sub(r"^\S*", "", text)
+        return text
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -140,6 +153,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
                 capture_output=True,
                 timeout=10,
                 stdin=subprocess.DEVNULL,
+                env=child_environ(),  # no API key, workspace ID or launch token in taskkill either
             )
         else:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -149,6 +163,27 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         proc.kill()
     except OSError:
         pass
+
+
+class _Started:
+    """The run's process, handed from the worker thread to `run()`, so a cancel can kill it."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen | None = None
+        self._canceled = False
+
+    def started(self, proc: subprocess.Popen) -> bool:
+        """Record the process. False if the run was canceled first: the thread kills it itself."""
+        with self._lock:
+            self._proc = proc
+            return not self._canceled
+
+    def cancel(self) -> subprocess.Popen | None:
+        """Mark the run canceled; the process to kill, if it has started."""
+        with self._lock:
+            self._canceled = True
+            return self._proc
 
 
 class LocalRunner:
@@ -206,9 +241,25 @@ class LocalRunner:
 
     async def run(self, project: ProjectRef, entry: str, args: list[str], timeout_s: int = 10) -> RunResult:
         # A thread, not asyncio subprocesses: uvicorn --reload's loop on Windows can't start them.
-        return await asyncio.to_thread(self._run_sync, project, entry, list(args), timeout_s)
+        handle = _Started()
+        try:
+            return await asyncio.to_thread(self._run_sync, project, entry, list(args), timeout_s, handle)
+        except asyncio.CancelledError:
+            # Canceling the await leaves the thread, and the program, running: kill the whole tree
+            # (as on timeout) before the cancel goes on, so "Canceled" is true when it's spoken.
+            proc = handle.cancel()
+            if proc is not None:
+                try:
+                    await asyncio.shield(asyncio.to_thread(_kill_tree, proc))
+                except Exception:
+                    log.exception("couldn't stop the canceled run's process tree")
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+            raise
 
-    def _run_sync(self, project: ProjectRef, entry: str, args: list[str], timeout_s: int) -> RunResult:
+    def _run_sync(self, project: ProjectRef, entry: str, args: list[str], timeout_s: int, handle: _Started) -> RunResult:
         self._inside(project, entry)
         python = self.python
         argv = [str(python), "-I", "-X", "utf8", entry, *args]
@@ -228,6 +279,8 @@ class LocalRunner:
             shell=False,
             **kwargs,
         )
+        if not handle.started(proc):
+            _kill_tree(proc)  # canceled while it was starting
         out, err = _Tail(proc.stdout), _Tail(proc.stderr)
         timed_out = False
         try:

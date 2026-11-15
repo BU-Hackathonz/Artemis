@@ -8,6 +8,7 @@
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -Agent claude    # real agent (needs ANTHROPIC_API_KEY)
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -AppPath C:\path\artemis-client.exe
   powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly        # just the core
+  powershell -ExecutionPolicy Bypass -File infra\start.ps1 -VoiceEngine nvda # NVDA speaks Artemis's lines
 #>
 [CmdletBinding()]
 param(
@@ -17,6 +18,9 @@ param(
     [ValidateSet("stub", "claude")][string]$Agent = "stub",
     [ValidateSet("whisper", "stub")][string]$Voice = "whisper",
     [switch]$Conversation,  # ARTEMIS_CONVERSATION=on: built-in phrases and follow-ups (contracts.md 5.4)
+    # Artemis's own voice (decisions.md 5a). "" keeps the environment's choice (default elevenlabs, which
+    # needs ELEVENLABS_API_KEY; without it NVDA, else SAPI). nvda or sapi: NVDA first, as before #134.
+    [ValidateSet("", "elevenlabs", "nvda", "sapi")][string]$VoiceEngine = "",
     [int]$HealthTimeoutS = 120
 )
 
@@ -78,7 +82,7 @@ function Start-Child([string]$FileName, [string]$Arguments, [string]$WorkingDire
 }
 
 # Only the core talks to Claude; the desktop app never gets the key.
-$coreOnlySecrets = @("ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID")
+$coreOnlySecrets = @("ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID", "ELEVENLABS_API_KEY")
 
 # ----- preflight -----
 
@@ -132,14 +136,17 @@ try {
     # ----- core -----
     $conversationMode = "off"
     if ($Conversation) { $conversationMode = "on" }
-    Write-Host "Starting the Artemis core on $url (agent: $Agent, voice: $Voice, conversation: $conversationMode)..."
+    $engineShown = if ($VoiceEngine) { $VoiceEngine } elseif ($env:ARTEMIS_VOICE_ENGINE) { $env:ARTEMIS_VOICE_ENGINE } else { "default" }
+    Write-Host "Starting the Artemis core on $url (agent: $Agent, voice: $Voice, speech: $engineShown, conversation: $conversationMode)..."
     $coreArgs = "/d /c uv run --project `"$Server`"$groups uvicorn artemis.core.main:app --host 127.0.0.1 --port $port > `"$CoreLog`" 2>&1"
-    $core = Start-Child "cmd.exe" $coreArgs $Server @{
+    $coreEnv = @{
         "ARTEMIS_TOKEN" = $token
         "ARTEMIS_AGENT" = $Agent
         "ARTEMIS_VOICE" = $Voice
         "ARTEMIS_CONVERSATION" = $conversationMode
     }
+    if ($VoiceEngine) { $coreEnv["ARTEMIS_VOICE_ENGINE"] = $VoiceEngine }
+    $core = Start-Child "cmd.exe" $coreArgs $Server $coreEnv
 
     $headers = @{ "Authorization" = "Bearer $token" }
     $ready = $false
@@ -156,7 +163,7 @@ try {
     if (-not $ready) {
         Show-CoreLog
         if ($core.HasExited) { Fail "the core exited before it answered /health." }
-        Fail "the core did not answer /health within $HealthTimeoutS seconds."
+        Fail "the core did not answer /health within $HealthTimeoutS seconds. On a first start, uv or the speech model may still be downloading: run it again, or add -Voice stub to start without voice input."
     }
     Write-Host "Core is ready."
 
@@ -179,6 +186,7 @@ try {
 
     # Polling instead of WaitForExit, so Ctrl+C reaches the finally block.
     $coreDied = $false
+    $appFailed = $false
     while (-not $app.HasExited) {
         if ($core.HasExited) {
             Show-CoreLog
@@ -188,12 +196,22 @@ try {
         }
         Start-Sleep -Milliseconds 500
     }
-    if (-not $coreDied) { Write-Host "The app closed. Stopping the core." }
+    if (-not $coreDied) {
+        Write-Host "The app closed. Stopping the core."
+        # A built app that crashed (a Rust panic exits with 101) must not look like a normal close,
+        # or the double-click launcher's window closes with nothing to read.
+        if ($AppPath -and $app.ExitCode -ne 0) {
+            Write-Host "The app exited with code $($app.ExitCode), so it did not close normally." -ForegroundColor Red
+            $appFailed = $true
+        }
+    }
 } finally {
     Stop-Tree $app
     Stop-Tree $core
     $token = $null
 }
 # Exit codes for wrappers such as a double-click launcher: 0 = the app was closed normally,
-# 1 = could not start, 2 = the core stopped while the app was running.
+# 1 = could not start, 2 = the core stopped while the app was running, 3 = the built app (-AppPath)
+# exited with an error code.
 if ($coreDied) { exit 2 }
+if ($appFailed) { exit 3 }

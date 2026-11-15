@@ -1,7 +1,9 @@
-"""Path policy for Windows workspaces (design D1).
+"""Path policy for workspaces on Windows and Linux (design D1).
 
 Every path a tool receives is relative to the project root and goes through `safe_resolve`
-before anything touches the disk.
+before anything touches the disk. The rules are the same on both: a backslash is a separator
+everywhere, and names Windows can't hold (device names, colons, trailing dots) are refused on
+Linux too, so a project stays portable.
 """
 
 import os
@@ -53,6 +55,10 @@ def safe_resolve(root: Path, rel: str, *, for_write: bool = False) -> Path:
         raise PathRejected(f"{rel} has a drive letter. Paths must be relative to the project.")
     if rel.startswith(("/", "\\")):
         raise PathRejected(f"{rel} is an absolute path. Paths must be relative to the project.")
+    # On Linux a backslash is an ordinary file name character, so `src\main.py` would be one
+    # file in the project root and `..\x.py` a file named that. Read it as Windows does.
+    if os.sep == "/":
+        rel = rel.replace("\\", "/")
 
     for part in re.split(r"[\\/]+", rel):
         if part in ("", ".", ".."):
@@ -71,7 +77,8 @@ def safe_resolve(root: Path, rel: str, *, for_write: bool = False) -> Path:
 
     root_resolved = root.resolve()
     resolved = Path(root_resolved, rel).resolve(strict=False)
-    # normcase because Windows is case-insensitive; the trailing separator so that
+    # normcase because Windows is case-insensitive (on Linux it changes nothing, and paths are
+    # case-sensitive there); the trailing separator so that
     # a sibling such as `root2` doesn't pass as being under `root`.
     prefix = os.path.normcase(str(root_resolved)).rstrip("\\/") + os.sep
     if not os.path.normcase(str(resolved)).startswith(prefix):
