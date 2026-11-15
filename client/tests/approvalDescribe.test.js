@@ -144,3 +144,24 @@ describe('an approval the dialog cannot show can never be approved', () => {
     expect(keyDecision(key('Return'), 'approve', a, LATE)).toBe('approve');
   });
 });
+
+describe('describeApproval, publish (contracts §9.1)', () => {
+  const base = {
+    kind: 'publish', summary: 'Publish tip-calculator to GitHub.',
+    desktop: {action: 'publish_github', target: 'octo/tip-calculator', text: 'private\nA tip splitter'},
+    files: [{path: 'index.html'}, {path: 'app.js'}],
+  };
+
+  it('names the repository, visibility, description and every file', () => {
+    const d = describeApproval(base);
+    expect(d.known).toBe(true);
+    expect(d.title).toBe('Publish to GitHub');
+    expect(d.lines).toEqual(['Repository: octo/tip-calculator, private.', 'Description: A tip splitter', 'Files (2): index.html, app.js']);
+  });
+
+  it('is unknown without files, a visibility, or the publish action', () => {
+    expect(describeApproval({...base, files: []}).known).toBe(false);
+    expect(describeApproval({...base, desktop: {...base.desktop, text: 'secret\n'}}).known).toBe(false);
+    expect(describeApproval({...base, desktop: {...base.desktop, action: 'run_command'}}).known).toBe(false);
+  });
+});
