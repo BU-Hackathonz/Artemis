@@ -269,6 +269,51 @@ def test_a_lost_connection_reconnects_on_the_next_line():
     assert len(fakes) == 2 and fakes[1].spoken == ["two"]
 
 
+
+def test_a_late_reply_from_a_dead_connection_never_answers_the_next_command():
+    # Avery's #148 review: with one queue across connections, a reply that lands after a timeout but
+    # before the socket closes answers the next connection's command, and every later reply is one behind.
+    class Stalls(FakeSpeechd):
+        def sendall(self, data):
+            if data.strip() == b"SPEAK":
+                self.commands.append("SPEAK")  # no reply in time
+                return
+            super().sendall(data)
+
+        def close(self):
+            self._reply("230 OK RECEIVING DATA")  # the late reply arrives just before the close
+            super().close()
+
+    first, second = Stalls(), FakeSpeechd()
+    conns = [first, second]
+    spd = SpeechDispatcherSpeaker(connect=lambda: conns.pop(0))
+    spd.REPLY_TIMEOUT_S = 0.05
+    spd.speak("lost line", interrupt=False)  # times out and drops the connection
+    time.sleep(0.05)  # let the dead connection's reader deliver its late reply
+    spd.speak("next line", interrupt=False)
+    assert second.spoken == ["next line"]
+    assert spd.busy()  # the 225 reply with the message id was read by its own command, not shifted
+    assert spd._replies.empty()  # nothing left over to answer a later command
+
+
+def test_racing_callers_open_only_one_connection():
+    import threading
+
+    opened = []
+
+    def slow_connect():
+        time.sleep(0.05)
+        opened.append(FakeSpeechd())
+        return opened[-1]
+
+    spd = SpeechDispatcherSpeaker(connect=slow_connect)
+    threads = [threading.Thread(target=spd.available) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(opened) == 1
+
 # ----- fallback and wording -----
 
 
