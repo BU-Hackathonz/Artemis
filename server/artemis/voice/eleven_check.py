@@ -1,7 +1,7 @@
 """Hardware check for the ElevenLabs voice: speaks a few lines and prints the time to first audio.
 
 Run in your own terminal with the key set there (it is never printed):
-    $env:ELEVENLABS_API_KEY = "<your key>"; $env:ARTEMIS_ELEVEN_VOICE_ID = "<voice id>"
+    $env:ELEVENLABS_API_KEY = Read-Host "ElevenLabs key"   # Artemis's voice is the default; ARTEMIS_ELEVEN_VOICE_ID picks another
     uv run --group voice python -m artemis.voice.eleven_check
 """
 
@@ -24,7 +24,7 @@ LINES = [
 def main() -> int:
     speaker = ElevenLabsSpeaker(fallback=NullSpeaker())
     if not speaker.available():
-        print("ElevenLabs is not configured: set ELEVENLABS_API_KEY and ARTEMIS_ELEVEN_VOICE_ID in this terminal.")
+        print("ElevenLabs is not configured: set ELEVENLABS_API_KEY in this terminal.")
         return 1
     times = []
     for line in LINES:

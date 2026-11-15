@@ -146,7 +146,7 @@ an empty placeholder).
 |---|---|---|
 | `ARTEMIS_VOICE_ENGINE` | `elevenlabs` | Artemis's voice: `elevenlabs`, `nvda` or `sapi` (the last two keep NVDA first) |
 | `ELEVENLABS_API_KEY` | unset | The API key. Without it, NVDA or SAPI is used |
-| `ARTEMIS_ELEVEN_VOICE_ID` | `<PASTE_VOICE_ID>` | The voice. Without a real id, NVDA or SAPI is used |
+| `ARTEMIS_ELEVEN_VOICE_ID` | `fPIfC3elMLbN9tNwMXkw` | The voice. Defaults to Artemis's own voice (chosen by Avery); set it to use another |
 | `ARTEMIS_ELEVEN_MODEL` | `eleven_flash_v2_5` | The model |
 | `ARTEMIS_ELEVEN_SPEED` | `1.0` | Starting speed, clamped to 0.7..1.2 |
 | `ARTEMIS_ELEVEN_STABILITY` | `0.5` | Voice stability, 0..1 |

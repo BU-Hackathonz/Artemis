@@ -8,11 +8,21 @@ import pytest
 
 from artemis.agent.stub import StubAgent
 from artemis.conversation.controller import NVDA_RATE_LINE
-from artemis.contracts import Approval, Decision, EventDraft, Failed, TaskRequest
+from artemis.contracts import (
+    AgentMessageData,
+    Announce,
+    Approval,
+    Decision,
+    EventDraft,
+    Failed,
+    RunResult,
+    TaskRequest,
+)
 from artemis.core.app import Core, create_app
 from artemis.core.approvals import ApprovalStale, SessionApprovals
 from artemis.core.bus import EventBus
-from artemis.core.session import normalize, spoken_error
+from artemis.core.session import Session, normalize, spoken_error
+from artemis.voice.stub import StubVoice
 from artemis.policy.testing import FakeRunner
 
 TOKEN = "test-token"
@@ -871,3 +881,158 @@ def test_installed_scanner_is_used_quietly(core_main, monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="artemis.core.main"):
         assert core_main.make_scan() is scan.scan
     assert "not installed" not in caplog.text
+
+
+# ----- result earcons (ARTEMIS_RESULT_EARCONS, contracts.md 5.5) -----
+
+
+class ListeningVoice(FakeVoice):
+    listening = False
+
+
+def run_draft(exit_code, timed_out=False, text="The program ran successfully."):
+    result = RunResult(
+        op_id="op_t", preset="python", exit_code=exit_code, timed_out=timed_out,
+        duration_ms=5, stdout_tail="", stderr_tail="", truncated=False,
+    )
+    return EventDraft(type="run.result", announce=Announce(text=text, priority="high"),
+                      data=result.model_dump(mode="json"))
+
+
+def approval_draft(text="Write three files. Approve?"):
+    approval = Approval(approval_id="apr_t", kind="write_files", approval_hash="sha256:t", summary=text)
+    return EventDraft(type="approval.requested", announce=Announce(text=text, priority="high"),
+                      data=approval.model_dump(mode="json"))
+
+
+def session_with(tmp_path, voice, played, **kwargs):
+    def earcon(name):
+        played.append(name)
+        return 0.0
+
+    return Session("ses_t", voice=voice, runner=None, agent=None, projects_dir=tmp_path,
+                   earcon=earcon, **kwargs)
+
+
+async def test_result_earcons_are_off_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("ARTEMIS_RESULT_EARCONS", raising=False)
+    voice, played = ListeningVoice(), []
+    session = session_with(tmp_path, voice, played)
+    await session.emit(run_draft(0))
+    await session.emit(approval_draft())
+    assert played == []
+    assert [text for _, text in voice.spoken] == ["The program ran successfully.", "Write three files. Approve?"]
+
+
+async def test_env_turns_result_earcons_on_at_startup(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARTEMIS_RESULT_EARCONS", "on")
+    voice, played = ListeningVoice(), []
+    session = session_with(tmp_path, voice, played, result_earcons=None)
+    await session.emit(run_draft(0))
+    assert played == ["success"]
+
+
+async def test_each_result_and_approval_plays_its_own_earcon_before_the_words(tmp_path):
+    voice, played = ListeningVoice(), []
+    session = session_with(tmp_path, voice, played, result_earcons=True)
+    await session.emit(run_draft(0))
+    await session.emit(run_draft(1, text="The program failed with exit code 1."))
+    await session.emit(run_draft(None, timed_out=True, text="The program was stopped after 30 seconds."))
+    await session.emit(approval_draft())
+    assert played == ["success", "failure", "failure", "approval"]
+    assert [text for _, text in voice.spoken] == [
+        "The program ran successfully.",
+        "The program failed with exit code 1.",
+        "The program was stopped after 30 seconds.",
+        "Write three files. Approve?",
+    ]
+
+
+async def test_no_earcon_for_other_events_or_for_silent_results(tmp_path):
+    voice, played = ListeningVoice(), []
+    session = session_with(tmp_path, voice, played, result_earcons=True)
+    progress = EventDraft(type="agent.message", announce=Announce(text="Still working.", priority="low"),
+                          data=AgentMessageData(text="Still working.", kind="progress").model_dump())
+    await session.emit(progress)
+    silent = EventDraft(type="run.result", data=run_draft(0).data)  # a result with nothing to say
+    await session.emit(silent)
+    assert played == []
+    assert [text for _, text in voice.spoken] == ["Still working."]
+
+
+async def test_no_earcon_while_push_to_talk_is_listening_but_the_words_are_still_said(tmp_path):
+    voice, played = ListeningVoice(), []
+    voice.listening = True
+    session = session_with(tmp_path, voice, played, result_earcons=True)
+    await session.emit(run_draft(0))
+    await session.emit(approval_draft())
+    assert played == []
+    assert len(voice.spoken) == 2
+
+
+async def test_the_tone_finishes_before_the_line_is_emitted(tmp_path):
+    import time
+
+    class TimedVoice(ListeningVoice):
+        def __init__(self):
+            super().__init__()
+            self.line_at = None
+
+        async def announce(self, text, priority):
+            self.line_at = time.monotonic()
+            await super().announce(text, priority)
+
+    voice, cue_at = TimedVoice(), []
+
+    def tone(name):
+        cue_at.append(time.monotonic())
+        return 0.2
+
+    session = Session("ses_t", voice=voice, runner=None, agent=None, projects_dir=tmp_path,
+                      earcon=tone, result_earcons=True)
+    await session.emit(run_draft(0))
+    assert len(cue_at) == 1 and voice.line_at is not None
+    # The core waits the tone's 0.2 s; Windows' timer (about 15.6 ms ticks) can wake asyncio a tick early.
+    assert voice.line_at - cue_at[0] >= 0.2 - 0.05
+    assert [text for _, text in voice.spoken] == ["The program ran successfully."]
+
+
+@pytest.mark.parametrize("returned", [5.0, float("nan"), -1.0, "0.2", None, True])
+async def test_the_wait_is_capped_and_bad_durations_are_ignored(tmp_path, returned):
+    from artemis.core.session import _cue_wait
+
+    assert 0.0 <= _cue_wait(returned) <= 0.3
+    voice = ListeningVoice()
+    session = Session("ses_t", voice=voice, runner=None, agent=None, projects_dir=tmp_path,
+                      earcon=lambda name: returned, result_earcons=True)
+    await session.emit(run_draft(0))
+    assert [text for _, text in voice.spoken] == ["The program ran successfully."]
+
+
+async def test_no_earcon_during_the_whole_push_to_talk_cycle(tmp_path):
+    voice, played = ListeningVoice(), []
+    voice.busy_listening = True  # rising tone, mic open, or post-roll; listening itself is False
+    session = session_with(tmp_path, voice, played, result_earcons=True)
+    await session.emit(run_draft(0))
+    await session.emit(approval_draft())
+    assert played == []
+    assert len(voice.spoken) == 2
+
+
+async def test_a_failing_earcon_never_stops_the_spoken_line(tmp_path):
+    voice = ListeningVoice()
+
+    def broken(name):
+        raise RuntimeError("no audio device")
+
+    session = Session("ses_t", voice=voice, runner=None, agent=None, projects_dir=tmp_path,
+                      earcon=broken, result_earcons=True)
+    await session.emit(run_draft(1, text="The program failed with exit code 1."))
+    assert [text for _, text in voice.spoken] == ["The program failed with exit code 1."]
+
+
+async def test_stub_voice_with_result_earcons_on_does_not_fail(tmp_path):
+    session = Session("ses_t", voice=StubVoice(), runner=None, agent=None, projects_dir=tmp_path,
+                      result_earcons=True)
+    await session.emit(run_draft(0))
+    await session.emit(approval_draft())
