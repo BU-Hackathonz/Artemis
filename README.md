@@ -1,7 +1,12 @@
 # Artemis
 
-**A voice-first coding companion for blind developers.** Say what you want built, approve each
-change by keyboard, and hear what really ran, with no sighted help. Built at HackUMass XIV (2026).
+**A voice-first coding companion for blind developers.** Say what you want built, review and
+approve project changes, and hear what really ran. Built at HackUMass XIV (2026).
+
+**Ubuntu + GNOME is our primary development and demo platform, with Orca as our primary screen
+reader.** We started on Windows and switched halfway through the hackathon because Ubuntu made
+it easier to coordinate Artemis, desktop events, screen-reader interaction and spoken responses.
+The Windows Tauri client and NVDA/SAPI support remain in the repository.
 
 ## The problem
 
@@ -23,26 +28,32 @@ screen aloud one element at a time. Today's AI coding tools are designed for peo
 - **Trust is the hardest part.** If you can't see what the agent did, you have to trust it. A
   hidden instruction in a README or web page can steer an agent, and you would never see it happen.
 
-So a blind developer either works much more slowly than their sighted peers, or needs a sighted
-person to check the AI's work. Neither is acceptable.
+Artemis aims to make reviewing and controlling an AI coding agent more accessible, so developers
+can follow its work through voice, keyboard and screen-reader feedback.
 
 ## What Artemis does
 
-Artemis makes voice, keyboard and screen reader the main way to work, and proves every result
-instead of describing it.
+Artemis brings voice, keyboard and screen-reader interaction into a workflow with reviewable
+actions and feedback from actual execution.
 
 1. **Say it.** Hold Control+Shift+Space and speak, say "Hey Artemis" (opt-in), or type. Speech
    recognition runs on your laptop, so your voice never leaves it.
-2. **Approve it.** Before any file is written or any program runs, Artemis tells you what it will
-   do and waits for Enter (approve) or Escape (reject). The approval is tied to that exact change,
-   so nothing can be swapped in between what you heard and what happens.
+2. **Approve it.** Project writes and runs wait for approval bound to the proposed action. Use
+   the focused dialog controls to approve or Escape to reject. In conversation mode, eligible
+   project writes and runs also accept “approve” after the spoken summary and a short guard.
+   Flagged actions, desktop actions requiring approval, and publishing stay on the keyboard.
 3. **It checks first.** A security scan (Bandit) runs before you approve, and any findings are read
    to you as part of the approval.
 4. **It runs for real.** Artemis runs the program and reads the exit code and the last line of
    output word for word: "main.py failed with exit code 1. NameError: name 'pritn' is not
    defined. Did you mean: 'print'?"
-5. **It checks accessibility for real.** Echo Check opens a page and reports its actual
-   accessibility tree, the same thing a screen reader would get, not a description of pixels.
+5. **Inspect accessibility.** Echo Check inspects local project pages with Playwright accessibility
+   snapshots and axe-core, reporting structure, findings and checks needing human review. It is
+   not a complete accessibility audit or a substitute for screen-reader testing.
+6. **Use desktop tools and publish.** On Ubuntu, open apps, files and websites, or approve commands
+   and typing through desktop tools. Ordinary allowed opens do not always need a dialog. Publish
+   reviewed files to a new GitHub repository after keyboard approval of the destination,
+   visibility and files. Publishing requires `git` and a signed-in GitHub CLI (`gh auth login`).
 
 Everything Artemis says also appears in a text log your screen reader can review, and Artemis never
 changes your screen reader's own voice or speed.
@@ -51,14 +62,50 @@ changes your screen reader's own voice or speed.
 
 | Part | What it is |
 |---|---|
-| **Core** (`server/`) | Python and FastAPI, listening on 127.0.0.1 only, with a fresh launch token for each run. A Claude agent with a few tools: write and edit files, run programs, scan, inspect a page. Every tool call goes through a policy gate: path checks, approvals bound to a hash of the change, and text from files and web pages treated as untrusted, so a prompt injection can't approve anything. Secrets are redacted from logs, speech and anything sent out. |
-| **Voice** (`server/artemis/voice/`) | Push-to-talk or "Hey Artemis" with local Whisper. Speech through NVDA or Windows SAPI, speech-dispatcher on Linux, or an optional natural ElevenLabs voice. Short sounds for listening, success and failure. |
-| **Client** (`client/`) | A Tauri desktop app for Windows, built for NVDA first: live regions, careful focus, and a guard so a stray Enter can't approve something. On Ubuntu, a small GNOME Shell "island" at the top of the screen shows only what the core's events prove: listening, thinking, editing, running, speaking. |
+| **Core** (`server/`) | Python + FastAPI on loopback with a per-launch token. Sessions, approvals and an SSE event stream connect clients to a Claude agent using the Anthropic API. Every tool call passes a policy gate for validation, path checks, scans and action-specific approvals. File and webpage content is treated as untrusted; authorization is enforced separately. |
+| **Voice** (`server/artemis/voice/`) | Local faster-whisper transcription, push-to-talk and opt-in wake word. Optional ElevenLabs speech with local speech-dispatcher fallback on Ubuntu; NVDA/SAPI support on Windows. Supported voice interruptions and short audio cues help users follow work. |
+| **Ubuntu interface** (`client/prototypes/water-desktop/`) | GNOME Shell island, typed requests and approval dialogs. Orca is the primary screen-reader target. States reflect core events; the visual ring supplements spoken and screen-reader interaction. |
+| **Windows client** (`client/`) | Retained Tauri 2 + React + TypeScript client with NVDA-oriented focus handling, live regions and guarded keyboard approvals. |
+| **Tools** | Project editing, Bandit scanning, limited program runs, Echo Check, Linux desktop actions and reviewed GitHub publishing. |
+
+Microphone audio is transcribed locally, but Artemis is not fully offline: Claude receives requests
+and relevant project context. When ElevenLabs is enabled, spoken text is sent to it after secret
+redaction. Approved GitHub publishing also sends files off the laptop. Redaction and scanning are
+tested defenses, not guarantees that arbitrary content is safe.
+
+`run_program` uses fixed argv presets without a shell, a separate interpreter, a scrubbed
+environment, timeouts and output limits. This is not an OS sandbox. The separate Ubuntu
+`run_command` tool can execute a shell command after keyboard approval.
 
 More detail: [architecture](docs/architecture.md), [decisions](docs/decisions.md),
 [API contracts](docs/contracts.md).
 
 ## Try it
+
+### Ubuntu 24.04 + GNOME 46 (primary)
+
+You need a GNOME desktop session, a microphone for voice input, and an Anthropic API key for the
+real agent. Setup installs system/Python dependencies and downloads the local speech models.
+Enable Orca for screen-reader interaction; Artemis's own speech does not replace it.
+
+```bash
+bash infra/setup-ubuntu.sh
+client/prototypes/water-desktop/install.sh
+# On Wayland, log out and back in after first installing the extension, then:
+gnome-extensions enable artemis-water@bu-hackathonz.github.io
+infra/start.sh --agent claude --conversation
+```
+
+The launcher asks for the API key if needed and does not save the prompted key. The island finds
+the core through a private runtime file containing its address and launch token. The extension is
+already in the repository; no separate PR checkout is needed.
+
+- Without `--agent claude`, the launcher uses a scripted stub agent.
+- `--voice stub` skips the microphone so you can type requests.
+- `--conversation` enables built-in phrases, follow-ups and eligible voice approvals.
+- Use Ctrl+Shift+Space for push-to-talk; open the island to type.
+- Stop the core with Ctrl+C. Full setup and troubleshooting:
+  [Ubuntu instructions](infra/README.md#ubuntu-run-the-core-and-the-gnome-island).
 
 ### Windows
 
@@ -79,29 +126,33 @@ powershell -ExecutionPolicy Bypass -File infra\start.ps1  # starts the core and 
 
 Details: [infra/README.md](infra/README.md).
 
-### Ubuntu 24.04 (GNOME)
-
-```bash
-bash infra/setup-ubuntu.sh            # once: system packages, Python packages, speech model
-infra/start.sh --agent claude         # each time; asks for the API key, never saves it
-```
-
-The core writes its address and launch token to a private file for the GNOME island. The island
-itself is in PR #128 and installs with `setup-ubuntu.sh --extension-dir <its folder>`. See
-[infra/README.md](infra/README.md#ubuntu).
-
 ### Hands-free (optional)
 
-Set `ARTEMIS_LISTEN_MODE=wake` before starting, then say "Hey Artemis, create a Python program
-that prints Hello World". Artemis ignores the microphone while it is speaking and never keeps
-speech that doesn't start with "Hey Artemis". Push-to-talk keeps working alongside.
+On Ubuntu, start wake mode with conversation support:
+
+```bash
+ARTEMIS_LISTEN_MODE=wake infra/start.sh --agent claude --conversation
+```
+
+Say “Hey Artemis, create a Python program that prints Hello World.” Push-to-talk remains available.
+With `ARTEMIS_BARGE_IN=on` (default), supported wake and stop phrases can interrupt Artemis's own
+speech. Set it to `off` to drop microphone input while Artemis speaks. Real-room testing matters,
+especially when screen-reader speech comes through speakers.
 
 ## Status
 
-This is a hackathon project. It works end to end on Windows with NVDA:
-request, approve, write, scan, run, hear the result. The Ubuntu version (GNOME island, Orca,
-speech-dispatcher) is newer and still being tested on hardware. It has not yet been tested with
-blind developers outside the team. That's the next step.
+This is a hackathon project, with Ubuntu/Orca as the current priority. The connected GNOME island,
+core workflow, eligible voice approvals, desktop tools and GitHub publishing are implemented.
+Hardware validation and coordination between Orca and Artemis's speech remain ongoing; we do not
+claim that voices can never overlap. Testing with blind developers outside the team is a next step.
+
+CI runs server tests on Ubuntu and Windows, client unit and browser tests, the client build and
+secret scanning. Platform test counts overlap, and optional/live integrations are not all covered
+by every run. See [current CI results](https://github.com/BU-Hackathonz/Artemis/actions) and the
+[workflow](.github/workflows/ci.yml).
+
+Next: validate real coding workflows with blind developers, refine Orca interaction and speech
+timing, improve voice settings, and ship an installer with clear setup requirements.
 
 ## Team
 
