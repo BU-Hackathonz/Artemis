@@ -16,6 +16,8 @@ import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Clutter from 'gi://Clutter';
 import St from 'gi://St';
+import Shell from 'gi://Shell';
+import Gst from 'gi://Gst?version=1.0';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -28,6 +30,11 @@ import {RingEffect} from './ringEffect.js';
 import {Island} from './island.js';
 import {CaretTracker} from './caret.js';
 import {CommandRunner, COMMANDS} from './presets.js';
+import {Voice} from './voice.js';
+import {VOICES, voiceByKey} from './voices.js';
+import {Listener} from './listen.js';
+import {WakeWord} from './wakeword.js';
+import {CoreClient} from './core.js';
 
 // Loop.
 const ACTIVE_MS = 16;           // frame interval while anything moves
@@ -116,6 +123,56 @@ export default class ArtemisWaterExtension extends Extension {
             this._settings.connect(`changed::${k}`, () => { this._drops = []; this._lens = null; this._orb = null; this._morph = null; this._setupAgent(); this._reattachSoon(); }));
         this._workAreaId = global.display.connect('workareas-changed', () => this._agentGoHome(true));
 
+        // Artemis's voice, as in main: ElevenLabs (Artemis's own voice), else a stock voice, else the system voice
+        this._voice = new Voice((speaking) => { this._island?.setSpeaking(speaking); this._wakeWord?.setMuted(speaking || !!this._listener?.listening); }, () => this._settings?.get_string('voice') ?? 'bill');
+        this._voiceSettingId = this._settings.connect('changed::voice', () => {
+            this._voiceItems?.forEach(([k, item]) => item.setOrnament(k === this._settings.get_string('voice') ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE));
+            const v = voiceByKey(this._settings.get_string('voice'));
+            this._voice?.say(`This is ${v.name}. I will read your code and results like this.`, 'high'); // a preview of the new voice
+        });
+        // Push to talk: hold the island's bars, or press Ctrl+Shift+Space to start and again to send.
+        this._listener = new Listener();
+        this._voice.quiet = () => !!this._core?.connected; // main's core speaks for Artemis while it runs
+        // Hands-free: listen for "Hey Artemis" (opt-in, local Whisper; see wake.py)
+        this._wakeWord = new WakeWord(this.path, {
+            onArmed: () => { if (!this._island?._listening) this._earcon('listen-on'); this._island?.setListening(true); },
+            onSpeech: () => { this._island?.setListening(true); },
+            onPartial: (text) => { this._island?.partial(text); },          // your words, live, as you speak
+            onCancel: () => {
+                // "cancel", "stop", "never mind": stop listening, stop talking, and stop the task under way
+                this._localTalking = false;
+                this._earcon('listen-off');
+                this._island?.setListening(false);
+                this._voice?.stop();
+                if (this._island?._tasks?.some((t) => t.state === 'working')) this._stopTask();
+                this._voice?.say('Cancelled.', 'normal');
+            },
+            onDisarmed: () => { this._localTalking = false; this._earcon('listen-off'); this._island?.setListening(false); },
+            onRequest: (text) => { this._localTalking = false; this._earcon('listen-off'); this._island?.setListening(false); this._island?.hear(text); },
+            onError: (msg) => { console.warn(`Artemis wake word: ${msg}`); this._island?.setListening(false); },
+        });
+        // While main's core runs it owns the microphone (its own push to talk and wake word): the island's listener stays off.
+        // In local mode the helper also serves push to talk (live words, stops on silence), so it runs whenever the
+        // core does not; the setting only decides whether saying the name starts a request.
+        const wakeOn = () => {
+            if (this._core?.connected || !WakeWord.available()) { this._wakeWord.stop(); return; }
+            this._wakeWord.setWake(this._settings.get_boolean('wake-word'));
+            this._wakeWord.start();
+        };
+        this._wakeOn = wakeOn;
+        this._wakeSettingId = this._settings.connect('changed::wake-word', () => {
+            wakeOn();
+            this._wakeItem?.setToggleState(this._settings.get_boolean('wake-word'));
+            this._voice?.say(this._settings.get_boolean('wake-word') ? 'Listening for Hey Artemis.' : 'Stopped listening for my name.', 'normal');
+        });
+        wakeOn();
+        // Main's core (infra/start.sh): when it runs, the island is its client (see core.js)
+        this._core = new CoreClient({
+            onConnected: (on) => this._coreConnected(on),
+            onEvent: (ev) => this._coreEvent(ev),
+        });
+        Main.wm.addKeybinding('push-to-talk', this._settings, Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this._talk(this._core?.connected ? !this._coreTalking : this._wakeWord?.running ? !this._localTalking : !this._listener?.listening));
         this._runner = new CommandRunner(this._agentBody(), (x, y, strength) => this.ripple(x, y, strength));
         this._addPanelButton();
         this._setupAgent();
@@ -127,6 +184,21 @@ export default class ArtemisWaterExtension extends Extension {
         this._caret?.destroy();
         this._caret = null;
         this._runner = null;
+        Main.wm.removeKeybinding('push-to-talk');
+        this._core?.destroy();
+        this._core = null;
+        if (this._wakeSettingId) this._settings?.disconnect(this._wakeSettingId);
+        this._wakeSettingId = 0;
+        this._wakeWord?.stop();
+        this._wakeWord = null;
+        this._wakeItem = null;
+        this._listener?.destroy();
+        this._listener = null;
+        this._voice?.destroy();
+        this._voice = null;
+        if (this._voiceSettingId) this._settings?.disconnect(this._voiceSettingId);
+        this._voiceSettingId = 0;
+        this._voiceItems = null;
         this._teardownAgentUI();
         this._button?.destroy();
         this._button = null;
@@ -246,9 +318,13 @@ export default class ArtemisWaterExtension extends Extension {
         if (this._isIsland()) {
             this._island = new Island({
                 commands: COMMANDS,
-                onRun: (cmd) => this._runCommand(cmd),
-                onStop: () => this._runner.stop(),
+                onRun: (cmd, prompt) => this._runCommand(cmd, prompt),
+                onStop: () => this._stopTask(),
+                onApprove: (a, yes) => this._core?.approve(a, yes).catch((e) => this._voice?.say(e.message === 'stale' ? 'That approval changed. Listen to the new one.' : `Approval failed: ${e.message}.`, 'high')),
                 onSettings: () => this.openPreferences(),
+                onTalk: (down) => this._talk(down),
+                onUnknown: () => this._voice?.say('I can\u2019t do that yet. Try other words.', 'high'),
+                onQuestion: () => this._voice?.say('That sounds like a question. I can\u2019t answer questions yet, but I can do things: ask me to open an app or type something.', 'high'),
                 font: this._settings.get_string('ui-font'),
                 // the pill resizes with its status: follow its ring, but never mid-flight
                 onMoved: () => { if (!this._agent?.awake && !this._homeTimer) this._agentGoHome(true); },
@@ -296,7 +372,7 @@ export default class ArtemisWaterExtension extends Extension {
         if (this._homeTimer) GLib.source_remove(this._homeTimer);
         const from = {x: this._agent.x, y: this._agent.y};
         const dist = Math.hypot(home.x - from.x, home.y - from.y);
-        const ms = Math.min(1100, 350 + dist * 0.6);
+        const ms = 1.6 * Math.min(1100, 350 + dist * 0.6); // as slow as the flow out (presets.js FLOW_SLOWDOWN)
         const t0 = GLib.get_monotonic_time();
         this._homeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ACTIVE_MS, () => {
             const t = Math.min((GLib.get_monotonic_time() - t0) / 1000 / ms, 1);
@@ -384,23 +460,176 @@ export default class ArtemisWaterExtension extends Extension {
             menu.addAction(cmd.name, () => this._runCommand(cmd));
         }
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        const stop = menu.addAction('Stop', () => this._runner.stop());
+        const stop = menu.addAction('Stop', () => this._stopTask());
         stop.visible = this._runner?.running ?? false;
         this._stopItems.push(stop);
         stop.connect('destroy', () => { this._stopItems = this._stopItems?.filter((i) => i !== stop) ?? []; });
+        this._wakeItem = new PopupMenu.PopupSwitchMenuItem('Listen for \u201cHey Artemis\u201d', this._settings.get_boolean('wake-word'));
+        this._wakeItem.connect('toggled', (_i, on) => this._settings.set_boolean('wake-word', on));
+        menu.addMenuItem(this._wakeItem);
+        // Voice: every free ElevenLabs voice, one tap to switch (Artemis says a preview line in it)
+        const voiceMenu = new PopupMenu.PopupSubMenuMenuItem('Voice');
+        this._voiceItems = VOICES.map((v) => {
+            const item = voiceMenu.menu.addAction(`${v.name} \u2014 ${v.about}`, () => this._settings.set_string('voice', v.key));
+            item.setOrnament(v.key === this._settings.get_string('voice') ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NONE);
+            return [v.key, item];
+        });
+        menu.addMenuItem(voiceMenu);
         menu.addAction('Put the orb back in the corner', () => this._settings.reset('orb-home'));
         menu.addAction('Settings…', () => this.openPreferences());
     }
 
+    /** A short chime, so it is heard (not only seen) when Artemis starts and stops listening. Local mode only:
+     *  main's core plays its own earcons. */
+    _earcon(name) {
+        try {
+            const p = Gst.ElementFactory.make('playbin', null);
+            p.set_property('uri', GLib.filename_to_uri(`${this.path}/${name}.wav`, null));
+            p.set_property('volume', 0.6);
+            const bus = p.get_bus();
+            bus.add_signal_watch();
+            bus.connect('message', (_b, m) => {
+                if (m.type === Gst.MessageType.EOS || m.type === Gst.MessageType.ERROR) { bus.remove_signal_watch(); p.set_state(Gst.State.NULL); }
+            });
+            p.set_state(Gst.State.PLAYING);
+        } catch (e) { console.warn(`Artemis earcon: ${e.message}`); }
+    }
+
+    // ----- main's core ---------------------------------------------------------------------------
+
+    _coreConnected(on) {
+        this._wakeOn?.();
+        if (on) this._core.ready('Control+Shift+Space').catch(() => {}); // the core speaks its one ready line
+        console.log(`Artemis island: ${on ? 'connected to' : 'disconnected from'} the core`);
+    }
+
+    /** One event from the core's stream (contracts §2) onto the island's panel. */
+    _coreEvent(ev) {
+        const I = this._island;
+        if (!I) return;
+        const d = ev.data ?? {}, tid = ev.task_id;
+        const say = ev.announce?.text ?? '';
+        switch (ev.type) {
+        case 'voice.activity':
+            // the core's real voice state (contracts §2): glow while it listens (push to talk or after a bare
+            // "Hey Artemis"), "Transcribing…" while Whisper works, the bars move while Artemis speaks
+            if (d.state === 'listening') I.setListening(true);
+            else if (d.state === 'transcribing') I.setListening(false, true);
+            else if (I._listening || I._hearing) I.setListening(false);
+            I.setSpeaking(d.state === 'speaking');
+            // push to talk is over only once the mic actually closes after listening (pressing also stops
+            // Artemis speaking, so an 'idle' can arrive before 'listening' while the key is still held)
+            if (this._coreVoice === 'listening' && d.state !== 'listening') this._coreTalking = false;
+            this._coreVoice = d.state;
+            break;
+        case 'transcript.final':
+            I.setListening(false);
+            if (d.text) this._heard = d.text;
+            break;
+        case 'task.state': {
+            let t = tid ? I.taskById(tid) : null;
+            if (!t && ['queued', 'working'].includes(d.state)) {
+                I.taskStart(this._heard ?? say.replace(/^Working on:\s*/, ''), null, tid);
+                this._heard = null;
+                t = I.taskById(tid);
+            }
+            if (!t) break;
+            if (d.state === 'running' && say) I.taskStep(say.replace(/\.$/, ''));
+            else if (d.state === 'succeeded') I.taskEnd(t.answer ?? 'Done.', false);
+            else if (d.state === 'failed') I.taskEnd(t.error ?? 'The task failed.', true);
+            else if (d.state === 'canceled') I.taskEnd('Canceled.', true);
+            break;
+        }
+        case 'agent.message': {
+            const t = tid ? I.taskById(tid) : null;
+            if (!t) break;
+            if (d.kind === 'progress' && !/^still working/i.test(d.text)) I.taskStep(d.text.replace(/\.$/, ''));
+            else if (d.kind === 'progress') I.taskProgress('still working\u2026');
+            else t.answer = d.text; // answer or question: the summary when the task ends
+            break;
+        }
+        case 'file.changed': if (say) I.taskStep(say.replace(/\.$/, '')); break;
+        case 'approval.requested': I.taskStep(d.kind === 'run_program' ? 'Waiting for your approval to run' : 'Waiting for your approval to write'); I.taskApproval(tid, d); break;
+        case 'approval.resolved': I.taskApprovalResolved(d.approval_id); break;
+        case 'run.result': I.taskStep(d.timed_out ? 'The run timed out' : `Ran it: exit code ${d.exit_code}`); break;
+        case 'error': { const t = tid ? I.taskById(tid) : null; if (t) t.error = `${d.message} ${d.recovery ?? ''}`.trim(); break; }
+        }
+    }
+
+    _stopTask() {
+        const t = this._island?._tasks?.find((x) => x.state === 'working');
+        if (this._core?.connected && t?.id) this._core.cancel(t.id).catch(() => {});
+        else this._runner?.stop();
+    }
+
+    /** Push to talk: down starts listening (and stops Artemis speaking, as in main); up sends. */
+    async _talk(down) {
+        if (!this._listener || !this._island) return;
+        if (this._core?.connected) {
+            // main's core records and transcribes (faster-whisper); the transcript comes back as an event
+            if (down === !!this._coreTalking) return;
+            this._coreTalking = down;
+            this._island.setListening(down, !down);
+            this._core.talk(down).catch((e) => { this._coreTalking = false; this._island?.setListening(false); this._voice?.say(`Push to talk failed: ${e.message}.`, 'high'); });
+            return;
+        }
+        if (this._wakeWord?.running) {
+            // local Whisper: words stream into the panel and listening ends by itself when you pause
+            if (down) {
+                if (this._localTalking) return;
+                this._localTalking = true;
+                this._voice?.stop();
+                this._island.setListening(true);
+                this._wakeWord.listen();
+            } else if (this._localTalking) {
+                this._localTalking = false;
+                this._island.setListening(false, true);
+                this._wakeWord.stopListening();
+            }
+            return;
+        }
+        if (down) {
+            if (this._listener.listening) return;
+            this._voice?.stop();
+            this._wakeWord?.setMuted(true); // push to talk owns the microphone
+            try {
+                this._listener.start();
+                this._island.setListening(true);
+            } catch (e) {
+                this._island.setListening(false);
+                this._voice?.say('The microphone is not available.', 'high');
+            }
+            return;
+        }
+        if (!this._listener.listening) return;
+        this._island.setListening(false, true);
+        this._wakeWord?.setMuted(false);
+        try {
+            const text = await this._listener.stop();
+            this._island?.hear(text);
+            if (!text) this._voice?.say('I didn\u2019t hear anything. Hold to talk, then release.', 'normal');
+        } catch (e) {
+            this._island?.hear('');
+            this._voice?.say(`I couldn\u2019t hear that: ${e.message}.`, 'high');
+        }
+    }
+
     /** Run one of the agent's commands (from any menu, or a typed request on the island). */
-    _runCommand(cmd) {
+    _runCommand(cmd, prompt = cmd.name) {
+        this._island?.taskStart(prompt, cmd);
+        if (this._runner) this._runner.onStep = (label) => this._island?.taskStep(label);
+        if (this._runner) this._runner.onProgress = (detail) => this._island?.taskProgress(detail);
         this._stopItems.forEach((i) => { i.visible = true; });
         this._island?.setState('working', cmd.name.split(':')[0]);
+        this._voice?.say(`Working on: ${cmd.name.split(':')[0]}.`, 'normal');
         this._runner.run(cmd.name, (r) => cmd.run(r), () => {
             if (this._runner?.running) return; // another command took over
             this._stopItems?.forEach((i) => { i.visible = false; });
             const err = this._runner.lastError;
-            this._island?.setState('done', '', err ? `Stopped: ${err}` : (cmd.summary ?? `Finished: ${cmd.name}`));
+            const said = err ? `Stopped: ${err}` : (cmd.summary ?? `Finished: ${cmd.name}`);
+            this._island?.setState('done', '', said);
+            this._island?.taskEnd(said, !!err);
+            this._voice?.say(said, 'high'); // results interrupt, as in the core
             if (!err) this._doneGlow = 1; // the ball lights up green as it comes home
             this._wake();
         });

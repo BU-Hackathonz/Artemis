@@ -1,6 +1,7 @@
 // Preferences window: the water's look and feel, changed live while you move the mouse.
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
+import {VOICES} from './voices.js';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const ROWS = [
@@ -40,11 +41,19 @@ export default class ArtemisWaterPrefs extends ExtensionPreferences {
         agentLook.selected = Math.max(looks.indexOf(settings.get_string('agent-look')), 0);
         agentLook.connect('notify::selected', () => settings.set_string('agent-look', looks[agentLook.selected]));
         group.add(agentLook);
-        const fonts = ['Inter', 'Space Grotesk', 'Manrope', 'Outfit', 'Sora', 'Ubuntu Sans'];
+        const fonts = ['Inter', 'Space Grotesk', 'Manrope', 'Outfit', 'Sora', 'Ubuntu Sans', 'JetBrains Mono'];
         const font = new Adw.ComboRow({title: 'Font', subtitle: 'For the island\'s panel and board', model: Gtk.StringList.new(fonts)});
         font.selected = Math.max(fonts.indexOf(settings.get_string('ui-font')), 0);
         font.connect('notify::selected', () => settings.set_string('ui-font', fonts[font.selected]));
         group.add(font);
+        const voice = new Adw.ComboRow({title: 'Voice', subtitle: 'How Artemis speaks (free ElevenLabs voices; a preview plays when you switch)',
+            model: Gtk.StringList.new(VOICES.map((v) => `${v.name} \u2014 ${v.about}`))});
+        voice.selected = Math.max(VOICES.findIndex((v) => v.key === settings.get_string('voice')), 0);
+        voice.connect('notify::selected', () => settings.set_string('voice', VOICES[voice.selected].key));
+        group.add(voice);
+        const wake = new Adw.SwitchRow({title: 'Listen for \u201cHey Artemis\u201d', subtitle: 'Hands-free: say its name, then your request. Heard on this computer only; other speech is ignored.'});
+        settings.bind('wake-word', wake, 'active', 0);
+        group.add(wake);
         const motion = new Adw.SwitchRow({
             title: 'Animate the orb while it rests',
             subtitle: 'It slowly morphs and tumbles. Off: it holds still until a command runs (lighter on the GPU).',

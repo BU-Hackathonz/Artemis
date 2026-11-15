@@ -5,8 +5,8 @@
   padding: 0 6px 0 14px;
   spacing: 10px;
   border-radius: 22px;
-  background-color: rgba(30, 30, 30, 0.22);
-  border: 1px solid rgba(167, 139, 250, 0.45);
+  background-color: rgba(20, 20, 22, 0.90);   /* graphite: dark, opaque, neutral (widget and window alike) */
+  border: 1px solid rgba(255, 255, 255, 0.135);
   box-shadow: 0 2px 10px 0 rgba(0, 0, 0, 0.45);
 }
 
@@ -17,33 +17,36 @@
   height: 26px;
 }
 
-.artemis-island-sep { width: 1px; height: 18px; background-color: rgba(167, 139, 250, 0.25); }
+.artemis-island-sep { width: 1px; height: 18px; background-color: rgba(255, 255, 255, 0.075); }
 
-.artemis-island-name { font-weight: 600; font-size: 16px; color: #ece6f7; }
+.artemis-island-name { font-weight: 600; font-size: 16px; color: #d4d4d8; }
 
 .artemis-island-wave { width: 52px; height: 22px; }
 .artemis-island-wave-button { border-radius: 10px; padding: 3px 5px; }
-.artemis-island-wave-button:hover { background-color: rgba(167, 139, 250, 0.14); }
-.artemis-island-wave-button:focus, .artemis-island-chevron:focus { background-color: rgba(167, 139, 250, 0.16); }
+.artemis-island-wave-button:hover { background-color: rgba(255, 255, 255, 0.042); }
+.artemis-island-wave-button:focus, .artemis-island-chevron:focus { background-color: rgba(255, 255, 255, 0.048); }
 
-.artemis-island-status { font-size: 12px; color: #ddd0f5; }
+.artemis-island-status { font-size: 12px; color: #a1a1a8; }
 
-.artemis-island-chevron { border-radius: 14px; padding: 6px; color: #ddd0f5; }
-.artemis-island-chevron:hover { background-color: rgba(167, 139, 250, 0.14); }
+.artemis-island-chevron { border-radius: 14px; padding: 6px; color: #a1a1a8; }
+.artemis-island-chevron:hover { background-color: rgba(255, 255, 255, 0.042); }
 .artemis-island-chevron-icon { icon-size: 14px; }
 
+/* The menu window: the widget's own colour and material (same tint, border, frost and shadow). */
+.artemis-island-menu { -arrow-rise: 0px; -arrow-base: 0px; -boxpointer-gap: 8px; }
 .artemis-island-menu .popup-menu-content {
-  background-color: rgba(16, 10, 28, 0.97);
-  border: 1px solid rgba(167, 139, 250, 0.4);
-  border-radius: 18px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  background-color: rgba(20, 20, 22, 0.90);   /* graphite: dark, opaque, neutral (widget and window alike) */
+  border: 1px solid rgba(255, 255, 255, 0.135);
+  border-radius: 0;   /* square panel */
+  box-shadow: 0 2px 10px 0 rgba(0, 0, 0, 0.45);
   padding: 8px 4px;
 }
-.artemis-island-menu .popup-menu-item { border-radius: 10px; color: #ece6f7; }
+.artemis-island-menu .popup-menu-item { border-radius: 10px; color: #d4d4d8; }
 .artemis-island-menu .popup-menu-item:hover,
-.artemis-island-menu .popup-menu-item:focus { background-color: rgba(167, 139, 250, 0.16); }
-.artemis-island-menu .popup-separator-menu-item .popup-separator-menu-item-separator { background-color: rgba(167, 139, 250, 0.2); }
-.artemis-island-menu .popup-separator-menu-item StLabel { color: #c4b5e6; }
+.artemis-island-menu .popup-menu-item:focus { background-color: rgba(255, 255, 255, 0.048); }
+.artemis-island-menu .popup-separator-menu-item .popup-separator-menu-item-separator { background-color: rgba(255, 255, 255, 0.06); }
+.artemis-island-menu .popup-separator-menu-item StLabel { color: #7c7c84; }
+.artemis-island-menu .popup-menu-ornament { color: #a99fc7; }
 
 .artemis-island-ask { spacing: 6px; }
 .artemis-island-entry {
@@ -51,11 +54,11 @@
   padding: 8px 12px;
   border-radius: 12px;
   background-color: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(167, 139, 250, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.105);
   color: #ffffff;
 }
-.artemis-island-entry:focus { border-color: #c4b5fd; }
-.artemis-island-hint { font-size: 13px; color: #d9cdf2; }
+.artemis-island-entry:focus { border-color: #a99fc7; }
+.artemis-island-hint { font-size: 13px; color: #a1a1a8; }
 
 /* Done: a subtle green edge on the widget */
 /* (done: no green edge) */
@@ -67,13 +70,61 @@
   spacing: 8px;
   border-radius: 12px;
   background-color: rgba(24, 16, 40, 0.86);
-  border: 1px solid rgba(167, 139, 250, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.15);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
 }
 .artemis-island-tab:done { border-color: rgba(134, 239, 172, 0.5); }
 .artemis-island-tab-title { font-size: 11px; font-weight: 600; letter-spacing: 2px; color: #cbb5f7; }
 .artemis-island-tab:done .artemis-island-tab-title { color: #a7f3c4; }
 .artemis-island-tab-text { font-size: 14px; color: #ffffff; }
-.artemis-island-tab-stop { padding: 5px 14px; border-radius: 16px; border: 1px solid rgba(167, 139, 250, 0.45); color: #ece6f7; font-size: 13px; }
-.artemis-island-tab-stop:hover { background-color: rgba(167, 139, 250, 0.16); }
+.artemis-island-tab-stop { padding: 5px 14px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.135); color: #d4d4d8; font-size: 13px; }
+.artemis-island-tab-stop:hover { background-color: rgba(255, 255, 255, 0.048); }
 .artemis-island-tab-stop:focus { box-shadow: inset 0 0 0 2px #ffdb70; }
+
+/* Two panes, condensed: recent prompts | the goal and what Artemis is doing (tree, then summary) */
+.artemis-island-two-item { padding: 2px; }
+.artemis-island-two-item:hover { background-color: transparent; }
+.artemis-island-left { width: 230px; spacing: 1px; padding: 2px 8px 2px 2px; }
+.artemis-island-right { width: 330px; spacing: 3px; padding: 2px 4px 2px 12px; }
+.artemis-island-vsep { width: 1px; background-color: rgba(255, 255, 255, 0.06); }
+.artemis-island-pane-title { font-size: 11px; font-weight: 600; color: #7c7c84; margin: 2px 6px 4px; padding-bottom: 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.09); }
+.artemis-island-recent { spacing: 1px; }
+.artemis-island-empty { font-size: 12.5px; color: #66666e; margin: 2px 6px; }
+.artemis-island-row { border-radius: 6px; padding: 4px 6px; color: #d4d4d8; font-size: 12.5px; text-align: left; }
+.artemis-island-row:hover { background-color: rgba(255, 255, 255, 0.042); }
+.artemis-island-row:checked { background-color: rgba(255, 255, 255, 0.066); }
+.artemis-island-row:focus { box-shadow: inset 0 0 0 2px #a99fc7; }
+.artemis-island-row-in { spacing: 6px; }
+.artemis-island-glyph { font-size: 11px; min-width: 11px; }
+.artemis-island-glyph-working { color: #a99fc7; }
+.artemis-island-glyph-done { color: #66666e; }
+.artemis-island-glyph-stopped { color: #f5b971; }
+.artemis-island-d-title { font-size: 14px; font-weight: 600; color: #ededef; margin: 0 6px; }
+.artemis-island-d-status { font-size: 11.5px; color: #7c7c84; margin: 0 6px; }
+.artemis-island-d-status:working { color: #a99fc7; }
+.artemis-island-tree { spacing: 1px; padding: 3px 6px 0; }
+.artemis-island-tree-row { spacing: 5px; }
+.artemis-island-branch { color: rgba(255, 255, 255, 0.15); font-size: 12px; }
+.artemis-island-step { font-size: 12.5px; }
+.artemis-island-step-done { color: #a1a1a8; }
+.artemis-island-step-running { color: #ededef; font-weight: 600; }
+.artemis-island-step-stopped { color: #f5b971; }
+.artemis-island-d-summary { font-size: 12.5px; color: #d4d4d8; padding: 3px 6px 0; }
+.artemis-island-d-actions { spacing: 6px; padding: 5px 6px 0; }
+.artemis-island-d-btn { padding: 3px 10px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.135); color: #d4d4d8; font-size: 12px; }
+.artemis-island-d-btn:hover { background-color: rgba(255, 255, 255, 0.048); }
+.artemis-island-d-btn:focus { box-shadow: inset 0 0 0 2px #a99fc7; }
+.artemis-island-d-btn-main { background-color: #a99fc7; color: #160d2b; border-color: #a99fc7; font-weight: 600; }
+.artemis-island-d-btn-main:hover { background-color: #b6aed0; }
+.artemis-island-foot-item { padding: 0; }
+.artemis-island-foot-item:hover { background-color: transparent; }
+.artemis-island-foot { border-top: 1px solid rgba(255, 255, 255, 0.054); padding: 5px 4px 1px 8px; margin-top: 4px; }
+.artemis-island-foot-hint { font-size: 11px; color: #66666e; }
+.artemis-island-foot-btn { font-size: 11.5px; color: #7c7c84; padding: 2px 8px; border-radius: 4px; }
+.artemis-island-foot-btn:hover { background-color: rgba(255, 255, 255, 0.048); }
+.artemis-island-foot-btn:focus { box-shadow: inset 0 0 0 2px #a99fc7; }
+.artemis-island-mark { font-family: "Rethink Sans"; font-weight: 700; font-size: 13px; letter-spacing: -0.5px; color: #cfcfd4; margin-right: 12px; }
+.artemis-island-step-live { font-size: 11.5px; color: #a99fc7; }
+.artemis-island-appr { spacing: 2px; padding: 5px 6px 0; margin-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.09); }
+.artemis-island-appr-text { font-size: 12.5px; color: #ededef; }
+.artemis-island-glow { border-radius: 22px; background-color: rgba(169, 159, 199, 0.10); box-shadow: 0 0 18px 3px rgba(169, 159, 199, 0.55); }

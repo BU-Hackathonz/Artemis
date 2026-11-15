@@ -20,7 +20,7 @@ if [[ "${1:-}" == "--remove" ]]; then
 fi
 
 mkdir -p "$dest/schemas"
-cp "$src"/metadata.json "$src"/extension.js "$src"/waterEffect.js "$src"/lensEffect.js "$src"/orbEffect.js "$src"/ringEffect.js "$src"/island.js "$src"/caret.js "$src"/stylesheet.css "$src"/presets.js "$src"/prefs.js "$dest/"
+cp "$src"/metadata.json "$src"/extension.js "$src"/waterEffect.js "$src"/lensEffect.js "$src"/orbEffect.js "$src"/ringEffect.js "$src"/island.js "$src"/caret.js "$src"/stylesheet.css "$src"/presets.js "$src"/voice.js "$src"/voices.js "$src"/listen.js "$src"/wakeword.js "$src"/core.js "$src"/wake.py "$src"/listen-on.wav "$src"/listen-off.wav "$src"/prefs.js "$dest/"
 cp "$src"/schemas/*.gschema.xml "$dest/schemas/"
 glib-compile-schemas "$dest/schemas"
 echo "Installed to $dest"
