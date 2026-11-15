@@ -20,7 +20,7 @@ powershell -ExecutionPolicy Bypass -File infra\start.ps1 -CoreOnly       # just 
 | `-CoreOnly` | | Start only the core and print its address |
 | `-Agent stub\|claude` | `stub` | Sets `ARTEMIS_AGENT`; `claude` also syncs the `agent`, `security` and `echo` groups |
 | `-Voice whisper\|stub` | `whisper` | Sets `ARTEMIS_VOICE`; `whisper` syncs the `voice` group |
-| `-Conversation` | off | Sets `ARTEMIS_CONVERSATION=on`: built-in spoken phrases ("what are you doing", "keep it brief") and one waiting follow-up request (contracts.md §5.4). Rehearse with it before using it in the demo |
+| `-Conversation` | off | Sets `ARTEMIS_CONVERSATION=on`: built-in spoken phrases ("what are you doing", "keep it brief") and one waiting follow-up request (contracts.md §5.4). Remembers the answer style ("keep it brief") between launches in `%USERPROFILE%\.artemis\preferences.json`; `setup-demo.ps1 -Force` or saying "reset my preferences" forgets it. Rehearse with it before using it in the demo |
 | `-HealthTimeoutS` | `120` | How long to wait for the core's `/health` |
 
 ## Speech voice and rate (Windows voice only)
@@ -65,7 +65,7 @@ Prepares the demo projects before a demo or rehearsal ([`docs/demo.md`](../docs/
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1          # asks before deleting or resetting
-powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets without asking
+powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets and forgets the answer style without asking
 ```
 
 - Copies `fixture/injected-readme` to `calc`, `fixture/risky-run` to `old-app`, and
@@ -74,7 +74,11 @@ powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force   # resets 
 - Asks (y/N) before deleting an earlier `hello-world`, so the Hello World demo starts clean.
 - Idempotent: projects that already match the fixture are left alone; one that differs (say,
   `signup-page` after the agent fixed it) is reset only after a y. Other projects are listed, never
-  touched. It deletes nothing outside the projects folder and removes links without following them.
+  touched. It removes links without following them.
+- Forgets the answer style conversation mode remembers between launches (`ARTEMIS_PREFS_FILE` or
+  `%USERPROFILE%\.artemis\preferences.json`), after a y, so a "keep it brief" said in a rehearsal
+  doesn't carry into the stage run. That file is the only thing it deletes outside the projects
+  folder, and only when it looks like an Artemis preferences file.
 - Restart `start.ps1` afterwards, so the session starts fresh.
 
 ## Double-click launcher (demo/dev, not an installer)
@@ -178,8 +182,8 @@ infra/start.sh --voice stub --conversation          # no microphone, built-in ph
 5. **GNOME extension**: copies the folder given by `--extension-dir` into
    `~/.local/share/gnome-shell/extensions/<uuid>/` (a copy, not a link; the uuid comes from its
    `metadata.json`) and enables it with `gnome-extensions enable` if that command is there. Without
-   `--extension-dir` this step is skipped. `client/prototypes/water-desktop` is not on `main` yet.
-   On Wayland, log out and back in afterwards so GNOME Shell loads the extension.
+   `--extension-dir` this step is skipped. The extension is described in the next section, which
+   uses `install.sh` instead.
 
 The script never asks for, reads, prints or stores an API key.
 
@@ -203,3 +207,89 @@ Run `infra/start.sh --help` for the list.
 
 Tests: `cd server && uv run pytest artemis/test_infra_sh.py` (Linux and bash only). They use a fake `uv`,
 so they need no network, no apt and no sudo.
+
+### Ubuntu: run the core and the GNOME island
+
+The island is the GNOME Shell extension in `client/prototypes/water-desktop/`. It runs on GNOME 46
+(Ubuntu 24.04). It connects to the core that `start.sh` starts.
+
+**1. One-time setup.** Run `bash infra/setup-ubuntu.sh` (see above).
+
+**2. Install the extension.**
+
+```bash
+client/prototypes/water-desktop/install.sh
+```
+
+This copies the extension into `~/.local/share/gnome-shell/extensions/artemis-water@bu-hackathonz.github.io/`.
+Run `install.sh --remove` to take it out again.
+
+**3. Log out and back in (Wayland).** GNOME on Wayland finds a new extension only at login. Log out,
+then log back in.
+
+**4. Enable the extension.**
+
+```bash
+gnome-extensions enable artemis-water@bu-hackathonz.github.io
+```
+
+**5. Start the core.**
+
+```bash
+infra/start.sh --voice stub        # no microphone; type your requests
+infra/start.sh                     # Whisper voice, stub agent
+infra/start.sh --agent claude      # real agent; needs ANTHROPIC_API_KEY or the hidden prompt
+```
+
+`start.sh` writes `$XDG_RUNTIME_DIR/artemis/launch.json`. The island finds this file and connects by
+itself. You do not need to restart GNOME Shell. Stop the core with Ctrl+C, and `launch.json` is removed.
+
+With no core running, the island stays idle, and Orca reads "Artemis core is not running".
+
+**Island states.** The island shows one of eight states. Its label says "waiting for your approval"
+while an approval is open.
+
+| State | Meaning |
+|---|---|
+| idle | No task is running. |
+| listening | The microphone is open for push-to-talk. |
+| thinking | Artemis is working out what to do, before any file changes. |
+| editing | Artemis is writing files. Each write waits for your approval in a dialog. |
+| running | Artemis is running a program. |
+| speaking | Artemis is speaking. |
+| done | The task finished with no error. |
+| error | The task failed, or a run exited with an error. |
+
+**Typed requests.** Open the island with the chevron or the waveform. Type your request and press
+Enter. The field clears after it is sent.
+
+**Push-to-talk.** Hold Control and Shift, press Space, and speak. Release Control and Shift to
+send. You can change the shortcut in the push-to-talk setting, which is the gsettings key
+`push-to-talk`. Open the extension settings with `gnome-extensions prefs artemis-water@bu-hackathonz.github.io`.
+
+**Approvals.** An approval opens a GNOME dialog.
+
+- Enter on the focused button approves. Escape rejects.
+- A blocked action is one with high severity. Its focus starts on Reject. Approve needs Shift+Enter.
+- A key that is held down and repeats never approves.
+
+**Not in the connected build.** The scripted demo presets and the virtual keyboard typing are removed.
+The island sends requests only to the core.
+
+**End-to-end check.** This check shows that the whole path works.
+
+1. Run `infra/start.sh --voice stub`.
+2. Open the island and type `create a Python program that prints Hello World`, then press Enter.
+3. The island should go idle, then thinking, then editing (with the approval dialog), then running,
+   then done.
+4. Reject the approval once in another run. A rejection writes no file.
+
+**Troubleshooting.**
+
+- Extension logs: `journalctl -f -o cat /usr/bin/gnome-shell | grep -i artemis`
+- Core log: `~/.local/state/artemis/core.log` (or `$XDG_STATE_HOME/artemis/core.log`).
+- Check the permissions of `launch.json`. The file must be `0600`:
+  `stat -c '%a %n' "$XDG_RUNTIME_DIR/artemis/launch.json"`
+- The token is never written to a log. Do not paste `launch.json` when you ask for help: it holds the
+  token.
+- "Artemis core is not running": start the core with `infra/start.sh`.

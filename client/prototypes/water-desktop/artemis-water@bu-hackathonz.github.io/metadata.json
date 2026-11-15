@@ -1,7 +1,7 @@
 {
   "uuid": "artemis-water@bu-hackathonz.github.io",
   "name": "Artemis Water",
-  "description": "Turns the desktop wallpaper into a sheet of clear water. Moving the mouse over the desktop draws a subtle glassy wake and short ripples that bend the wallpaper beneath it. Windows and icons are not affected.",
+  "description": "Adds the Artemis agent to the desktop: a liquid-glass sphere that shows what it is doing, takes typed or spoken requests (push-to-talk on Control+Shift+Space) and asks before it changes files. Needs the Artemis core running locally. The optional water effect bends the wallpaper under the pointer.",
   "shell-version": ["46", "48", "49", "50"],
   "settings-schema": "org.gnome.shell.extensions.artemis-water",
   "url": "https://github.com/BU-Hackathonz/Artemis",

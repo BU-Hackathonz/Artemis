@@ -269,6 +269,51 @@ def test_a_lost_connection_reconnects_on_the_next_line():
     assert len(fakes) == 2 and fakes[1].spoken == ["two"]
 
 
+
+def test_a_late_reply_from_a_dead_connection_never_answers_the_next_command():
+    # Avery's #148 review: with one queue across connections, a reply that lands after a timeout but
+    # before the socket closes answers the next connection's command, and every later reply is one behind.
+    class Stalls(FakeSpeechd):
+        def sendall(self, data):
+            if data.strip() == b"SPEAK":
+                self.commands.append("SPEAK")  # no reply in time
+                return
+            super().sendall(data)
+
+        def close(self):
+            self._reply("230 OK RECEIVING DATA")  # the late reply arrives just before the close
+            super().close()
+
+    first, second = Stalls(), FakeSpeechd()
+    conns = [first, second]
+    spd = SpeechDispatcherSpeaker(connect=lambda: conns.pop(0))
+    spd.REPLY_TIMEOUT_S = 0.05
+    spd.speak("lost line", interrupt=False)  # times out and drops the connection
+    time.sleep(0.05)  # let the dead connection's reader deliver its late reply
+    spd.speak("next line", interrupt=False)
+    assert second.spoken == ["next line"]
+    assert spd.busy()  # the 225 reply with the message id was read by its own command, not shifted
+    assert spd._replies.empty()  # nothing left over to answer a later command
+
+
+def test_racing_callers_open_only_one_connection():
+    import threading
+
+    opened = []
+
+    def slow_connect():
+        time.sleep(0.05)
+        opened.append(FakeSpeechd())
+        return opened[-1]
+
+    spd = SpeechDispatcherSpeaker(connect=slow_connect)
+    threads = [threading.Thread(target=spd.available) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(opened) == 1
+
 # ----- fallback and wording -----
 
 
@@ -304,6 +349,41 @@ def test_three_failures_give_the_offline_notice():
         assert e.wait_idle(2)
     assert notices == ["My natural voice isn't reachable, so I'm using the offline voice."]
 
+
+
+def test_a_402_gives_up_at_once_and_says_so_once():
+    # Measured on David's laptop: a free key gets HTTP 402 for library voices (Morgan) on every line.
+    notices, calls = [], []
+
+    def opener(request, timeout):
+        calls.append(1)
+        raise urllib.error.HTTPError("u", 402, "payment required", {}, None)
+
+    spd, fake = speechd()
+    e = eleven(opener)
+    e.on_give_up = notices.append
+    a = Announcer(nvda=NoNvda(), sapi=spd, is_nvda_running=lambda: False, eleven=e)
+    e.fallback = speech._Fallback(a)
+    e.speak("line one", interrupt=False)
+    assert e.wait_idle(2)
+    assert e.gave_up and len(calls) == 1 and notices == [fallback_notice()]
+    assert fake.spoken == ["line one"] and a.current() is spd  # this line and every later one go offline
+
+
+def test_a_temporary_failure_still_gets_three_tries():
+    def opener(request, timeout):
+        raise urllib.error.HTTPError("u", 503, "busy", {}, None)
+
+    e = eleven(opener)
+    Announcer(nvda=NoNvda(), sapi=speechd()[0], is_nvda_running=lambda: False, eleven=e)
+    e.speak("line one", interrupt=False)
+    assert e.wait_idle(2) and not e.gave_up
+
+
+def test_linux_no_key_log_names_the_offline_voice(caplog, monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    ElevenLabsSpeaker(api_key="", voice_id="voice_abc", fallback=None)
+    assert "the offline voice" in caplog.text and "NVDA" not in caplog.text and "Windows" not in caplog.text
 
 # ----- Orca -----
 

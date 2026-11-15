@@ -99,7 +99,7 @@ class ErrorData(BaseModel):
 
 class VoiceStatusData(BaseModel):
     voice_ready: bool
-    screen_reader: Literal["nvda"] | None = None
+    screen_reader: Literal["nvda", "orca"] | None = None
     engine: str | None = None  # the speaker that would say the next line (docs/contracts.md section 7)
 
 

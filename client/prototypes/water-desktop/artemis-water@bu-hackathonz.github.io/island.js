@@ -1,8 +1,10 @@
 // The Artemis top-edge island: a glowing pill hanging under the top bar, joined to a light line
 // along the bottom edge of the bar, with the ring, the "artemis." name, a waveform and a chevron.
-//   - the chevron (or the waveform) opens a panel: type what you want, or pick a command
-//   - while a command runs the pill says so, the waveform moves and a pulse of light runs along
-//     the edge; when it ends the ring shows a check for a few seconds
+//   - the chevron (or the waveform) opens a panel: type a request for the Artemis core, or Stop
+//   - while a request is in progress the pill says so, the waveform moves and a pulse of light runs
+//     along the edge; when it ends the ring shows a check for a few seconds
+//   - setView() takes islandState.view() (contracts.md §8). The look is the approved one: the eight
+//     states map onto its idle, working and done looks; any new look per state is Jun's call
 // The droplet that flies through a command is drawn by the extension (ringEffect); it leaves from
 // and returns to ringCenter(). The island reserves its strip at the top of the screen, so
 // maximized windows sit below it instead of under it.
@@ -20,11 +22,12 @@ const GAP = -4;          // logical px between the top bar and the top of the pi
 const SHOULDER = 46;     // logical px the edge line takes to curve into the pill
 const DONE_MS = 7000;    // how long "Done" stays
 
-const words = (s) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+// The core's states shown with the approved working look (the others look idle, or done).
+const WORKING = new Set(['listening', 'thinking', 'editing', 'running', 'speaking']);
 
 export class Island {
     /**
-     * opts: {commands, onRun(cmd), onStop(), onSettings(), onMoved()}
+     * opts: {onAsk(text) -> Promise<{ok, message?}>, onStop(), onSettings(), onMoved(), font}
      */
     constructor(opts) {
         this._opts = opts;
@@ -156,6 +159,22 @@ export class Island {
         this._edge.queue_repaint();
     }
 
+    /** Show islandState.view() in the approved look, and name it for the screen reader. */
+    setView(view) {
+        if (!this._pill || this._dead) return;
+        const look = WORKING.has(view.state) ? 'working' : view.state === 'done' ? 'done' : 'idle';
+        if (look !== this._state || (look === 'working' && view.label !== this._label)) {
+            this._label = view.label;
+            this.setState(look, view.label);
+        }
+        this._pill.accessible_name = view.accessibleName;
+    }
+
+    /** The panel's Stop item: shown while a request is in progress. */
+    setStopVisible(on) {
+        if (this._stopItem) this._stopItem.visible = !!on;
+    }
+
     // --- panel ---------------------------------------------------------------------------------
 
     _fillMenu() {
@@ -168,27 +187,32 @@ export class Island {
         column.add_child(this._hint);
         box.add_child(column);
         this._menu.addMenuItem(box);
-        this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem('Try'));
-        for (const cmd of this._opts.commands) this._menu.addAction(cmd.name, () => this._opts.onRun(cmd));
         this._menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._stopItem = this._menu.addAction('Stop', () => this._opts.onStop());
         this._stopItem.visible = false;
         this._menu.addAction('Settings…', () => this._opts.onSettings());
     }
 
-    // Typed request: run the command it best matches, or say which ones exist.
-    _ask(text) {
-        const want = words(text);
-        let best = null, score = 0;
-        for (const cmd of this._opts.commands) {
-            const have = words(`${cmd.name} ${(cmd.keywords ?? []).join(' ')}`);
-            const s = want.filter((w) => have.some((h) => h.startsWith(w) || w.startsWith(h))).length;
-            if (s > score) { score = s; best = cmd; }
-        }
-        if (!best) { this._hint.text = 'I can do one of the things below for now. Pick one, or try other words.'; return; }
+    // Typed request: sent to the core. The field is cleared before the core answers, so a stray
+    // second Enter can't send it again.
+    async _ask(raw) {
+        const text = raw.trim();
+        if (!text) return;
         this._entry.set_text('');
-        this._menu.close();
-        this._opts.onRun(best);
+        this._hint.text = 'Sending…';
+        let res;
+        try {
+            res = await this._opts.onAsk(text);
+        } catch {
+            res = {ok: false, message: 'That request could not be sent. Try again.'};
+        }
+        if (!this._menu) return;
+        if (res?.ok) {
+            this._hint.text = '';
+            this._menu.close();
+        } else {
+            this._hint.text = res?.message ?? 'That request could not be sent. Try again.';
+        }
     }
 
     // --- layout and painting -------------------------------------------------------------------

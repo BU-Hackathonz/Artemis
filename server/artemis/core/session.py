@@ -32,6 +32,7 @@ from artemis.contracts import (
 )
 from artemis.conversation import Controller
 from artemis.conversation.controller import NVDA_RATE_LINE
+from artemis.conversation.prefs import load_style, save_style
 from artemis.policy.gateway import ToolGateway
 
 from .approvals import SessionApprovals
@@ -61,6 +62,8 @@ HEARTBEAT_S = 3.0
 HEARTBEAT_STATES = {"working", "running"}  # never queued, awaiting_approval or a final state
 STILL_WORKING = "Still working."
 EMPTY_PAIR_S = 1.5  # a second empty transcript this soon after the first is the same tap
+# A push-to-talk hold that recorded no sound (contracts.md 3.3): fixed text, never free text.
+NO_SPEECH = ("I didn't hear anything.", "Check the microphone.")
 
 
 def spoken_error(message: str, recovery: str) -> str:
@@ -148,6 +151,7 @@ class Session:
         on_project: Callable[[object], None] | None = None,
         heartbeat_s: float = HEARTBEAT_S,
         conversation: bool | None = None,
+        prefs_path: Path | None = None,
         result_earcons: bool | None = None,
         earcon: Callable[[str], float] | None = None,
     ):
@@ -174,7 +178,15 @@ class Session:
         # contracts.md §5.4, off by default: None means today's §5.2 rules, unchanged.
         if conversation is None:
             conversation = os.environ.get("ARTEMIS_CONVERSATION", "off").lower() == "on"
-        self.conversation: Controller | None = Controller() if conversation else None
+        self.conversation: Controller | None = None
+        if conversation and prefs_path is not None:
+            # The answer style is remembered only in conversation mode, and only when the caller
+            # names the file (main.py does; tests and the in-memory demo never do).
+            self.conversation = Controller(
+                style=load_style(prefs_path), on_style=lambda style: save_style(prefs_path, style)
+            )
+        elif conversation:
+            self.conversation = Controller()
         # ARTEMIS_RESULT_EARCONS, off by default (contracts.md 5.5): a short tone just before a run
         # result or an approval request is spoken. The words are always said; never while listening.
         if result_earcons is None:
@@ -527,12 +539,16 @@ class Session:
             )
         )
 
-    async def error(self, code: str, message: str, recovery: str, task_id: str | None = None) -> None:
+    async def no_speech(self) -> None:
+        """A silent push-to-talk hold: the fixed line, once, at normal so it never cuts off a decision."""
+        await self.error("no_speech", *NO_SPEECH, priority="normal")
+
+    async def error(self, code: str, message: str, recovery: str, task_id: str | None = None, priority="high") -> None:
         await self.emit(
             EventDraft(
                 task_id=task_id,
                 type="error",
-                announce=Announce(text=spoken_error(message, recovery), priority="high"),
+                announce=Announce(text=spoken_error(message, recovery), priority=priority),
                 data=ErrorData(code=code, message=message, recovery=recovery).model_dump(),
             )
         )

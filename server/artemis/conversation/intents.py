@@ -54,6 +54,13 @@ INTENTS: dict[str, frozenset[str]] = {
         {"deep dive", "go deeper", "more detail", "more details", "explain in detail", "tell me more", "detailed mode"}
     ),
     "normal": frozenset({"normal mode", "default mode", "back to normal"}),
+    # Forgets the remembered answer style (both fields) and says so. Stores and reveals nothing else.
+    "reset_style": frozenset(
+        {
+            "reset my preferences", "reset preferences", "forget my preferences",
+            "reset my answer style", "forget my answer style",
+        }
+    ),
     "visual": frozenset({"visual mode"}),
     "code": frozenset({"code mode"}),
     "slower": frozenset({"slower", "slow down", "speak slower", "talk slower", "too fast"}),

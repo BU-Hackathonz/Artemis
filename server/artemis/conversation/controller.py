@@ -6,6 +6,8 @@ The core carries the decision out. Nothing here talks to a model, a microphone o
 and nothing here can approve anything: approvals stay on the keyboard.
 """
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -26,6 +28,8 @@ Action = Literal[
     "cancel",  # cancel the active task
     "rate",  # change the speaking rate by `delta` steps; speak `say` if the voice can't
 ]
+
+log = logging.getLogger(__name__)
 
 FINAL_STATES = ("succeeded", "failed", "canceled")
 KEYBOARD_ONLY = "Use the keyboard to decide: Enter on the dialog to approve, Escape to reject."
@@ -63,15 +67,49 @@ class _Task:
     progress: str = ""  # the latest progress line
     answer: str = ""
     files: list[str] = field(default_factory=list)
+    run: str = ""  # the last program run, as observed ("exited with code 0", "timed out")
+    scan: str = ""  # the last security scan result, as observed
 
     @property
     def active(self) -> bool:
         return self.state not in FINAL_STATES
 
+    def verified(self) -> list[str]:
+        """Sentences about checks that actually reported, in the order they happened to be learned."""
+        facts = []
+        # While a program is running, "the last run" would sound like it is about this one.
+        if self.run and self.state != "running":
+            facts.append(f"The last run {self.run}.")
+        if self.scan:
+            facts.append(f"The security scan {self.scan}.")
+        return facts
+
 
 def _short(text: str) -> str:
     text = " ".join(text.split()).rstrip(".")
     return text if len(text) <= _MAX_SPOKEN_REQUEST else text[:_MAX_SPOKEN_REQUEST].rstrip() + "…"
+
+
+def _scan_text(findings: list) -> str:
+    """What the scan reported, from the findings it sent. scan_project sends at most 50, so a full
+    list is said as "50 or more"."""
+    if not findings:
+        return "reported no findings"
+    high = sum(1 for f in findings if isinstance(f, dict) and f.get("severity") == "high")
+    count = "1 finding" if len(findings) == 1 else f"{len(findings)} findings"
+    if len(findings) >= 50:
+        count = "50 or more findings"
+    return f"reported {count}" + (f", {high} high severity" if high else "")
+
+
+def _end(text: str) -> str:
+    """The text as the end of a sentence: a question or exclamation keeps its mark, anything
+    else ends in one full stop, so "add a docstring?" is never "add a docstring?." and
+    "add a docstring," or "rename it to:" never end in ",." or ":." (Avery's review on #108)."""
+    text = text.rstrip()
+    if text.endswith(("?", "!")):
+        return text
+    return text.rstrip(".,:;…").rstrip() + "."
 
 
 def _names(files: list[str]) -> str:
@@ -81,8 +119,12 @@ def _names(files: list[str]) -> str:
 
 
 class Controller:
-    def __init__(self) -> None:
-        self.style = Style()
+    def __init__(self, style: Style | None = None, on_style: Callable[[Style], object] | None = None) -> None:
+        """`style` is where to start (the saved one, if the core remembers it); `on_style` is told
+        whenever the developer changes it, so the core can save it. A failing `on_style` is
+        ignored: the style still applies for this session."""
+        self.style = style or Style()
+        self._on_style = on_style
         self.queued: str | None = None  # one follow-up, started when the active task ends
         self.task: _Task | None = None  # the active task, or the last one
         self.approval: str | None = None  # the open approval's spoken summary
@@ -119,12 +161,27 @@ class Controller:
                 task.answer = data.get("text", "")
         elif event.type == "approval.requested":
             self.approval = data.get("summary") or "An approval is open."
+            # The approval carries the findings that apply to what it proposes. A clean one replaces
+            # an earlier finding, which is no longer true of the code about to be written or run.
+            if isinstance(data.get("findings"), list):
+                task.scan = _scan_text(data["findings"]) if data["findings"] else ""
         elif event.type == "approval.resolved":
             self.approval = None
         elif event.type == "file.changed":
             path = data.get("path")
             if path and path not in task.files:
                 task.files.append(path)
+        elif event.type == "run.result":
+            if data.get("timed_out"):
+                task.run = "timed out"
+            elif isinstance(data.get("exit_code"), int):
+                code = data["exit_code"]
+                # Worded like the run announcement: a non-zero exit is a failure.
+                task.run = "exited with code 0" if code == 0 else f"failed with exit code {code}"
+        elif event.type == "security.findings":
+            findings = data.get("findings")
+            if isinstance(findings, list):
+                task.scan = _scan_text(findings)
 
     def next_request(self) -> "FollowUp | None":
         """Call when a task has ended: what to do with the request that was waiting, if any.
@@ -139,7 +196,7 @@ class Controller:
         if self.task is not None and self.task.state == "succeeded":
             # The core then announces "Working on: <request>" as for any task: that is the read-back.
             return FollowUp("Starting the follow-up.", start=text)
-        return FollowUp(f"Dropped the follow-up, because the task before it didn't finish: {_short(text)}.")
+        return FollowUp(f"Dropped the follow-up, because the task before it didn't finish: {_end(_short(text))}")
 
     # ----- what the developer said -----
 
@@ -159,7 +216,7 @@ class Controller:
         if intent == "cancel":
             if self.queued is not None:
                 # The follow-up goes first: it hasn't started, so dropping it loses nothing.
-                said = f"Dropped: {_short(self.queued)}."
+                said = f"Dropped: {_end(_short(self.queued))}"
                 self.queued = None
                 if active:
                     said += " The current task is still going. Say cancel again to stop it."
@@ -180,8 +237,12 @@ class Controller:
             return Decision(intent, "say", self.status())
         if intent == "changed_files":
             return Decision(intent, "say", self.changed_files(), reminder=reminder)
+        if intent == "reset_style":
+            self._set_style(Style())
+            said = "Okay, I've forgotten your answer style. Back to normal answers."
+            return Decision(intent, "say", said, reminder=reminder)
         if intent in ("brief", "detailed", "normal"):
-            self.style = Style(verbosity=intent, focus=self.style.focus)
+            self._set_style(Style(verbosity=intent, focus=self.style.focus))
             said = {
                 "brief": "Okay, I'll keep it brief.",
                 "detailed": "Okay, I'll explain in detail.",
@@ -189,7 +250,7 @@ class Controller:
             }[intent]
             return Decision(intent, "say", said, reminder=reminder)
         if intent in ("visual", "code"):
-            self.style = Style(verbosity=self.style.verbosity, focus=intent)
+            self._set_style(Style(verbosity=self.style.verbosity, focus=intent))
             said = (
                 "Visual mode. I'll describe the layout and how accessible it is."
                 if intent == "visual"
@@ -220,7 +281,7 @@ class Controller:
         if active:
             if self.queued is not None:
                 # One slot, and it is never replaced silently.
-                said = f"I already have one waiting: {_short(self.queued)}. Say cancel to drop it."
+                said = f"I already have one waiting: {_end(_short(self.queued))} Say cancel to drop it."
                 return Decision("request", "say", said, reminder=reminder)
             self.queued = transcript
             said = "I'll do that next."
@@ -229,31 +290,46 @@ class Controller:
             return Decision("request", "queue", said, text=transcript)
         return Decision("request", "submit", text=transcript)
 
+    def _set_style(self, style: Style) -> None:
+        self.style = style
+        if self._on_style is not None:
+            try:
+                self._on_style(style)
+            except Exception:  # saving must never break a conversation
+                log.exception("could not tell the core about the new answer style")
+
     # ----- fixed sentences -----
 
     def status(self) -> str:
         task = self.task
         if task is None:
             return "I'm not working on anything yet."
-        about = _short(task.request)
+        about = _end(_short(task.request))
         if task.state == "awaiting_approval" and self.approval:
             said = f"I'm waiting for your decision. {self.approval}"
         elif task.state == "running":
-            said = f"I'm running the program for: {about}."
+            said = f"I'm running the program for: {about}"
         elif task.active:
-            said = f"I'm working on: {about}."
+            said = f"I'm working on: {about}"
             if task.progress:
-                said += f" Last step: {task.progress.rstrip('.')}."
+                said += f" Last step: {_end(task.progress)}"
+            if task.files:
+                said += f" So far I changed {_names(task.files)}."
         elif task.state == "succeeded":
-            said = f"I finished: {about}."
+            said = f"I finished: {about}"
             if task.files:
                 said += f" I changed {_names(task.files)}."
         elif task.state == "canceled":
-            said = f"The last request was canceled: {about}."
+            said = f"The last request was canceled: {about}"
         else:
-            said = f"The last request failed: {about}."
-        if self.queued:
-            said += f" Next up: {_short(self.queued)}."
+            said = f"The last request failed: {about}"
+        # Only what was actually observed: a run exit code and a scan result. Nothing is said about
+        # a check that never reported, and nothing here calls a failure a success.
+        if not (task.state == "awaiting_approval" and self.approval):  # the decision comes first, alone
+            said += "".join(f" {fact}" for fact in task.verified())
+        decision_open = task.state == "awaiting_approval" and bool(self.approval)
+        if self.queued and not decision_open:  # an open decision is said alone, nothing after it
+            said += f" Next up: {_end(_short(self.queued))}"
         return said
 
     def changed_files(self) -> str:

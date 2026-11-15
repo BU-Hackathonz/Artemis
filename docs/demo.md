@@ -100,9 +100,10 @@ Do this at least 30 minutes before judging. The first `npm run tauri dev` build 
    powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1
    ```
    Copies `calc`, `old-app` and `signup-page` into `%USERPROFILE%\ArtemisProjects` and asks before
-   deleting an old `hello-world`. Run it again after every rehearsal (`-Force` answers yes to every
-   question), then restart Artemis: a running session remembers the project names it created and
-   the Claude conversation.
+   deleting an old `hello-world`. It also forgets the answer style conversation mode remembers
+   between launches, so a "keep it brief" from a rehearsal doesn't make the stage run's answers
+   short. Run it again after every rehearsal (`-Force` answers yes to every question), then restart
+   Artemis: a running session remembers the project names it created and the Claude conversation.
 7. **API key, in this PowerShell window only.** Never on a command line, in a file, in `setx`, or on
    the board. Typed hidden, so it isn't on the projector or in the history:
    ```powershell
@@ -291,7 +292,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 | 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | pass, Sat Nov 14, verified on Yaovi's and David's laptops (registration only; the NVDA line was not checked) |
 | 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
 | 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` has the words of "create a Python program that prints Hello World, and run it" (the wake word is stripped; punctuation and capitals are ignored, Whisper never writes the comma before "and"), or the misses are posted. Try `ARTEMIS_WHISPER_PROMPT=natural` too (8/10 vs 5/10 on Yaovi's laptop) | Yaovi | not run on the demo laptop; David's laptop failed with the defaults |
-| 4 | Keyboard path to Start listening | NVDA on, no task running, clear the request field (a transcript from rows 2 and 3 stays in it), then Tab from it | Reaches **Start listening** after **Repeat last speech**, **Stop speech** and the activity log, in that order. **Send request** (disabled while the field is empty) and **Cancel task** (disabled with no task) are skipped; with text in the field, Send is the first stop | Yaovi | not run |
+| 4 | Keyboard path to Start listening | NVDA on, no task running, the request field empty (voice transcripts from rows 2 and 3 go to the activity log, not the field), then Tab from it | Reaches **Start listening** after **Repeat last speech**, **Stop speech** and the activity log, in that order. **Send request** (disabled while the field is empty) and **Cancel task** (disabled with no task) are skipped; with text in the field, Send is the first stop | Yaovi | not run |
 | 5 | Start listening toggle | On **Start listening**, press Enter, speak, press Enter again | Same result as hold-to-talk. The microphone stays on until the second press, and focus stays on the button, which reads **Stop listening** while the microphone is on | Yaovi | not run |
 | 6 | Demo 1 with `-Agent claude` | Run demo 1 end to end | Both approvals spoken, "Hello, World!" printed and spoken | key holder | not run |
 | 7 | Demo 2 failed run | Run demo 2 | Exit code and `NameError` spoken first, fix approved, second run succeeds | key holder | not run |
@@ -299,7 +300,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 | 9 | Demo 4 injection | Run demo 4 | No approval dialog, `calc` still has its two files | key holder | not run |
 | 10 | Demo 5 Echo Check | Run demo 5 | "Before: 7 problems. After: 0." or the remainder read out and fixed | key holder | not run |
 | 11 | Demo 3b security scan (optional) | Run demo 3b on `old-app` | "Found 2 security issues in 1 Python file: 1 high, 1 low." and no approval dialog | key holder | not run |
-| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered ("I'm not working on anything yet." before the first task; "Okay, I'll keep it brief."); the second request gets "I'll do that next." (with an approval open: "I'll do that next. A decision is still waiting: Enter to approve, Escape to reject."), then after the task "Starting the follow-up." and "Working on: …" (a typed one still gets 409) | key holder | not run |
+| 12 | `-Conversation` rehearsal (optional, rehearse first) | `infra\start.ps1 -Agent claude -Conversation`, say "what are you doing", "keep it brief"; then, while a task is running, speak a second request | Built-in phrases answered ("I'm not working on anything yet." before the first task; "Okay, I'll keep it brief."); the second request gets "I'll do that next." (with an approval open: "I'll do that next. A decision is still waiting: Enter to approve, Escape to reject."), then after the task "Starting the follow-up." and "Working on: …" (a typed one still gets 409). "keep it brief" is remembered at the next launch until `setup-demo.ps1 -Force` or "reset my preferences" | key holder | not run |
 | 13 | Fallbacks | `-Agent stub`, typed requests, `setup-demo.ps1 -Force` between runs | Each recovers in under a minute | anyone | not run |
 
 Launch, in order (full steps are in the setup checklist above): `setup-demo.ps1`, set the API key
@@ -318,7 +319,9 @@ Monitor off, NVDA on (or exactly as it will be on stage), one person at the keyb
 the log and timing. Run all five demos twice, then once with a forced failure (Wi-Fi off for the
 API error, Escape on every approval). With Wi-Fi off, "Working on: ..." (and perhaps "Still
 working.") is followed by "The task failed. No internet connection to Claude. You can try again.",
-said once, and the next request is accepted.
+said once, and the next request is accepted. After Escape, Artemis does not propose the same
+change or run again in that conversation. If the next request needs it, Artemis asks in one
+sentence first, so answer "yes, do it" rather than waiting for a new dialog.
 
 - [ ] Every state change is spoken: request taken ("Working on: ..."), each approval, each file
       written, "Running main.py.", every result, every error, cancel.
@@ -340,7 +343,8 @@ said once, and the next request is accepted.
       request.
 - [ ] The core speaks even when the Artemis window is not focused: send a request, Alt+Tab to
       another window before the result, and the result is still spoken (NVDA or SAPI, not the window).
-- [ ] Reset between runs: `infra\setup-demo.ps1 -Force`, restart `start.ps1`.
+- [ ] Reset between runs: `infra\setup-demo.ps1 -Force` (projects and the remembered answer style),
+      restart `start.ps1`.
 
 ## What is real and what is simulated (say this in the pitch)
 
@@ -359,3 +363,29 @@ said once, and the next request is accepted.
 > checks are real).
 >
 > **Not claimed:** a sandbox. Runs are "gated and limited", not sandboxed (architecture.md, risk 5).
+
+## Ubuntu run
+
+Run the demo on Ubuntu 24.04 (GNOME 46) with the GNOME island as the client. The full steps are in
+[`infra/README.md`](../infra/README.md#ubuntu-run-the-core-and-the-gnome-island).
+
+1. Once: `bash infra/setup-ubuntu.sh`, then `client/prototypes/water-desktop/install.sh`.
+2. On Wayland, log out and back in. Then run
+   `gnome-extensions enable artemis-water@bu-hackathonz.github.io`.
+3. Start the core: `infra/start.sh --voice stub` (or `infra/start.sh` for Whisper voice).
+4. Type `create a Python program that prints Hello World` in the island and press Enter.
+5. Watch the island go idle, thinking, editing, running and done. Approve the write and the run with
+   Enter, or reject with Escape.
+
+Keys on Ubuntu:
+
+| Where | Key | Effect |
+|---|---|---|
+| Island request field | Enter | Send the request. The field clears. |
+| Approval dialog | Enter | Approve (on a normal approval). |
+| Approval dialog | Escape | Reject. |
+| Blocked approval | Shift+Enter | Approve. Enter does nothing here, and focus starts on Reject. |
+| Anywhere | hold Control+Shift, press Space | Push-to-talk. Speak, then release both. The shortcut is set by the gsettings key `push-to-talk`. |
+
+The scripted demo presets and the virtual keyboard typing are removed from the Ubuntu build. The
+scripted five-part demo above does not run on Ubuntu. Use the end-to-end check in `infra/README.md`.

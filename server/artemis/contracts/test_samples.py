@@ -125,3 +125,13 @@ def test_security_block_text_matches_the_gateway():
     summary, blocking = _gateway()._summary("Run main.py with Python.", approval.findings, "run")
     assert (summary, blocking) == (approval.summary, approval.blocking)
     assert request.announce.text == approval.summary
+
+
+def test_voice_status_screen_reader_is_nvda_orca_or_none():
+    from artemis.contracts import VoiceStatusData
+
+    assert VoiceStatusData(voice_ready=True, screen_reader="orca").screen_reader == "orca"
+    assert VoiceStatusData(voice_ready=True, screen_reader="nvda").screen_reader == "nvda"
+    assert VoiceStatusData(voice_ready=False).screen_reader is None
+    with pytest.raises(ValidationError):
+        VoiceStatusData(voice_ready=True, screen_reader="sapi")

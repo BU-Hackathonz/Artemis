@@ -8,6 +8,7 @@ import asyncio
 import hmac
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from artemis.contracts import (
 )
 from artemis.runner.local import NoInterpreter
 from artemis.voice import profile as voice_profile
+from artemis.voice.speech import orca_running
 
 from . import settings as voice_settings
 from .approvals import ApprovalNotFound, ApprovalStale
@@ -45,7 +47,10 @@ class ListenBody(BaseModel):
 
 
 class SpeechBody(BaseModel):
-    action: str  # "stop" | "repeat"
+    action: str  # "stop" | "repeat" | "sample"
+
+
+SAMPLE_TEXT = "This is how I sound."  # the voice picker's Test voice: fixed, never free text
 
 
 class Guard(BaseHTTPMiddleware):
@@ -82,6 +87,7 @@ class Core:
         log_dir=None,
         vocabulary=None,
         heartbeat_s: float = HEARTBEAT_S,
+        prefs_path: Path | None = None,
     ):
         self.voice = voice
         self.make_runner = make_runner
@@ -97,6 +103,9 @@ class Core:
         self.wake = None  # the "Hey Artemis" listener, when ARTEMIS_LISTEN_MODE=wake
         self.activity: tuple[str, str | None] = ("idle", None)  # the last voice.activity sent
         self.heartbeat_s = heartbeat_s
+        # Where the answer style is remembered (conversation mode only). None, the default, remembers
+        # nothing: only main.py passes a path, so tests never touch the home folder.
+        self.prefs_path = prefs_path
         # Interpreter pre-check: probed once per process, then reused by every session.
         self._interpreter_probe: asyncio.Task | None = None
         self.background: set[asyncio.Task] = set()  # per-session checks, canceled at shutdown
@@ -114,6 +123,7 @@ class Core:
             log_dir=self.log_dir,
             on_project=self._on_project,
             heartbeat_s=self.heartbeat_s,
+            prefs_path=self.prefs_path,
         )
         self.sessions[sid] = session
         return session
@@ -168,7 +178,27 @@ class Core:
         announcer = getattr(self.voice, "announcer", None)
         if announcer is None:
             return False, None
-        return announcer.status()
+        voice_ready, screen_reader = announcer.status()
+        # Orca runs beside Artemis's own Linux voice, so the core reports it (contracts.md §5.3).
+        if sys.platform.startswith("linux") and orca_running():
+            screen_reader = "orca"
+        return voice_ready, screen_reader
+
+    async def watch_voice_status(self, interval_s: float = 2.0) -> None:
+        """Emit voice.status at start and on every change of voice_status(), Orca included.
+
+        The announcer's own watch cannot see Orca start or stop, so the core polls voice_status().
+        """
+        last = None
+        while True:
+            now = self.voice_status()
+            if now != last:
+                last = now
+                try:
+                    await self.broadcast_voice_status(*now)
+                except Exception:  # one failed emit must not end status updates for the session
+                    log.exception("voice status broadcast failed")
+            await asyncio.sleep(interval_s)
 
     def active_engine(self) -> str:
         """The speaker that would say the next line, or "none" when the voice has no announcer."""
@@ -281,8 +311,8 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             except Exception:
                 log.exception("voice warm-up failed; push-to-talk will report the problem")
         announcer = getattr(core.voice, "announcer", None)
-        if announcer is not None and hasattr(announcer, "watch"):
-            core.watch_task = asyncio.create_task(announcer.watch(core.broadcast_voice_status))
+        if announcer is not None:
+            core.watch_task = asyncio.create_task(core.watch_voice_status())
         core.activity_task = asyncio.create_task(core.watch_activity())
         if os.environ.get("ARTEMIS_LISTEN_MODE", "").strip().lower() == "wake":
             core.start_wake()
@@ -444,6 +474,8 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
                     await session.error("mic_error", mic_message(exc), "Check the microphone, or type the request.")
                     return
                 await session.spoken(text, cid)
+                if getattr(text, "dropped", None) == "silent":  # a held key with no sound; never a tap
+                    await session.no_speech()
 
             asyncio.create_task(finish())  # the transcript arrives as events
         else:
@@ -480,6 +512,13 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             await core.voice.stop_speech()
         elif body.action == "repeat":
             await core.voice.repeat_last()
+        elif body.action == "sample":
+            # the voice picker's Test voice: a fixed line, normal priority; a voice with no announcer stays silent
+            announcer = getattr(core.voice, "announcer", None)
+            if announcer is not None:
+                last = announcer.last  # the announcer records every normal line as "last"; "repeat" must keep the real one
+                await core.voice.announce(SAMPLE_TEXT, "normal")
+                announcer.last = last
         else:
             raise HTTPException(422, {"error": "bad_action"})
         return Response(status_code=204)
