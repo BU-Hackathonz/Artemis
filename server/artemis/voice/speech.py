@@ -220,6 +220,11 @@ ELEVEN_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
 ELEVEN_PCM_RATE = 22_050  # output_format=pcm_22050: 16-bit mono, playable as each chunk arrives
 SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
 FAILURES_BEFORE_SAPI = 3
+PERMANENT_FAILURES = {"HTTP 401", "HTTP 402", "HTTP 403"}  # retrying can't help: give up at once
+def _local_voice_name() -> str:
+    return "NVDA or the Windows voice" if sys.platform == "win32" else "the offline voice"
+
+
 def fallback_notice() -> str:
     """The give-up line. On Linux it never names Windows, SAPI or NVDA."""
     local = "the Windows voice" if sys.platform == "win32" else "the offline voice"
@@ -335,9 +340,9 @@ class ElevenLabsSpeaker:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._worker: threading.Thread | None = None
         if not self._key:
-            log.warning("ElevenLabs voice: ELEVENLABS_API_KEY is not set; using NVDA or the Windows voice")
+            log.warning("ElevenLabs voice: ELEVENLABS_API_KEY is not set; using %s", _local_voice_name())
         elif self.voice_id == PLACEHOLDER_VOICE:
-            log.warning("ElevenLabs voice: ARTEMIS_ELEVEN_VOICE_ID is not set; using NVDA or the Windows voice")
+            log.warning("ElevenLabs voice: ARTEMIS_ELEVEN_VOICE_ID is not set; using %s", _local_voice_name())
 
     # Speaker protocol
 
@@ -528,6 +533,10 @@ class ElevenLabsSpeaker:
         if not self._current(gen):
             return  # canceled meanwhile: say nothing
         self._failures += 1
+        if reason in PERMANENT_FAILURES:
+            # A bad key, a plan without API access to this voice (402, e.g. a free key with a library voice),
+            # or forbidden: no later line can succeed, so give up now instead of trying every line.
+            self._failures = FAILURES_BEFORE_SAPI
         log.warning("ElevenLabs failed (%s); this line uses the local voice", reason)
         if self._failures >= FAILURES_BEFORE_SAPI and not self.gave_up:
             self.gave_up = True
