@@ -828,7 +828,14 @@ class ToolGateway(DesktopTools):
         await self._emit(task_id, "run.result", result, spoken, "high")
         await self._state(task_id, "working")
         if result.timed_out:
-            raise _ToolError("timeout", spoken)
+            # Keep what the program printed before it was stopped: it shows where it hung.
+            partial = (
+                f" Output before it was stopped: {wrap(f'program:{entry} stdout', result.stdout_tail)} "
+                f"Errors: {wrap(f'program:{entry} stderr', result.stderr_tail)}"
+                if result.stdout_tail or result.stderr_tail
+                else " It printed nothing before it was stopped."
+            )
+            raise _ToolError("timeout", spoken + partial)
         return {
             "entry": entry,
             "exit_code": result.exit_code,

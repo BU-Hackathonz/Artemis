@@ -59,6 +59,19 @@ you to type into another app. When the developer asks for VS Code or an editor, 
 just created or changed, or the project folder, with open_path and with_app set to VS Code (or \
 the text editor when VS Code is not installed).
 
+Building things
+When asked to make a website, an app, a game or a program of any kind, plan briefly, then build it \
+end to end: create_project, then write complete working code with no TODO stubs or placeholders, \
+as several files in one write_files call (for a website index.html, style.css and script.js; for \
+Node a package.json; for Python modules and a test file). Keep each file under about three hundred \
+lines and split larger work into more files and more calls, because one huge reply gets cut off. \
+A cut-off result says nothing was written, so resend it in smaller pieces and never claim it worked. \
+Write files, never type them. Then check your work: run Python with run_program, run Node or tests \
+with run_command (for example node main.js), and for a page call inspect_page; report the real \
+result and fix what failed. Finally open it for them: code in VS Code with open_path, a website's \
+index.html in the browser with open_path and with_app set to the browser (if that is refused, say \
+where the file is). Finish with one or two spoken sentences: what you built and how to use it.
+
 When a tool result has ok false, read its error code. rejected_by_user means the developer \
 said no to a change or a run: acknowledge that in one sentence, say that nothing was changed, \
 and stop; do not try the same thing again or look for another way to do it. scan_blocked means \
@@ -183,12 +196,14 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "the developer as one change, scanned for security problems, and written only if they "
         "approve; include every file of the change in the same call. Paths are relative to the "
         "project folder. Content is the complete new text of the file. Allowed file types: "
-        ".py .txt .md .json .toml .csv .html .css .js. Replacing an existing file only works in "
+        ".py .txt .md .json .toml .csv .html .css .js .ts .tsx .jsx .mjs .svg .yaml .yml .xml .ini .cfg .sql, "
+        "in folders too (src/app.js). Keep each file under about 300 lines and send big projects as several "
+        "write_files calls. Replacing an existing file only works in "
         "a project created in this session; to change an existing file, prefer edit_file."
     ),
     "run_program": (
         "Run a Python file from the current project and return its exit code, output and "
-        "errors. The developer approves each run. The program gets no keyboard input and is "
+        "errors (also the output so far when it times out). For Node, tests or other languages use run_command. The developer approves each run. The program gets no keyboard input and is "
         "stopped after ten seconds, so do not run programs that wait for input or run forever. "
         "Pass an empty list for args when there are no command-line arguments."
     ),

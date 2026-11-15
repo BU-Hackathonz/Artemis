@@ -736,6 +736,17 @@ def test_timeout(tmp_path):
     )
 
 
+def test_timeout_gives_the_model_the_output_so_far(tmp_path):
+    async def go():
+        w = World(tmp_path, result=result_of(exit_code=None, timed_out=True, stdout="tick 1\ntick 2\n"))
+        await w.hello()
+        return await w.call("run_program", entry="main.py")
+
+    result = asyncio.run(go())
+    assert (result.ok, result.error) == (False, "timeout")
+    assert "tick 2" in result.message and "stopped after 10 seconds" in result.message
+
+
 def test_run_announcement_wording():
     def say(**kw):
         return run_announcement("main.py", result_of(**kw), 10)

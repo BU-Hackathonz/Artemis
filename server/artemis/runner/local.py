@@ -262,7 +262,11 @@ class LocalRunner:
     def _run_sync(self, project: ProjectRef, entry: str, args: list[str], timeout_s: int, handle: _Started) -> RunResult:
         self._inside(project, entry)
         python = self.python
-        argv = [str(python), "-I", "-X", "utf8", entry, *args]
+        # -E -s, not -I: isolated mode drops the script's folder from sys.path, so a program could not
+        # import its own sibling modules (a package, utils.py next to main.py). Environment variables and
+        # the user's site-packages are still ignored.
+        # -u: unbuffered, so what a program printed before a timeout kill is not lost in its buffer.
+        argv = [str(python), "-E", "-s", "-u", "-X", "utf8", entry, *args]
         kwargs: dict = {}
         if IS_WINDOWS:
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
