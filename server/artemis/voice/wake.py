@@ -31,6 +31,8 @@ from typing import Callable
 
 import numpy as np
 
+from .text import correct_transcript
+
 RATE = 16_000
 FRAME = RATE // 10  # 100 ms
 
@@ -108,6 +110,14 @@ class Segmenter:
         self._chunks, self._voiced, self._quiet = [], 0, 0
         self._pre.clear()
 
+    def restart(self) -> None:
+        """End the utterance being collected without keeping it, but keep the last moments as pre-roll: what
+        comes next (a request after "Hey Artemis") starts with its soft first sound intact."""
+        tail = self._chunks[-(self._pre.maxlen or 1):]
+        self._chunks, self._voiced, self._quiet = [], 0, 0
+        self._pre.clear()
+        self._pre.extend(tail)
+
     def feed(self, frame: np.ndarray, voice: float | None = None) -> np.ndarray | None:
         """Give it one 100 ms frame. Returns a finished utterance, or None.
 
@@ -156,8 +166,14 @@ class Segmenter:
 
 # Whisper spells the name several ways. A greeting word is required: a bare "Artemis" turns up
 # whenever people talk *about* Artemis, and must not wake it.
-_NAME = r"art[ae]m[iaeu]s|artimis|artimus|artemas|artemiss|artemise"
-_WAKE = re.compile(rf"^\W*(?:hey|hay|hi|hello|okay|ok)\W+(?:{_NAME})\b[\s,.:;!?-]*", re.IGNORECASE)
+# "Art Miss" and "Art Emus" (split in two), "Arthemis" and "Artemist" are what the small models write when the
+# name is said slowly or with an accent. "A" is "Hey" with the H dropped; it is only accepted before the name.
+_NAME = (r"art[ae]m[iaeu]ss?t?|artimis|artimus|artemas|artemise|arth[ae]m[iaeu]s"
+         r"|art[\s-]+(?:e[\s-]*)?m(?:is|us|iss|ice)s?")
+_GREETING = r"hey|hay|hi|hello|okay|ok|a|ay"
+_WAKE = re.compile(rf"^\W*(?:{_GREETING})\W+(?:{_NAME})\b[\s,.:;!?-]*", re.IGNORECASE)
+# The start of the phrase and no more ("Hey", "Hey Art"): the speaker is pausing inside "Hey Artemis".
+_PARTIAL = re.compile(rf"^\W*(?:hey|hay|hi|hello|okay|ok)\W*(?:art\w*)?\W*$", re.IGNORECASE)
 
 
 def wake_request(transcript: str) -> str | None:
@@ -319,6 +335,7 @@ class WakeLoop:
         self.wake_frames = round(wake_silence_s * RATE / FRAME) if wake_silence_s else 0
         self._early: tuple[int, int, str, float] | None = None  # (utterance, voiced frames, transcript, seconds)
         self._looked = 0  # the utterance last given an early look: one per utterance, at its first pause
+        self._retry: tuple[int, int] = (0, 0)  # (utterance, voiced frames) of a look that heard only "Hey": look again
 
     @property
     def armed(self) -> bool:
@@ -360,7 +377,8 @@ class WakeLoop:
         audio = seg.feed(frame, voice)
         if audio is None:
             if (self.wake_frames and not was_armed and seg.in_speech and seg.quiet_frames == self.wake_frames
-                    and seg.voiced >= seg.min_frames and seg.started != self._looked):
+                    and seg.voiced >= seg.min_frames and seg.started != self._looked
+                    and (seg.started != self._retry[0] or seg.voiced > self._retry[1])):
                 return self._early_look()
             return None
         self.stats.utterances += 1
@@ -414,22 +432,35 @@ class WakeLoop:
         audio = seg.so_far()
         took = 0.0
         if self.quick is not None and seg.voiced <= self.quick_frames:
-            text, took = self._hear(audio, self.quick)
+            try:
+                text, took = self._hear(audio, self.quick)
+            except Exception:  # a quick model that fails is a quick model that is not ready
+                text = None
             found = None if text is None else wake_request(text)
             if found == "":
                 self._confirm = audio
                 return self._arm_early(audio, took)
             if text is not None and found is None:
+                self._pausing(text)
                 return None  # most likely other people talking: the full model hears it once, at the end
         text, more = self._hear(audio)  # the full model: its transcript can be the final one
         took += more
         if wake_request(text) != "":
             self._early = (seg.started, seg.voiced, text, took)  # kept for the end, if nothing more is said
+            self._pausing(text)
             return None
         return self._arm_early(audio, took)
 
+    def _pausing(self, text: str) -> None:
+        """A look that heard only the start of the phrase ("Hey"): the speaker is pausing inside it, so the next
+        pause in this utterance gets a look too, instead of waiting for the full end silence."""
+        seg = self.segmenter
+        if _PARTIAL.match(text) and seg.voiced <= self.quick_frames:
+            self._looked = 0
+            self._retry = (seg.started, seg.voiced)
+
     def _arm_early(self, audio: np.ndarray, took: float) -> Event:
-        self.segmenter.reset()  # what follows the pause is the request, a new utterance
+        self.segmenter.restart()  # what follows the pause is the request, a new utterance (keeps its pre-roll)
         self.stats.utterances += 1
         self.stats.wakes += 1
         self._armed = self.window_frames
@@ -494,16 +525,17 @@ class WakeListener:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._quick_name: str | None = None
         self._quick_model = None  # loaded on its own thread, so neither startup nor the mic is held up
+        self._captured_muted = False  # whether the frame being processed was captured while Artemis spoke
         make = loop_factory or WakeLoop
         if loop_factory is None and stream_factory is None:
             # the voice detector and the quick model are for the real microphone (tests feed synthetic tones)
             vad = VoiceDetector.load()
             self._quick_name = quick_model()
-            self.wake = make(self._transcribe, speaking=self._muted, vad=vad,
+            self.wake = make(self._transcribe, speaking=self._speaking, vad=vad,
                              segmenter=Segmenter(pre_roll_s=0.5) if vad is not None else None,
                              quick=self._quick if self._quick_name else None)
         else:
-            self.wake = make(self._transcribe, speaking=self._muted)
+            self.wake = make(self._transcribe, speaking=self._speaking)
 
     @property
     def armed(self) -> bool:
@@ -523,6 +555,11 @@ class WakeListener:
             return bool(announcer.current().busy())  # a queued or downloading line is about to be heard
         except Exception:
             return True  # can't tell: safer not to listen than to hear ourselves
+
+    def _speaking(self) -> bool:
+        """Muted now, or when the frame being processed was captured: a slow transcription backs frames up, and
+        Artemis's own words, captured while it spoke, must not be heard because it has stopped since."""
+        return self._captured_muted or self._muted()
 
     def _transcribe(self, audio):
         return self.voice._transcribe(audio)
@@ -544,7 +581,7 @@ class WakeListener:
             return None
         segments, _ = model.transcribe(audio, language="en", beam_size=1, vad_filter=True,
                                        initial_prompt=getattr(self.voice, "prompt", None) or None)
-        return " ".join(s.text.strip() for s in segments)
+        return correct_transcript(" ".join(s.text.strip() for s in segments))
 
     def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -570,14 +607,15 @@ class WakeListener:
 
     def _on_audio(self, data, frames, when, status) -> None:
         try:
-            self._frames.put_nowait(data[:, 0].copy() if getattr(data, "ndim", 1) == 2 else data.copy())
+            frame = data[:, 0].copy() if getattr(data, "ndim", 1) == 2 else data.copy()
+            self._frames.put_nowait((frame, self._muted()))  # muted as of now, not as of when the worker gets to it
         except queue.Full:
             pass  # the worker is behind (a slow transcription): dropping beats unbounded memory
 
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                frame = self._frames.get(timeout=0.2)
+                frame, self._captured_muted = self._frames.get(timeout=0.2)
             except queue.Empty:
                 continue
             try:

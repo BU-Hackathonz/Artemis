@@ -7,7 +7,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from artemis.voice.wake import (  # noqa: E402
-    FRAME, RATE, Segmenter, VoiceDetector, WakeListener, WakeLoop, denoise, listen_mode, wake_request,
+    FRAME, RATE, Segmenter, rms, VoiceDetector, WakeListener, WakeLoop, denoise, listen_mode, wake_request,
 )
 
 RNG = np.random.default_rng(7)
@@ -528,3 +528,178 @@ def test_a_confirmation_that_fails_takes_the_quick_wake_back():
     loop = WakeLoop(broken, quick=Script("Hey Artemis."))
     feed(loop, quiet(1) + speech(0.8) + quiet(0.4))
     assert [e.kind for e in feed(loop, quiet(0.1))] == ["misheard"] and not loop.armed
+
+
+# ----- live-test findings: slow phrasing, mishearings, slow models, backlog -----
+
+
+def test_hey_artemis_said_slowly_with_a_pause_in_the_middle_still_wakes():
+    quick, full = Script("Hey."), Script("Hey Artemis.")
+    loop = WakeLoop(full, quick=quick)
+    events = feed(loop, quiet(1) + speech(0.5) + quiet(0.5) + speech(0.7) + quiet(0.8))
+    assert [e.kind for e in events] == ["wake"] and loop.armed
+    assert full.heard == 1 and loop.stats.misheard == 0
+
+
+def test_a_greeting_alone_before_the_pause_gets_a_second_early_look_after_the_name():
+    # "Hey" ... 0.5 s ... "Artemis": the pause after "Hey" is not the end, and the pause after the name is
+    quick, full = Script("Hey.", "Hey Artemis."), Script("Hey Artemis.", "Build a to-do app.")
+    loop = WakeLoop(full, quick=quick)
+    feed(loop, quiet(1) + speech(0.5) + quiet(0.5) + speech(0.7))
+    events = feed(loop, quiet(0.4))  # not the 0.8 s end silence
+    assert [(e.kind, e.quiet_s) for e in events] == [("wake", 0.4)]
+    assert [e.kind for e in feed(loop, utterance())] == ["request"] and loop.stats.misheard == 0
+
+
+def test_slow_phrase_without_the_quick_model_also_arms_early_on_the_second_pause():
+    full = Script("Hey.", "Hey Artemis.")
+    loop = WakeLoop(full)
+    feed(loop, quiet(1) + speech(0.5) + quiet(0.5) + speech(0.7))
+    assert [e.kind for e in feed(loop, quiet(0.4))] == ["wake"]
+
+
+def test_other_peoples_pauses_do_not_each_get_an_early_look():
+    quick, full = Script("so I think", "so I think the"), Script("so I think the judges are here")
+    loop = WakeLoop(full, quick=quick)
+    feed(loop, quiet(1) + speech(1) + quiet(0.5) + speech(1) + quiet(0.5) + speech(1) + quiet(1.2))
+    assert quick.heard == 1
+
+
+def test_the_request_after_a_pause_longer_than_the_early_look_is_heard_whole():
+    # "Hey Artemis" ... 0.6 s ... request. The segmenter restarts at the early look; the request's
+    # soft first sound must still have its pre-roll (the restart used to throw the pre-roll away).
+    class Audio:
+        def __init__(self):
+            self.lengths = []
+
+        def __call__(self, audio):
+            self.lengths.append(len(audio) / RATE)
+            return ["Hey Artemis.", "Build a to-do app."][len(self.lengths) - 1]
+
+    heard = Audio()
+    loop = WakeLoop(heard, clean=False, vad=lambda f: 0.9 if rms(f) > 0.01 else 0.0)
+    kinds = [e.kind for e in feed(loop, quiet(1) + speech(0.8) + quiet(0.5) + speech(1) + quiet(1))]
+    assert kinds == ["wake", "request"]
+    assert heard.lengths[1] >= 0.3 + 1.0 + 0.8 - 0.01  # pre-roll + speech + end silence
+
+
+def test_request_after_a_wake_and_a_0_6_s_gap_with_the_quick_model():
+    quick, full = Script("Hey Artemis."), Script("Hey Artemis.", "Open the readme.")
+    loop = WakeLoop(full, quick=quick)
+    events = feed(loop, quiet(1) + speech(0.8) + quiet(0.6) + speech(1) + quiet(1))
+    assert [(e.kind, e.text) for e in events] == [("wake", ""), ("request", "Open the readme.")]
+    assert loop.stats.misheard == 0 and loop.stats.requests == 1
+
+
+@pytest.mark.parametrize(
+    "said, rest",
+    [
+        ("Hey Artemus", ""),
+        ("Hey Art Miss, open main.py", "open main.py"),
+        ("hey art emis", ""),
+        ("Hey Art-Emus.", ""),
+        ("A Artemis, run it", "run it"),
+        ("Hey Artemist", ""),
+        ("Hey Arthemis", ""),
+        ("Hey Artimus open it", "open it"),
+    ],
+)
+def test_known_mishearings_of_the_name_still_wake(said, rest):
+    assert wake_request(said) == rest
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["Hey Art, look at this", "Hey, art museum tomorrow?", "Hey Artie", "Hey Arthur", "Hey are these", "Hey Artichoke"],
+)
+def test_widening_the_name_does_not_wake_on_other_words(said):
+    assert wake_request(said) is None
+
+
+def test_orca_or_artemis_own_voice_is_never_transcribed_even_after_a_quick_wake():
+    # armed by the quick model, then Artemis (or a muted-reason source) speaks: nothing is heard, armed stays
+    talking = {"now": False}
+    quick, full = Script("Hey Artemis."), Script("Hey Artemis.", "should not be asked")
+    loop = WakeLoop(full, quick=quick, speaking=lambda: talking["now"])
+    feed(loop, quiet(1) + speech(0.8) + quiet(0.4))
+    feed(loop, quiet(0.1))  # confirmed
+    talking["now"] = True
+    assert feed(loop, speech(1) + quiet(2)) == [] and full.heard == 1
+    assert loop.armed
+
+
+def test_the_window_does_not_run_out_while_artemis_is_speaking():
+    talking = {"now": False}
+    loop = WakeLoop(Script("Hey Artemis.", "Run main.py."), window_s=2.0, speaking=lambda: talking["now"])
+    feed(loop, quiet(1) + speech(0.8) + quiet(0.8))
+    talking["now"] = True
+    assert feed(loop, quiet(5)) == []  # a spoken line: no timeout
+    talking["now"] = False
+    events = feed(loop, quiet(0.5) + utterance())
+    assert [e.kind for e in events] == ["request"]
+
+
+def test_a_background_voice_is_ignored_once_and_never_armed():
+    # a TV talking in short bursts: each burst's pause must not arm anything or reach the full model twice
+    quick, full = Script("and the weather tomorrow", "will be cloudy"), Script("and the weather tomorrow will be cloudy")
+    loop = WakeLoop(full, quick=quick)
+    events = feed(loop, quiet(1) + speech(1) + quiet(0.5) + speech(1) + quiet(1.2))
+    assert [e.kind for e in events] == ["ignored"] and not loop.armed and full.heard == 1
+
+
+def test_a_failing_quick_model_falls_back_to_the_full_model():
+    def broken(audio):
+        raise RuntimeError("tiny.en fell over")
+
+    full = Script("Hey Artemis.")
+    loop = WakeLoop(full, quick=broken)
+    events = feed(loop, quiet(1) + speech(0.8) + quiet(0.4))
+    assert [e.kind for e in events] == ["wake"] and full.heard == 1
+
+
+def test_a_slow_confirm_arms_first_and_takes_the_wake_back_cleanly():
+    import time as _t
+
+    class Slow:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, audio):
+            self.calls += 1
+            _t.sleep(0.05)  # stands in for 2 s of small.en
+            return "so anyway about lunch"
+
+    full = Slow()
+    loop = WakeLoop(full, quick=Script("Hey Artemis.", "so anyway about lunch"))
+    order = []
+    for frame in quiet(1) + speech(0.8) + quiet(0.4) + quiet(0.1) + speech(1) + quiet(1):
+        event = loop.feed(frame)
+        if event:
+            order.append(event.kind)
+    # the armed tone (wake) came before the confirm; misheard follows, then what was said is not a request
+    assert order[:2] == ["wake", "misheard"] and "request" not in order
+    assert not loop.armed and loop.stats.wakes == 0
+
+
+def test_backlog_captured_while_artemis_spoke_is_not_heard_when_it_is_processed_late():
+    # A slow transcription backs the queue up; frames captured while Artemis was talking are processed
+    # after it stopped. They must be judged by the muted state at capture time.
+    voice = FakeVoice(["Hey Artemis, run main.py"])
+    got = []
+    listener = WakeListener(voice, got.append, stream_factory=FakeStream)
+    listener._stream = FakeStream(listener._on_audio)
+    voice.announcer.engine = "elevenlabs"
+    for frame in [*quiet(1), *speech(1.5), *quiet(1.5)]:
+        listener._on_audio(frame.reshape(-1, 1), FRAME, None, None)  # captured while Artemis speaks
+    voice.announcer.engine = None  # speech over before the worker gets to them
+    import threading
+
+    t = threading.Thread(target=listener._run, daemon=True)
+    t.start()
+    import time as _t
+
+    _t.sleep(1.0)
+    listener._stop.set()
+    t.join(2)
+    assert voice.transcripts == ["Hey Artemis, run main.py"]  # never transcribed
+    assert listener.wake.stats.utterances == 0
