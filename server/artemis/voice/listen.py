@@ -239,8 +239,13 @@ class WhisperVoice:
             await closed.wait()  # that mic is closed before this beep plays, so it can't record it
             if gen != self._gen:
                 return  # released again meanwhile; that stop already played "stopped"
-        await self.announcer.stop_speech()
-        await asyncio.sleep(self._earcon("listening"))  # let the beep finish before the mic opens
+        try:
+            await self.announcer.stop_speech()
+            await asyncio.sleep(self._earcon("listening"))  # let the beep finish before the mic opens
+        except BaseException:  # a failing speaker or earcon must not leave the key "held": Listening forever, presses ignored
+            if gen == self._gen:
+                self._wanted = False
+            raise
         if not self._wanted or gen != self._gen:
             return  # key released (and maybe pressed again) during the earcon: a newer press owns the mic
         with self._lock:

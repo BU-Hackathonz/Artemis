@@ -256,9 +256,9 @@ class Core:
             try:
                 now = self.voice_activity()
                 if now != self.activity:
-                    self.activity = now
                     for s in list(self.sessions.values()):
                         await s.voice_activity(*now)
+                    self.activity = now  # only once every session has it, so a failed send is retried next tick
             except Exception:  # a voice that can't be asked must not end the updates
                 log.exception("voice activity check failed")
             await asyncio.sleep(interval_s)

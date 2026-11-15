@@ -809,3 +809,24 @@ def test_low_lines_are_not_spoken_while_push_to_talk_has_the_mic():
     asyncio.run(run())
     said = [e for e in log if isinstance(e, tuple)]
     assert said == [("say", "Still working.", "low"), ("say", "Created main.py, 1 line.", "normal"), ("say", "Still working.", "low")]
+
+
+def test_a_failed_start_does_not_leave_the_key_held():
+    """stop_speech or the earcon raising used to leave _wanted set: the island showed Listening forever and every
+    later press was ignored as a key repeat."""
+    class Boom:
+        async def stop_speech(self):
+            raise RuntimeError("speech engine gone")
+
+    voice = WhisperVoice(announcer=Boom(), model=FakeModel("x"), stream_factory=lambda cb: FakeStream(cb, np.zeros(0, np.float32)),
+                         earcon=lambda name: 0.0)
+
+    async def run():
+        with pytest.raises(Exception):
+            await voice.start_listening()
+        assert not voice.busy_listening
+        voice.announcer = type("Ok", (), {"stop_speech": staticmethod(lambda: asyncio.sleep(0))})()
+        await voice.start_listening()
+        assert voice.busy_listening  # the next press works
+
+    asyncio.run(run())
