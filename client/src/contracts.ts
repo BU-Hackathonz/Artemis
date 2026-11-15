@@ -6,9 +6,14 @@ export function isTaskState(value: unknown): value is TaskState {
   return typeof value === 'string' && TASK_STATES.includes(value as TaskState);
 }
 export type Decision = 'approve' | 'reject';
+export const DESKTOP_KINDS = ['open','read_outside','run_command','type'] as const;
+export type ApprovalKind = 'write_files' | 'run_program' | typeof DESKTOP_KINDS[number];
+// What a desktop approval will do (contracts §9). The core covers it with approval_hash.
+export interface DesktopSpec { action: string; target: string; text?: string }
 export interface Approval {
   blocking?: boolean;
-  approval_id: string; approval_hash: string; kind: 'write_files' | 'run_program'; summary: string;
+  approval_id: string; approval_hash: string; kind: ApprovalKind; summary: string;
+  desktop?: DesktopSpec;
   files: { path: string; action: string; lines_added: number; lines_removed: number }[];
   diff: string | null; run: { preset: string; entry: string; timeout_s: number } | null;
   findings: { rule: string; severity: string; path: string; line: number; message: string }[];

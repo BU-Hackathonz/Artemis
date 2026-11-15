@@ -10,6 +10,7 @@ import {MessageDialogContent} from 'resource:///org/gnome/shell/ui/dialog.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {initialFocus, keyDecision, clickDecision} from './approvalKeys.js';
+import {describeApproval, accessibleName} from './approvalDescribe.js';
 
 const DIFF_LINES = 30;
 const KEY_NAMES = new Map([
@@ -32,17 +33,23 @@ export class ApprovalDialog {
         this._approval = approval;
         this._onDecide = onDecide;
         this._busy = false;
-        this._focus = initialFocus(approval.blocking);
+        this._desc = describeApproval(approval);
+        // An approval we can't show starts on Reject, like a blocked one, and has no Approve button.
+        const startBlocked = Boolean(approval.blocking) || !this._desc.known;
+        this._focus = initialFocus(startBlocked);
 
-        const title = approval.kind === 'write_files' ? 'Review file changes' : 'Review program run';
+        const title = this._desc.title;
         this._dialog = new ModalDialog.ModalDialog({
             styleClass: 'artemis-approval-dialog',
             destroyOnClose: true,
         });
-        // Orca reads the title and the summary when the dialog opens.
-        this._dialog.accessible_name = `${title}. ${approval.summary}`;
+        // Orca reads the title, the summary and the exact command or text when the dialog opens.
+        this._dialog.accessible_name = accessibleName(approval);
 
-        const content = new MessageDialogContent({title, description: approval.summary});
+        const content = new MessageDialogContent({
+            title,
+            description: this._desc.known ? approval.summary : this._desc.lines[0],
+        });
         this._dialog.contentLayout.add_child(content);
         content.add_child(this._buildBody());
 
@@ -50,20 +57,23 @@ export class ApprovalDialog {
         content.add_child(this._status);
 
         this._reject = this._button('Reject', () => this._send(clickDecision('reject', approval)));
-        this._approve = this._button(
-            approval.blocking ? 'Approve blocked action (Shift+Enter)' : 'Approve',
-            () => this._send(clickDecision('approve', approval)));
         this._reject.connect('key-focus-in', () => { this._focus = 'reject'; });
-        this._approve.connect('key-focus-in', () => { this._focus = 'approve'; });
+        if (this._desc.known) {
+            this._approve = this._button(
+                approval.blocking ? 'Approve blocked action (Shift+Enter)' : 'Approve',
+                () => this._send(clickDecision('approve', approval)));
+            this._approve.connect('key-focus-in', () => { this._focus = 'approve'; });
+        }
 
         const row = new St.BoxLayout({style_class: 'actions', x_align: Clutter.ActorAlign.END});
         row.add_child(this._reject);
-        row.add_child(this._approve);
+        if (this._approve)
+            row.add_child(this._approve);
         content.add_child(row);
 
         this._dialog.connect('key-press-event', (_actor, event) => this._onKey(event));
         this._dialog.connect('key-release-event', (_actor, event) => this._onKeyRelease(event));
-        this._dialog.setInitialKeyFocus(initialFocus(approval.blocking) === 'reject' ? this._reject : this._approve);
+        this._dialog.setInitialKeyFocus(initialFocus(startBlocked) === 'reject' ? this._reject : this._approve);
     }
 
     get approvalId() {
@@ -84,11 +94,13 @@ export class ApprovalDialog {
     _buildBody() {
         const a = this._approval;
         const body = new St.BoxLayout({vertical: true, x_expand: true});
-        for (const f of a.files)
-            body.add_child(wrapped(`${f.path}: ${f.action}, ${f.lines_added} lines added, ${f.lines_removed} removed.`));
-        if (a.run)
-            body.add_child(wrapped(`Run ${a.run.entry} with ${a.run.preset}. Timeout: ${a.run.timeout_s} seconds.`));
-        if (a.findings.length > 0) {
+        if (!this._desc.known) {
+            body.add_child(wrapped('Press Enter or Escape to reject.'));
+            return body;
+        }
+        for (const line of this._desc.lines)
+            body.add_child(wrapped(line));
+        if (a.findings?.length > 0) {
             body.add_child(wrapped('Security findings'));
             for (const f of a.findings)
                 body.add_child(wrapped(`${f.severity}: ${f.rule} in ${f.path}, line ${f.line}: ${f.message}`));
@@ -157,7 +169,8 @@ export class ApprovalDialog {
 
     _setSensitive(on) {
         this._reject.reactive = on;
-        this._approve.reactive = on;
+        if (this._approve)
+            this._approve.reactive = on;
     }
 
     async _send(decision) {

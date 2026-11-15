@@ -6,6 +6,10 @@
 //   - Reveal guard: for REVEAL_MS after the dialog appears, Enter and Space decide nothing, so an
 //     Enter meant for something else (the request field, another window) can't approve by reflex.
 //     Escape still rejects at once.
+//   - An approval this version can't show (describeApproval known:false) can only be rejected:
+//     Enter, Space, Shift+Enter and Escape reject; nothing approves.
+
+import {describeApproval} from './approvalDescribe.js';
 
 const ENTER_KEYS = ['Return', 'KP_Enter', 'ISO_Enter'];
 export const REVEAL_MS = 600;
@@ -23,6 +27,7 @@ export function keyDecision(key, focus, approval, sinceOpenMs = 0) {
   if (key.repeated) return null;
   if (!(Number.isFinite(sinceOpenMs) && sinceOpenMs >= REVEAL_MS)) return null;
   const enter = key.name === 'space' || ENTER_KEYS.includes(key.name);
+  if (!describeApproval(approval).known) return enter ? 'reject' : null;
   if (focus === 'reject') return enter ? 'reject' : null;
   if (focus === 'approve') {
     if (!approval.blocking) return enter ? 'approve' : null;
@@ -35,6 +40,6 @@ export function keyDecision(key, focus, approval, sinceOpenMs = 0) {
 // button: 'approve' | 'reject'. A pointer click on Approve does nothing while blocking.
 export function clickDecision(button, approval) {
   if (button === 'reject') return 'reject';
-  if (button === 'approve' && !approval.blocking) return 'approve';
+  if (button === 'approve' && !approval.blocking && describeApproval(approval).known) return 'approve';
   return null;
 }
