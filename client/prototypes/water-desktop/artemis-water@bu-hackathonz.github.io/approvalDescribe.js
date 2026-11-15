@@ -9,6 +9,7 @@ const DESKTOP_TITLES = {
   read_outside: 'Read a file',
   run_command: 'Run a command',
   type: 'Type into a window',
+  publish: 'Publish to GitHub',
 };
 
 // The desktop.action values each kind may carry (contracts §9). Any other pairing is unknown.
@@ -17,6 +18,7 @@ const DESKTOP_ACTIONS = {
   read_outside: ['read_path'],
   run_command: ['run_command'],
   type: ['type_text', 'press_keys'],
+  publish: ['publish_github'],
 };
 
 const isText = v => typeof v === 'string';
@@ -58,6 +60,20 @@ export function describeApproval(approval) {
       return {title, known: true, lines: hasText ? [`Open: ${d.target}`, `With: ${d.text}`] : [`Open: ${d.target}`]};
     case 'read_outside':
       return {title, known: true, lines: [`File: ${d.target}`]};
+    case 'publish': {
+      // contracts §9.1: target owner/repo, text "<visibility>\n<description>", files every file pushed
+      if (!hasText) return unknown;
+      const [visibility, ...rest] = d.text.split('\n');
+      if (visibility !== 'private' && visibility !== 'public') return unknown;
+      const files = Array.isArray(approval.files) ? approval.files.filter(f => f && isText(f.path)) : [];
+      if (!files.length) return unknown; // never publish what we can't list
+      const about = rest.join('\n').trim();
+      return {title, known: true, lines: [
+        `Repository: ${d.target}, ${visibility}.`,
+        ...(about ? [`Description: ${about}`] : []),
+        `Files (${files.length}): ${files.map(f => f.path).join(', ')}`,
+      ]};
+    }
     case 'run_command':
       if (!hasText) return unknown; // never approve a command we can't show
       return {title, known: true, lines: [`Command: ${d.text}`, `Folder: ${d.target}`]};
