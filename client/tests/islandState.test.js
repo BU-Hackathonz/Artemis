@@ -286,3 +286,10 @@ describe('speaking over a task (David\'s run with real speech)', () => {
     expect(view(s)).toMatchObject({state: 'speaking', label: 'Speaking'});
   });
 });
+
+describe('no_speech', () => {
+  it('a silent push-to-talk hold is spoken, not shown as an error', () => {
+    const s = reduce(initial(true), ev('error', null, {code: 'no_speech', message: "I didn't hear anything.", recovery: 'Check the microphone.'}));
+    expect(view(s).state).toBe('idle');
+  });
+});

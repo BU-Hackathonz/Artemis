@@ -137,8 +137,9 @@ export function reduce(state, event) {
     }
 
     case 'error':
-        // A task_active refusal while a task works is spoken, not a failure of that task.
-        if (data.code === 'task_active') return state;
+        // Spoken, not a failure: a task_active refusal while a task works, and a silent
+        // push-to-talk hold ("I didn't hear anything", no_speech, proposed with voice/silent-hold).
+        if (data.code === 'task_active' || data.code === 'no_speech') return state;
         state.phase = 'error';
         state.waiting = false;
         return state;
