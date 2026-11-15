@@ -421,6 +421,7 @@ export default class ArtemisWaterExtension extends Extension {
         this._prompt = text; // the panel's goal for the task this starts
         const r = this._core ? await this._core.submitTask(text) : {ok: false, reason: 'not_connected'};
         if (r.ok) return {ok: true};
+        this._prompt = null; // nothing started, so the next task must not take this goal
         const message = {
             task_active: 'Still working on the last request.',
             not_connected: 'Artemis core is not running.',
@@ -485,6 +486,7 @@ export default class ArtemisWaterExtension extends Extension {
             else if (d.state === 'succeeded') I.taskEnd(tid, this._answers?.get(tid) ?? 'Done.', false);
             else if (d.state === 'failed') I.taskEnd(tid, this._errors?.get(tid) ?? 'The task failed.', true);
             else if (d.state === 'canceled') I.taskEnd(tid, 'Canceled.', true);
+            if (['succeeded', 'failed', 'canceled'].includes(d.state)) { this._answers?.delete(tid); this._errors?.delete(tid); }
             break;
         case 'agent.message':
             if (d.kind === 'progress' && !/^still working/i.test(d.text ?? '')) I.taskStep(tid, (d.text ?? '').replace(/\.$/, ''));
@@ -520,6 +522,11 @@ export default class ArtemisWaterExtension extends Extension {
             this._sid = sid;
             this._closeApproval();
             this._state = initial(true);
+            // the old session's tasks get no more events: end them in the panel instead of leaving them "working"
+            this._island?.taskEndAll('Artemis restarted, so this request stopped.');
+            this._prompt = null;
+            this._answers?.clear();
+            this._errors?.clear();
         } else {
             this._state = setConnected(this._state, connected);
         }

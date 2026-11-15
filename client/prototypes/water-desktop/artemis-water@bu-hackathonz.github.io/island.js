@@ -291,6 +291,13 @@ export class Island {
     }
 
     /** The request ended: the tree closes and the summary takes over. */
+    /** Ends every task still working (the core restarted: those tasks get no more events). */
+    taskEndAll(summary) {
+        const open = (this._tasks ?? []).filter((t) => t.state === 'working');
+        for (const t of open) this._finish(t, summary, true);
+        if (open.length) this._renderTasks();
+    }
+
     taskEnd(id, summary, failed) {
         const t = this.taskById(id);
         if (!t || t.state !== 'working') return;
@@ -311,6 +318,10 @@ export class Island {
         if (!this._recentBox) return;
         const GLYPH = {working: '\u25CF', done: '\u2713', stopped: '!'};
         const NAME = {working: 'working', done: 'done', stopped: 'stopped'};
+        // The rows are rebuilt on every event: keep keyboard focus on the same request's row, so a screen
+        // reader user reading the list (or who just pressed Enter on a row) isn't dropped out of the panel.
+        const focus = global.stage.get_key_focus();
+        const focusedTask = this._recentBox.get_children().find((c) => c === focus || c.contains?.(focus))?._artemisTask ?? null;
         this._recentBox.destroy_all_children();
         const sel = this._selected();
         if (!this._tasks.length) this._recentBox.add_child(new St.Label({style_class: 'artemis-island-empty', text: 'Nothing yet'}));
@@ -322,9 +333,11 @@ export class Island {
             row.add_child(g); row.add_child(l);
             const b = new St.Button({style_class: 'artemis-island-row', child: row, can_focus: true, x_align: Clutter.ActorAlign.FILL,
                 accessible_name: `${t.prompt}, ${NAME[t.state]}`});
+            b._artemisTask = t;
             if (t === sel) b.add_style_pseudo_class('checked');
             b.connect('clicked', () => { this._sel = t; this._renderTasks(); });
             this._recentBox.add_child(b);
+            if (t === focusedTask) b.grab_key_focus();
         }
         this._dTree.destroy_all_children();
         if (this._listening || this._hearing) {
