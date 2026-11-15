@@ -137,14 +137,18 @@ export class Island {
 
     /** Where the ring sits (stage px): the droplet leaves from and returns to here. */
     ringCenter() {
-        // From where the pill was just placed (set_position is immediate) plus the ring's box inside it,
-        // not get_transformed_position(): that lags a relayout by a frame, so a ring re-centred right after
-        // the pill changed width (a status shown or hidden) landed where the slot had been, out of line.
-        if (!this._dead) {
+        // From where the pill was just placed (set_position is immediate), not get_transformed_position(),
+        // which lags a relayout by a frame. Vertically the ring is centred in the pill (y_align CENTER), so
+        // its centre is the pill's middle: never the ring's own box, whose y is 0 until it has been
+        // allocated (that put the ring about 7 px above the notch on David's laptop). Horizontally, the
+        // ring's box x once allocated, else the pill's left padding.
+        if (!this._dead && this._pill.height > 0) {
             const [px, py] = this._pill.get_position();
             const box = this._ring.get_allocation_box();
-            const w = box.x2 - box.x1, h = box.y2 - box.y1;
-            if (w > 0 && h > 0) return {x: px + box.x1 + w / 2, y: py + box.y1 + h / 2};
+            const w = box.x2 - box.x1;
+            const ringW = w > 0 ? w : 26 * this._scale;
+            const left = w > 0 ? box.x1 : 14 * this._scale;
+            return {x: px + left + ringW / 2, y: py + this._pill.height / 2};
         }
         const m = Main.layoutManager.primaryMonitor;
         return {x: m.x + m.width / 2, y: m.y + Main.layoutManager.panelBox.height + 40 * this._scale};
