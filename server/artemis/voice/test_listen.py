@@ -644,3 +644,30 @@ def test_warm_initialises_audio_so_the_first_press_is_fast(monkeypatch):
     v, _, _ = make(1)
     v.warm()
     assert "sounddevice" in sys.modules
+
+
+class SpeakingAnnouncer(FakeAnnouncer):
+    async def announce(self, text, priority):
+        self.log.append(("say", text, priority))
+
+
+def test_low_lines_are_not_spoken_while_push_to_talk_has_the_mic():
+    # "Still working." during a long run must not be recorded into "cancel" (a whole-utterance control word).
+    log = []
+    v, _, _ = make(1, log=log)
+    v.announcer = SpeakingAnnouncer(log)
+
+    async def run():
+        await v.announce("Still working.", "low")  # idle: spoken
+        v._wanted = True  # pressed: the listening earcon and the mic are next
+        await v.announce("Still working.", "low")  # not spoken
+        await v.announce("Created main.py, 1 line.", "normal")  # normal lines are unchanged
+        v._wanted = False
+        v.transcribing = True
+        await v.announce("Still working.", "low")  # not spoken while Whisper runs
+        v.transcribing = False
+        await v.announce("Still working.", "low")  # spoken again
+
+    asyncio.run(run())
+    said = [e for e in log if isinstance(e, tuple)]
+    assert said == [("say", "Still working.", "low"), ("say", "Created main.py, 1 line.", "normal"), ("say", "Still working.", "low")]

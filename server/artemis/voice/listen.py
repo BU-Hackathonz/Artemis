@@ -338,6 +338,11 @@ class WhisperVoice:
         self.prompt = vocabulary_prompt(words, natural=self.natural_prompt)
 
     async def announce(self, text: str, priority: Priority) -> None:
+        if priority == "low" and (self.busy_listening or self.transcribing):
+            # A low line ("Still working.", progress) said now would be recorded into the request, or
+            # talk over a release; low lines may be dropped (contracts.md §2). The log still has it.
+            log.debug("Low line not spoken: push-to-talk has the microphone")
+            return
         await self.announcer.announce(text, priority)
 
     async def stop_speech(self) -> None:
