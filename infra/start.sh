@@ -96,6 +96,7 @@ write_launch_file() {
     LAUNCH_TMP=""
 }
 
+# shellcheck disable=SC2329  # called through the trap below
 cleanup() {
     trap - EXIT INT TERM
     if [[ -n "$CORE_PID" ]]; then
