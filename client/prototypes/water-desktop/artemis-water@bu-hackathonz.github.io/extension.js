@@ -571,15 +571,17 @@ export default class ArtemisWaterExtension extends Extension {
         if (this._desktopOps.size > 500) this._desktopOps.clear();
         this._desktopOps.add(op);
         const core = this._core;
+        const typist = this._typist;
+        const generation = typist?.generation;
         const answer = (result) => core?.desktopResult(op, result);
         const run = async () => {
             if (kind === 'focus') {
                 const label = focusedWindow();
                 return answer(label ? {ok: true, window: label} : {ok: false, message: 'no window has the keyboard focus'});
             }
-            if (!this._typist || (kind !== 'type' && kind !== 'keys'))
+            if (!typist || (kind !== 'type' && kind !== 'keys'))
                 return answer({ok: false, message: 'the island cannot type on this desktop'});
-            const {ok, message} = await this._typist.run(kind, text, window);
+            const {ok, message} = await typist.run(kind, text, window, generation);
             return answer(ok ? {ok: true} : {ok: false, message});
         };
         this._desktopJob = (this._desktopJob ?? Promise.resolve()).then(run).catch(() => answer({ok: false, message: 'the island could not type'}));
@@ -600,6 +602,10 @@ export default class ArtemisWaterExtension extends Extension {
         } else {
             this._state = setConnected(this._state, connected);
         }
+        if (!connected || (sid && sid !== this._desktopSid)) {
+            this._typist?.stop();
+            this._desktopSid = sid;
+        }
         if (!connected && this._dialog) {
             this._offlineTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, OFFLINE_CLOSE_MS, () => {
                 this._offlineTimer = 0;
@@ -610,6 +616,7 @@ export default class ArtemisWaterExtension extends Extension {
         }
         if (connected && !this._dialog && this._approval && this._state.waiting && this._state.approvalId === this._approval.approval_id)
             this._showApproval(this._approval);
+        if (connected) this._typist?.resume();
         const session = sid || 'none';
         if (connected && session !== this._readySid && this._core) {
             this._readySid = session;

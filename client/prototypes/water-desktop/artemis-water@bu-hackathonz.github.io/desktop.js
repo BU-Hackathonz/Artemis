@@ -54,11 +54,14 @@ export class Typist {
         this._device = device;
         this._held = new Set();
         this._stopped = false;
+        this._generation = 0;
     }
 
     // Called when the task is canceled: the job in progress, and any queued one, stops at its next keystroke.
     stop() {
         this._stopped = true;
+        this._generation++;
+        this._releaseAll();
     }
 
     // Called when a new task starts, so a later job is not refused by an earlier cancel.
@@ -72,13 +75,17 @@ export class Typist {
         this._device = null;
     }
 
+    get generation() {
+        return this._generation;
+    }
+
     // kind: 'type' (text, "\n" is Return) or 'keys' (a chord such as "ctrl+s"). window is the
     // "<app id>: <title>" the developer approved. Resolves to {ok, message}.
-    async run(kind, text, window) {
+    async run(kind, text, window, generation = this._generation) {
         if (!this._device)
             return {ok: false, message: 'the keyboard is not available, so nothing was typed'};
         // Checked before every keystroke: the same window, and no shell prompt or dialog holding the keyboard.
-        const guard = () => !this._stopped && Main.modalCount === 0 && !!window && focusedWindow() === window;
+        const guard = () => !this._stopped && generation === this._generation && Main.modalCount === 0 && !!window && focusedWindow() === window;
         if (!window)
             return {ok: false, message: 'no window was approved for typing, so nothing was typed'};
         if (!guard())
@@ -138,7 +145,8 @@ export class Typist {
     }
 
     _release(kv) {
-        this._device.notify_keyval(GLib.get_monotonic_time(), kv, Clutter.KeyState.RELEASED);
+        if (!this._held.has(kv)) return;
+        this._device?.notify_keyval(GLib.get_monotonic_time(), kv, Clutter.KeyState.RELEASED);
         this._held.delete(kv);
     }
 
