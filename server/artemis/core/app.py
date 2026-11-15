@@ -7,13 +7,14 @@ Run: ARTEMIS_TOKEN=... uv run uvicorn artemis.core.main:app --host 127.0.0.1 --p
 import asyncio
 import hmac
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sse_starlette.sse import EventSourceResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -22,9 +23,12 @@ from artemis.contracts import (
     ClientDiagnostic,
     ClientReady,
     TaskRequest,
+    VoiceSettingsPatch,
 )
 from artemis.runner.local import NoInterpreter
+from artemis.voice import profile as voice_profile
 
+from . import settings as voice_settings
 from .approvals import ApprovalNotFound, ApprovalStale
 from .session import HEARTBEAT_S, Session, TaskActive, new_id
 
@@ -93,6 +97,7 @@ class Core:
         # Interpreter pre-check: probed once per process, then reused by every session.
         self._interpreter_probe: asyncio.Task | None = None
         self.background: set[asyncio.Task] = set()  # per-session checks, canceled at shutdown
+        self.wire_voice()
 
     def new_session(self) -> Session:
         sid = new_id("ses")
@@ -162,9 +167,47 @@ class Core:
             return False, None
         return announcer.status()
 
+    def active_engine(self) -> str:
+        """The speaker that would say the next line, or "none" when the voice has no announcer."""
+        method = getattr(getattr(self.voice, "announcer", None), "active_engine", None)
+        return method() if method is not None else "none"
+
+    def voice_state(self) -> tuple[bool, str | None, str]:
+        voice_ready, screen_reader = self.voice_status()
+        return voice_ready, screen_reader, self.active_engine()
+
     async def broadcast_voice_status(self, voice_ready: bool, screen_reader: str | None) -> None:
+        engine = self.active_engine()
         for s in list(self.sessions.values()):
-            await s.voice_status(voice_ready, screen_reader)
+            await s.voice_status(voice_ready, screen_reader, engine)
+
+    def wire_voice(self) -> None:
+        """Say the ElevenLabs fallback notice through the bus when that voice gives up. Called at
+        startup and again after every apply(), since apply() can build a new ElevenLabsSpeaker."""
+        eleven = getattr(getattr(self.voice, "announcer", None), "eleven", None)
+        if eleven is not None and hasattr(eleven, "on_give_up"):
+            eleven.on_give_up = self._say_fallback_notice
+
+    def _say_fallback_notice(self, text: str) -> None:
+        # Called on the event-loop thread (ElevenLabsSpeaker hands it over with call_soon_threadsafe).
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            log.warning("fallback notice not spoken: no event loop")
+            return
+        session = self.current()
+        if session is None:
+            log.warning("fallback notice not spoken: no session yet")
+            return
+        self.spawn(session.say(None, text))  # an agent.message at normal priority, spoken once
+
+    def apply_voice_profile(self, profile: voice_profile.VoiceProfile) -> None:
+        """Switch the voice to `profile` from the next line on, then re-wire the fallback notice."""
+        announcer = getattr(self.voice, "announcer", None)
+        if announcer is None or not hasattr(announcer, "apply"):
+            return
+        announcer.apply(profile)
+        self.wire_voice()
 
 
 def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
@@ -173,6 +216,10 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        try:  # the saved voice profile, with the environment on top, so it holds across restarts
+            core.apply_voice_profile(voice_profile.load())
+        except Exception:
+            log.exception("voice profile could not be applied; using the environment only")
         warm = getattr(core.voice, "warm", None)
         if warm_voice and warm:
             try:
@@ -201,7 +248,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
     app.add_middleware(  # outermost: answers preflights for the two listed origins
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH"],  # PATCH: /settings/voice only
         allow_headers=["Authorization", "Content-Type", "Last-Event-ID"],
     )
 
@@ -214,7 +261,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
     async def create_session():
         session = core.new_session()
         voice_ready, screen_reader = core.voice_status()
-        await session.voice_status(voice_ready, screen_reader)  # §5.3: at session start
+        await session.voice_status(voice_ready, screen_reader, core.active_engine())  # §5.3: at session start
         # In the background, so a slow probe never delays the client; the error event (if any)
         # still lands after voice.status and is replayed to a late SSE subscriber.
         core.spawn(core.check_interpreter(session))
@@ -245,6 +292,43 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
                 session.bus.unsubscribe(queue)
 
         return EventSourceResponse(stream(), ping=PING_S)
+
+    @app.get("/settings/voice")
+    async def get_voice_settings():
+        profile = await asyncio.to_thread(voice_profile.load)  # the file, then the environment on top
+        return voice_settings.settings_from(profile, core.active_engine())
+
+    @app.patch("/settings/voice")
+    async def patch_voice_settings(request: Request):
+        """Validate (422 invalid_setting), refuse env-pinned fields (409 set_by_environment), save the
+        file, apply to the voice, and return what is now in effect. Nothing is saved when any check fails."""
+        try:
+            raw = await request.json()
+        except ValueError:
+            return _invalid_setting("body")
+        try:
+            patch = VoiceSettingsPatch.model_validate(raw)
+        except ValidationError as exc:
+            return _invalid_setting(voice_settings.invalid_field(exc))
+        pinned = voice_settings.pinned_in_patch(patch, os.environ)
+        if pinned is not None:
+            return JSONResponse({"error": "set_by_environment", "field": pinned}, status_code=409)
+
+        path = voice_profile.default_path()
+        before = core.voice_state()
+        stored = await asyncio.to_thread(voice_profile.load, path, {})  # the file alone: no env values written back
+        voice_settings.apply_patch(patch, stored)
+        await asyncio.to_thread(voice_profile.save, stored, path)
+        effective = await asyncio.to_thread(voice_profile.load, path)
+        core.apply_voice_profile(effective)
+        after = core.voice_state()
+        if after != before:  # the engine may change without the ready state changing, so the watcher would miss it
+            await core.broadcast_voice_status(after[0], after[1])
+        return voice_settings.settings_from(effective, core.active_engine())
+
+    @app.get("/voices")
+    async def get_voices():
+        return await voice_settings.list_voices()
 
     @app.post("/sessions/{sid}/tasks")
     async def create_task(sid: str, body: TaskRequest):
@@ -338,6 +422,10 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         return Response(status_code=204)
 
     return app
+
+
+def _invalid_setting(field: str) -> JSONResponse:
+    return JSONResponse({"error": "invalid_setting", "field": field}, status_code=422)
 
 
 async def _probe_python(runner) -> str | None:

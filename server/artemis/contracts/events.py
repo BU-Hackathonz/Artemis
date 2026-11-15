@@ -99,6 +99,7 @@ class ErrorData(BaseModel):
 class VoiceStatusData(BaseModel):
     voice_ready: bool
     screen_reader: Literal["nvda"] | None = None
+    engine: str | None = None  # the speaker that would say the next line (docs/contracts.md section 7)
 
 
 DATA_MODELS: dict[str, type[BaseModel]] = {

@@ -31,6 +31,7 @@ from .events import (
     VoiceStatusData,
 )
 from .interfaces import Agent, Approvals, Emit, Runner, ToolGateway
+from .settings import VoiceSettings, VoiceSettingsPatch
 from .tasks import (
     AgentOutcome,
     Answered,

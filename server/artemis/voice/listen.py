@@ -156,9 +156,17 @@ class WhisperVoice:
         None (the default, or when no voice can speak) makes the core keep its spoken line, so a user
         whose speech goes through the client's live region still gets the words, not a silent tick.
         """
-        if not self.working_earcon or not self.announcer.voice_ready:
+        if not self._working_earcon_on() or not self.announcer.voice_ready:
             return None
         return self._tick
+
+    def _working_earcon_on(self) -> bool:
+        """The Announcer's working_cue_earcon, set by apply() from the voice profile (which already holds
+        ARTEMIS_WORKING_CUE), wins when it is on. Otherwise the env value read at construction (or passed in).
+        A settings PATCH cannot turn the cue off while ARTEMIS_WORKING_CUE pins it on (409), so the two agree."""
+        if getattr(self.announcer, "working_cue_earcon", False):
+            return True
+        return self.working_earcon
 
     def _tick(self) -> None:
         if self._wanted or self._stream is not None or self._tail is not None:
