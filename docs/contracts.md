@@ -531,11 +531,11 @@ task contract is needed: `voice.activity` (§2) adds the voice's own states.
 - On Linux there is no NVDA estimate: `speaking` comes from the engine that plays the audio.
   Orca's own speech is the screen reader's and is never reported.
 
-## 9. Desktop tools (Proposed (David), for Avery to merge)
+## 9. Desktop tools (Proposed (David), for Avery to merge; Avery's review points 1–9 on #174)
 
 Artemis may act on the whole desktop, never without the guarded approval dialog. The models are in
-`contracts/tools.py` (`DESKTOP_TOOL_ARGS`). Each tool moves into `TOOL_ARGS`, and so becomes visible
-to the model, only when the policy gate handles it.
+`contracts/tools.py` (`DESKTOP_TOOL_ARGS`). Each tool joins `TOOL_ARGS`, and so becomes visible to
+the model, only when the policy gate handles it.
 
 | Tool | Args | Approval `kind` | What the dialog shows and says |
 |---|---|---|---|
@@ -543,21 +543,64 @@ to the model, only when the policy gate handles it.
 | `open_path` | `{path, with_app?}` | `open` | "Open notes.txt in Text Editor." |
 | `read_path` | `{path, start_line?, end_line?}` | `read_outside` | "Read ~/Documents/plan.md." (one approval per file) |
 | `run_command` | `{command, cwd?}` | `run_command` | The exact command and its folder, word for word |
-| `type_text` | `{text}` | `type` | The exact text, and "into the focused window" |
-| `press_keys` | `{keys}` | `type` | The keys, e.g. "Control S" |
+| `type_text` | `{text}` | `type` | The exact text, and the window it goes into |
+| `press_keys` | `{keys}` | `type` | The keys and the window, e.g. "Press Control S in Text Editor" |
 
-- `Approval.desktop` (`DesktopSpec {action, target, text?}`) carries what a desktop approval will do.
-  `approval_hash` covers it, so what was approved is what runs.
-- **Policy:** paths must be under `$HOME` and pass `safe_resolve`'s link check. Never `.ssh`, `.gnupg`,
-  `.local/share/keyrings`, `.env*`, `.git`, browser profiles, `~/.config/Claude`, `~/.artemis` or the
-  launch file. `run_command` runs with a 30 s timeout and capped output, in an environment without
-  `ANTHROPIC_*`, `ELEVENLABS_*` or `ARTEMIS_TOKEN`. Everything read or printed returns to the model
-  wrapped as untrusted. A blocked or rejected action follows the #113 rule.
-- **Typing** happens in the GNOME shell, because only the shell can type on Wayland. After approval
-  the core emits `desktop.action {op_id, kind: "type"|"keys", text}`. The island types into the
-  focused window, stopping if focus moves, and answers `POST /desktop/{op_id}/result {ok, message?}`
-  (`DesktopResult`). With no island connected, the tool fails with `desktop_unavailable`.
-- Opening apps and paths runs in the core (`gio launch`, `xdg-open`), with or without the island.
+**Clients.** A client never shows Approve for an approval whose `kind` it doesn't know, or for a
+desktop kind without `Approval.desktop`. It shows the summary and Reject only. The island's dialog
+titles and reads each desktop kind as its own (Jun).
+
+**What is approved.** `Approval.desktop` (`DesktopSpec {action, target, text?, sha256?}`) holds what
+will happen. `approval_hash` is `approval_hash(kind, workspace, [action, target, text, sha256])`:
+- `target` is the resolved path, the app id, the command's resolved folder, or the focused window;
+- `sha256` is set for `read_path` and `open_path`;
+- the gate recomputes the hash after the decision, and a swapped file or link fails it, as
+  `run_program` does.
+
+**Paths.** Every path must be under `$HOME`, after `safe_resolve`'s link check. Two kinds are refused
+outright, and no approval can override that:
+- any dot-entry at the top of home (`.ssh`, `.gnupg`, `.config`, `.local`, `.mozilla`, `.aws`, …);
+- `.env*` and `.git` anywhere, `XDG_RUNTIME_DIR` (the launch file), and `~/.artemis`.
+
+`open_path` refuses executable files and the `.desktop`, `.sh`, `.AppImage`, `.run` and `.jar`
+types, so opening never runs anything.
+
+**Commands.** `run_command` runs `bash -c <command>` in a folder under home, with a 30 s timeout and
+output capped at 16 KB, in an **allowlisted** environment: `PATH`, `HOME`, `LANG`, `LC_*`, `TERM`,
+`USER`, `SHELL`, `XDG_RUNTIME_DIR`, and the display variables `gio` needs. No `SSH_AUTH_SOCK`, and no
+token or key variables.
+
+The path denylist can't bind what a command does, so the gate marks a command as a high-severity
+finding, which needs the blocking key (Shift+Enter), when it:
+- names a denied path;
+- uses `sudo`, `su` or `pkexec`;
+- pipes a download into a shell (`curl …| sh`, `wget …| bash`);
+- deletes recursively (`rm -r`, `rm -rf`);
+- writes to a raw device or makes a filesystem (`dd`, `mkfs`);
+- uses the launch file.
+
+Output returns to the model wrapped as untrusted.
+
+**Typing.** Only the GNOME shell can type on Wayland, so `type_text` and `press_keys` work like this:
+1. Before the approval, the core sends `desktop.action {op_id, kind: "focus"}`. The island answers
+   `POST /desktop/{op_id}/result {ok, window: "<app id>: <title>"}`, and that window becomes
+   `DesktopSpec.target`, covered by the hash.
+2. Typing into a terminal app (Ptyxis, GNOME Terminal, Console, kitty, Alacritty, xterm, VS Code's
+   terminal) is a high-severity finding: approving it needs Shift+Enter.
+3. `press_keys` takes `((ctrl|shift|alt)+){0,3}<key>`. Launcher keys are refused: super and its
+   combinations, alt+F2, ctrl+alt+t, ctrl+alt+Delete.
+4. After approval the core sends `desktop.action {op_id, kind: "type"|"keys", text, window}`. The
+   island types only while that window has the focus, and answers `{ok, message?}`.
+
+The `op_id` rules (point 7):
+- it is random, single-use and scoped to the session;
+- the result route gives 404 for an unknown, finished or expired op;
+- the core waits 10 s plus 50 ms per character, and ignores a late result;
+- with no answer, or no ready island, the tool fails with `desktop_unavailable`.
+
+`ClientReady.desktop: true` is how an island says it can type. The core records it per session.
+
+Opening apps and paths runs in the core (`gtk-launch`, `gio open`), with or without the island.
 
 ## 10. The plan and the ring (Proposed (David), for Avery to merge)
 

@@ -7,7 +7,7 @@ the model, so every one forbids extra fields.
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ErrorCode = Literal[
     "invalid_args",
@@ -101,6 +101,12 @@ class ReadPathArgs(_Args):
     start_line: int | None = Field(default=None, ge=1)
     end_line: int | None = Field(default=None, ge=1)
 
+    @model_validator(mode="after")
+    def _lines_in_order(self):
+        if self.start_line is not None and self.end_line is not None and self.end_line < self.start_line:
+            raise ValueError("end_line must not be before start_line")
+        return self
+
 
 class RunCommandArgs(_Args):
     command: str = Field(min_length=1, max_length=2000)  # one shell command line, shown word for word
@@ -112,7 +118,8 @@ class TypeTextArgs(_Args):
 
 
 class PressKeysArgs(_Args):
-    keys: str = Field(min_length=1, max_length=120)  # e.g. "ctrl+s", "Return", "ctrl+shift+grave"
+    # e.g. "ctrl+s", "Return", "ctrl+shift+grave": modifiers joined with +, then one key name.
+    keys: str = Field(min_length=1, max_length=60, pattern=r"^((ctrl|shift|alt)\+){0,3}[A-Za-z0-9_]{1,20}$")
 
 
 # ----- the plan (contracts.md §10, Proposed): the agent's first tool call for a request.
@@ -138,8 +145,9 @@ DESKTOP_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "run_command": RunCommandArgs,
     "type_text": TypeTextArgs,
     "press_keys": PressKeysArgs,
-    "plan": PlanArgs,
 }
+
+PLAN_ARGS: dict[str, type[BaseModel]] = {"plan": PlanArgs}
 
 
 TOOL_ARGS: dict[str, type[BaseModel]] = {

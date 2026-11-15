@@ -140,8 +140,11 @@ class DesktopActionData(BaseModel):
     The island answers with POST /desktop/{op_id}/result."""
 
     op_id: str
-    kind: Literal["type", "keys"]
-    text: str
+    # focus: before the approval, report which window has the keyboard focus (no typing);
+    # type / keys: type into that same window only, and refuse if the focus moved.
+    kind: Literal["focus", "type", "keys"]
+    text: str = ""
+    window: str | None = None  # type / keys: the window the developer approved, as focus reported it
 
 
 DATA_MODELS: dict[str, type[BaseModel]] = {

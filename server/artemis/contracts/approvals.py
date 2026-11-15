@@ -29,8 +29,11 @@ class DesktopSpec(BaseModel):
     """What a desktop approval will do, shown and spoken word for word before it is approved."""
 
     action: Literal["open_app", "open_path", "read_path", "run_command", "type_text", "press_keys"]
-    target: str          # the app, the path, the command's working folder, or "the focused window"
+    # The app id, the resolved path, the command's resolved folder, or for typing the focused
+    # window as the island reported it ("org.gnome.Ptyxis: ~/project"). The hash covers it.
+    target: str
     text: str | None = None  # the exact command, the exact text to type, or the keys
+    sha256: str | None = None  # read_path and open_path: the file's content, so a swapped file fails
 
 
 class Finding(BaseModel):
