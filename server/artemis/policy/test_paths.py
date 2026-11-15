@@ -107,6 +107,19 @@ def test_a_root_reached_through_a_link_still_works(root, tmp_path):
     assert project_files(alias) == ["main.py"]
 
 
+def test_a_backslash_path_through_a_link_that_points_outside(root, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(root / "link"))
+    else:
+        os.symlink(outside, root / "link", target_is_directory=True)
+    assert "outside the project" in rejected(root, "link\\x.py")
+    assert "outside the project" in rejected(root, "sub\\..\\link\\x.py")
+
+
 def test_link_that_points_outside(root, tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()

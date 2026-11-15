@@ -12,7 +12,7 @@ from artemis.contracts import TOOL_ARGS
 
 # The desktop the developer is on. Fixed per process, so the prompt still caches. The Ubuntu
 # demo (decisions.md §16) says Linux; on Windows the prompt is byte for byte main's.
-DESKTOP = "Windows" if sys.platform == "win32" else "Linux"
+DESKTOP = {"win32": "Windows", "darwin": "macOS"}.get(sys.platform, "Linux")
 
 SYSTEM_PROMPT = """\
 You are Artemis, a voice-first coding assistant. The person you work with is a blind software \

@@ -511,7 +511,7 @@ def test_flag_off_system_prompt_is_mains():
 def test_system_prompt_names_the_desktop_it_runs_on():
     import sys
 
-    expected = "Windows" if sys.platform == "win32" else "Linux"
+    expected = {"win32": "Windows", "darwin": "macOS"}.get(sys.platform, "Linux")
     assert DESKTOP == expected
     assert f"blind software developer on {expected}." in SYSTEM_PROMPT
     assert ("Windows" in SYSTEM_PROMPT) == (sys.platform == "win32")

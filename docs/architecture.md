@@ -166,7 +166,7 @@ GNOME Shell extension (Jun, client/prototypes/water-desktop)
    ▼
 FastAPI core (server/artemis/)       same process and routes as on Windows
    voice/   wake word, mic capture, faster-whisper, Linux speech (ElevenLabs, offline fallback)  (Yaovi)
-   agent/, policy/, conversation/  unchanged, platform-aware where it matters             (David)
+   agent/, policy/, conversation/  same code, platform-aware where it matters            (David)
    runner/  same argv presets; Linux interpreter lookup (#139)                              (Avery)
    │
    ▼
