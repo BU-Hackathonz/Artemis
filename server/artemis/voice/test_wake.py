@@ -6,7 +6,9 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from artemis.voice.wake import FRAME, RATE, Segmenter, WakeListener, WakeLoop, listen_mode, wake_request  # noqa: E402
+from artemis.voice.wake import (  # noqa: E402
+    FRAME, RATE, Segmenter, VoiceDetector, WakeListener, WakeLoop, denoise, listen_mode, wake_request,
+)
 
 RNG = np.random.default_rng(7)
 
@@ -310,3 +312,80 @@ def test_other_peoples_speech_never_reaches_the_core(caplog):
     with caplog.at_level("INFO"):
         asyncio.run(run())
     assert got == [] and "told her" not in caplog.text and "7 words" in caplog.text
+
+
+# ----- hearing the speaker, not the room -----
+
+
+def noise(seconds, level=0.03):
+    return [RNG.normal(0, level, FRAME).astype(np.float32) for _ in range(round(seconds * 10))]
+
+
+def test_with_a_voice_detector_loud_noise_is_not_speech():
+    # a fan or hiss as loud as speech: loudness would hold the mic open; the detector says "no voice"
+    segmenter = Segmenter()
+    frames = quiet(1) + noise(5)
+    found = [a for f in frames if (a := segmenter.feed(f, voice=0.05)) is not None]
+    assert found == [] and not segmenter.in_speech
+
+
+def test_with_a_voice_detector_speech_ends_when_the_voice_does_even_in_noise():
+    segmenter = Segmenter()
+    frames = [(f, 0.02) for f in quiet(1)] + [(f, 0.9) for f in speech(1.5)] + [(f, 0.05) for f in noise(1.5)]
+    found = [a for f, v in frames if (a := segmenter.feed(f, voice=v)) is not None]
+    assert len(found) == 1 and len(found[0]) / RATE <= 2.65  # pre-roll + 1.5 s of speech + 0.8 s without a voice, not the noise
+
+
+def test_staying_in_speech_takes_less_than_starting():
+    segmenter = Segmenter()
+    assert [segmenter.feed(f, voice=0.45) for f in speech(1)] == [None] * 10 and not segmenter.in_speech
+    segmenter.feed(speech(0.1)[0], voice=0.9)
+    for f in speech(1):
+        segmenter.feed(f, voice=0.45)  # a softer stretch mid-sentence: still the same utterance
+    assert segmenter.in_speech
+
+
+def test_denoise_lowers_steady_noise_and_keeps_the_length():
+    t = np.arange(RATE * 2) / RATE
+    tone = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    hiss = np.random.default_rng(1).normal(0, 0.03, len(t)).astype(np.float32)
+    room = np.random.default_rng(2).normal(0, 0.03, RATE).astype(np.float32)
+    out = denoise(tone + hiss, room)
+    assert len(out) == len(tone) and np.max(np.abs(out)) <= 0.9 + 1e-6
+    spec = np.abs(np.fft.rfft(out))
+    freqs = np.fft.rfftfreq(len(out), 1 / RATE)
+    signal = spec[(freqs > 430) & (freqs < 450)].sum()
+    rest = spec[(freqs > 1000)].sum()
+    spec0 = np.abs(np.fft.rfft(tone + hiss))
+    assert signal / rest > 1.8 * spec0[(freqs > 430) & (freqs < 450)].sum() / spec0[(freqs > 1000)].sum()
+
+
+def test_denoise_removes_mains_hum():
+    t = np.arange(RATE * 2) / RATE
+    hum = (0.1 * np.sin(2 * np.pi * 60 * t)).astype(np.float32)
+    voiceish = (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+    out = denoise(hum + voiceish, np.zeros(RATE, np.float32) + 1e-4)
+    spec, freqs = np.abs(np.fft.rfft(out)), np.fft.rfftfreq(len(out), 1 / RATE)
+    assert spec[(freqs > 55) & (freqs < 65)].sum() < 0.05 * spec[(freqs > 295) & (freqs < 305)].sum()
+
+
+@pytest.mark.parametrize("phantom", ["Thank you.", "you", " Thanks for watching!"])
+def test_a_stock_phrase_from_noise_is_not_a_request(phantom):
+    loop = WakeLoop(Script("Hey Artemis", phantom))
+    events = feed(loop, quiet(1) + utterance(0.8) + utterance())
+    assert [e.kind for e in events] == ["wake"]  # still armed; the phantom started nothing
+
+
+def test_the_loop_endpoints_on_the_detector():
+    voices = iter([0.02] * 10 + [0.9] * 15 + [0.05] * 40)
+    loop = WakeLoop(Script("Hey Artemis, run main.py"), vad=lambda f: next(voices))
+    events = feed(loop, quiet(1) + speech(1.5) + noise(4))  # loud noise after the request
+    assert [(e.kind, e.text) for e in events] == [("request", "run main.py")]
+
+
+def test_voice_detector_on_the_real_model():
+    detector = VoiceDetector.load()
+    if detector is None:
+        pytest.skip("faster-whisper (voice group) is not installed")
+    probs = [detector(f) for f in quiet(1) + noise(1)]
+    assert max(probs) < 0.5  # hiss is not a voice
