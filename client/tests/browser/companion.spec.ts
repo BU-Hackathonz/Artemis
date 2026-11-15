@@ -32,8 +32,9 @@ test('compact status has keyboard access to controls and never opens a core sess
 
 // Compact status is opt-in (start.ps1 -Compact). The default launch keeps Approve focus even in the background.
 // Background reveals focus Approve too; Enter is ignored for 600 ms after the reveal, Escape is not guarded.
-const cases: {compact:boolean; background:boolean; press:'guard'|'escape'|'enter'; title:string}[] = [
+const cases: {compact:boolean; background:boolean; press:'guard'|'spaceGuard'|'escape'|'enter'; title:string}[] = [
   {compact:true, background:true, press:'guard', title:'compact launch: background reveal focuses Approve, ignores Enter for 600 ms, then Enter approves'},
+  {compact:true, background:true, press:'spaceGuard', title:'compact launch: Space started during the guard stays ignored through keyup, then Space approves'},
   {compact:true, background:true, press:'escape', title:'compact launch: Escape during the background reveal guard rejects'},
   {compact:true, background:false, press:'enter', title:'compact launch: foreground approval focuses Approve and Enter approves immediately'},
   {compact:false, background:true, press:'enter', title:'default launch: approval focuses Approve with no compact status calls'},
@@ -113,6 +114,16 @@ for (const {compact, background, press, title} of cases) {
         await expect(page.getByRole('dialog')).toBeVisible();
         await page.waitForTimeout(650);
         await page.keyboard.press('Enter');
+        await expect.poll(()=>decisions).toEqual(['approve']);
+      }
+      else if(press==='spaceGuard') {
+        await page.keyboard.down('Space');
+        await page.waitForTimeout(650);
+        await page.keyboard.up('Space');
+        await page.waitForTimeout(150);
+        expect(decisions).toEqual([]);
+        await expect(page.getByRole('dialog')).toBeVisible();
+        await page.keyboard.press('Space');
         await expect.poll(()=>decisions).toEqual(['approve']);
       }
       else if(press==='escape') {
