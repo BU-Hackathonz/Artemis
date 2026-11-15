@@ -57,23 +57,19 @@
 .artemis-island-entry:focus { border-color: #c4b5fd; }
 .artemis-island-hint { font-size: 13px; color: #d9cdf2; }
 
-/* Done: a subtle green edge on the widget */
-/* (done: no green edge) */
+/* One border colour per island state (the edge line in island.js uses the same hue). */
+.artemis-island:idle { border-color: rgba(167, 139, 250, 0.45); }
+.artemis-island:listening { border-color: rgba(96, 165, 250, 0.7); }
+.artemis-island:thinking { border-color: rgba(167, 139, 250, 0.7); }
+.artemis-island:editing { border-color: rgba(250, 204, 21, 0.7); }
+.artemis-island:running { border-color: rgba(45, 212, 191, 0.7); }
+.artemis-island:speaking { border-color: rgba(244, 114, 182, 0.7); }
+.artemis-island:done { border-color: rgba(134, 239, 172, 0.7); }
+.artemis-island:error { border-color: rgba(248, 113, 113, 0.8); }
+.artemis-island:done .artemis-island-status { color: #bbf7d0; }
+.artemis-island:error .artemis-island-status { color: #fca5a5; }
 
-/* The board under the widget: square, purple acrylic, less translucent */
-.artemis-island-tab {
-  width: 300px;
-  padding: 16px;
-  spacing: 8px;
-  border-radius: 12px;
-  background-color: rgba(24, 16, 40, 0.86);
-  border: 1px solid rgba(167, 139, 250, 0.5);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
-}
-.artemis-island-tab:done { border-color: rgba(134, 239, 172, 0.5); }
-.artemis-island-tab-title { font-size: 11px; font-weight: 600; letter-spacing: 2px; color: #cbb5f7; }
-.artemis-island-tab:done .artemis-island-tab-title { color: #a7f3c4; }
-.artemis-island-tab-text { font-size: 14px; color: #ffffff; }
-.artemis-island-tab-stop { padding: 5px 14px; border-radius: 16px; border: 1px solid rgba(167, 139, 250, 0.45); color: #ece6f7; font-size: 13px; }
-.artemis-island-tab-stop:hover { background-color: rgba(167, 139, 250, 0.16); }
-.artemis-island-tab-stop:focus { box-shadow: inset 0 0 0 2px #ffdb70; }
+/* Waiting for an approval: dashed and a little dimmer, the state colour stays. */
+.artemis-island:waiting { border-style: dashed; opacity: 0.85; }
+/* No core: dimmer still. Listed after the states so it wins the border colour. */
+.artemis-island:offline { opacity: 0.5; border-color: rgba(167, 139, 250, 0.2); }
