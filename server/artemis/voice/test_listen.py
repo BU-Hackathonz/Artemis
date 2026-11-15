@@ -147,6 +147,37 @@ def test_post_roll_comes_from_the_environment(monkeypatch, caplog):
         assert f"ARTEMIS_PTT_POST_ROLL={bad!r}" in caplog.text
 
 
+
+def test_busy_listening_covers_the_earcon_and_the_post_roll():
+    # The core reads busy_listening before playing a result earcon (#127); a tone in this window is recorded.
+    v, _, _ = make(1, earcon_s=0.1, post_roll=0.2)
+
+    async def run():
+        assert not v.busy_listening
+        start = asyncio.create_task(v.start_listening())
+        await asyncio.sleep(0.03)
+        assert v.busy_listening and not v.listening  # the listening earcon plays; the mic isn't open yet
+        await start
+        assert v.busy_listening and v.listening
+        stop = asyncio.create_task(v.stop_listening("cr_1"))
+        await asyncio.sleep(0.05)
+        assert v.busy_listening and not v.listening  # released, but the post-roll still records
+        await stop
+        assert not v.busy_listening and not v.listening
+
+    asyncio.run(run())
+
+
+def test_stub_busy_listening_matches_listening():
+    from artemis.voice import StubVoice
+
+    v = StubVoice(announcer=FakeAnnouncer([]))
+    assert not v.busy_listening
+    asyncio.run(v.start_listening())
+    assert v.busy_listening
+    asyncio.run(v.stop_listening("cr_1"))
+    assert not v.busy_listening
+
 def test_press_during_post_roll_closes_that_mic_first_and_skips_its_stopped_earcon():
     log = []
     v, _, streams = make(1, log=log, post_roll=5.0)
@@ -202,6 +233,22 @@ def test_dropped_segments_are_logged_without_their_words(caplog):
     assert asyncio.run(v.stop_listening("cr_1")) == "run main.py"
     assert "no_speech_prob 0.80" in caplog.text and "secret" not in caplog.text
 
+
+
+def test_dropped_releases_log_their_reason_without_words(caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="artemis.voice.listen")
+    v, model, _ = make(0.1)  # a tap
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_1")) == ""
+    assert "Release dropped: too short" in caplog.text
+    hiss = (np.random.default_rng(2).standard_normal(RATE * 2) * 0.0002).astype(np.float32)
+    v, model, _ = make(2, audio=hiss)  # a silent hold
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_2")) == ""
+    assert "Release dropped: silent" in caplog.text and not model.calls
+    assert "create a Python program" not in caplog.text  # numbers only, never words
 
 def test_room_silence_never_reaches_whisper():
     # The loudest room silence measured on the demo laptop's headset mic: RMS 0.00022.
@@ -389,3 +436,98 @@ def test_missing_microphone_raises_voice_error():
         with pytest.raises(VoiceError, match="Microphone not available"):
             asyncio.run(v.start_listening())
     assert not v.listening
+
+
+# ----- working cue (ARTEMIS_WORKING_CUE=earcon; the core's "Still working." heartbeat) -----
+
+
+class Speaking:
+    name = "sapi"
+
+    def __init__(self, busy=False):
+        self.is_busy, self.said = busy, []
+
+    def available(self):
+        return True
+
+    def speak(self, text, interrupt):
+        self.said.append(text)
+
+    def cancel(self):
+        pass
+
+    def busy(self):
+        return self.is_busy
+
+
+def working_voice(on=True, busy=False, sapi_up=True):
+    from artemis.voice.speech import Announcer
+
+    sapi = Speaking(busy)
+    sapi.available = lambda: sapi_up
+    played = []
+    v = WhisperVoice(announcer=Announcer(nvda=Speaking(), sapi=sapi, is_nvda_running=lambda: False),
+                     model=FakeModel("x"), stream_factory=lambda cb: FakeStream(cb, speech_like(1)),
+                     earcon=lambda name: (played.append(name), 0.0)[1], working_earcon=on)
+    return v, played, sapi
+
+
+def test_working_cue_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("ARTEMIS_WORKING_CUE", raising=False)
+    v, _, _ = working_voice(on=None)
+    assert v.working_cue is None  # the core keeps saying "Still working."
+    monkeypatch.setenv("ARTEMIS_WORKING_CUE", "earcon")
+    v, _, _ = working_voice(on=None)
+    assert callable(v.working_cue)
+
+
+def test_working_cue_ticks_but_never_over_speech_or_into_the_mic():
+    v, played, sapi = working_voice()
+    v.working_cue()
+    assert played == ["working"]
+    sapi.is_busy = True
+    v.working_cue()  # Artemis is talking: skip this beat
+    sapi.is_busy = False
+    asyncio.run(v.start_listening())
+    v.working_cue()  # the mic is open: a tick would be transcribed
+    asyncio.run(v.stop_listening("cr_1"))
+    assert played == ["working", "listening", "stopped"]  # one tick; only push-to-talk's own cues after it
+
+
+def test_no_working_tick_when_no_voice_can_speak():
+    v, _, _ = working_voice(sapi_up=False)
+    assert v.working_cue is None  # voice_ready is false: the live region needs the words
+
+
+def test_core_heartbeat_plays_the_tick_instead_of_the_line(tmp_path):
+    from artemis.core.session import STILL_WORKING, Session
+
+    for on in (False, True):
+        v, played, sapi = working_voice(on=on)
+        session = Session("ses_t", voice=v, runner=None, agent=None, projects_dir=tmp_path)
+        asyncio.run(session._still_working("tsk_1"))
+        if on:
+            assert played == ["working"] and STILL_WORKING not in sapi.said
+        else:
+            assert played == [] and sapi.said == [STILL_WORKING]
+
+
+def test_transcribing_is_true_only_while_whisper_runs():
+    # voice.activity reads this: "transcribing" between the mic closing and the text being ready.
+    v, _, _ = make(1)
+    seen = []
+    real = v._transcribe
+
+    def slow(audio):
+        seen.append(v.transcribing)
+        return real(audio)
+
+    v._transcribe = slow
+
+    async def run():
+        assert not v.transcribing
+        await v.start_listening()
+        await v.stop_listening("cr_1")
+
+    asyncio.run(run())
+    assert seen == [True] and not v.transcribing

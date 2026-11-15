@@ -14,6 +14,8 @@ Settings (environment):
   after release (people let go of the key while still saying the last word), closes, and only then plays
   "stopped", so that beep is never transcribed either.
 - ARTEMIS_WHISPER_PROMPT: unset (default) is the word-list prompt; natural is the spoken-style lead (text.py).
+- ARTEMIS_WORKING_CUE: unset (default) keeps the core's spoken "Still working."; earcon plays a soft
+  "working" tick instead (working_cue, contracts.md 3.3), only when a voice can speak and never into the mic.
 A beam above 1, a post-roll and the natural prompt are opt-in: switch them on for the stage only after
 docs/demo.md row 3 (the demo sentence, word for word) passes with them on, on the demo laptop.
 
@@ -90,6 +92,11 @@ def whisper_natural_prompt() -> bool:
     return os.environ.get("ARTEMIS_WHISPER_PROMPT", "").strip().lower() == "natural"
 
 
+def working_earcon_on() -> bool:
+    """ARTEMIS_WORKING_CUE=earcon swaps the spoken "Still working." for a soft tick; anything else keeps the line."""
+    return os.environ.get("ARTEMIS_WORKING_CUE", "").strip().lower() == "earcon"
+
+
 def loudest_rms(audio: np.ndarray) -> float:
     """RMS of the loudest 100 ms window."""
     n = len(audio) // WINDOW
@@ -103,6 +110,13 @@ class VoiceError(Exception):
     """Microphone problems the core should turn into an `error` event."""
 
 
+def _sentence(prefix: str, error: Exception) -> str:
+    """'prefix: detail.' always ending in a full stop, so the spoken recovery tip after it is a new sentence."""
+    detail = str(error).strip().rstrip(".")
+    text = f"{prefix}: {detail}" if detail else prefix
+    return text if text.endswith(("!", "?")) else text + "."
+
+
 def _input_stream(callback):
     import sounddevice as sd
 
@@ -112,16 +126,18 @@ def _input_stream(callback):
 class WhisperVoice:
     def __init__(self, announcer: Announcer | None = None, model_name: str | None = None, model=None, stream_factory=None,
                  earcon=earcons.play, beam_size: int | None = None, post_roll: float | None = None,
-                 natural_prompt: bool | None = None) -> None:
+                 natural_prompt: bool | None = None, working_earcon: bool | None = None) -> None:
         self.announcer = announcer or Announcer()
         self.model_name = model_name or whisper_model()
         self.beam_size = beam_size or whisper_beam()
         self.post_roll = ptt_post_roll() if post_roll is None else post_roll
         self.natural_prompt = whisper_natural_prompt() if natural_prompt is None else natural_prompt
+        self.working_earcon = working_earcon_on() if working_earcon is None else working_earcon
         self._model = model
         self._stream_factory = stream_factory or _input_stream
         self._earcon = earcon
         self._stream = None
+        self.transcribing = False  # Whisper is turning the last recording into text (voice.activity)
         self._wanted = False  # key is held; cleared by stop, even while the start earcon plays
         self._gen = 0  # bumped by every press and release, so a stale start never opens the mic
         self._tail: tuple[asyncio.Event, asyncio.Event] | None = None  # (cut, closed) during an opt-in post-roll
@@ -133,6 +149,42 @@ class WhisperVoice:
     @property
     def listening(self) -> bool:
         return self._stream is not None
+
+    @property
+    def working_cue(self):
+        """contracts.md 3.3: the core plays this instead of saying "Still working." while a task runs.
+
+        None (the default, or when no voice can speak) makes the core keep its spoken line, so a user
+        whose speech goes through the client's live region still gets the words, not a silent tick.
+        """
+        if not self._working_earcon_on() or not self.announcer.voice_ready:
+            return None
+        return self._tick
+
+    def _working_earcon_on(self) -> bool:
+        """The Announcer's working_cue_earcon, set by apply() from the voice profile (which already holds
+        ARTEMIS_WORKING_CUE), wins when it is on. Otherwise the env value read at construction (or passed in).
+        A settings PATCH cannot turn the cue off while ARTEMIS_WORKING_CUE pins it on (409), so the two agree."""
+        if getattr(self.announcer, "working_cue_earcon", False):
+            return True
+        return self.working_earcon
+
+    def _tick(self) -> None:
+        if self._wanted or self._stream is not None or self._tail is not None:
+            return  # push-to-talk is under way: a tick now would be recorded into the request
+        if self.announcer.current().busy():
+            return  # never over speech; the next heartbeat tries again
+        self._earcon("working")
+
+    @property
+    def busy_listening(self) -> bool:
+        """True for the whole push-to-talk cycle, from the press until the mic is closed.
+
+        Wider than `listening` (the mic stream is open): it also covers the listening earcon before
+        the mic opens, and the opt-in post-roll after release, when the mic is still recording. The
+        core must not play a sound in that window, or it would land in the request.
+        """
+        return self._wanted or self._stream is not None or self._tail is not None
 
     def warm(self) -> None:
         """Load the model now (about 3 s, longer on first download) instead of on the first request."""
@@ -170,7 +222,7 @@ class WhisperVoice:
             stream.start()
         except Exception as e:  # no device, device busy, permission denied
             self._wanted = False
-            raise VoiceError(f"Microphone not available: {e}") from e
+            raise VoiceError(_sentence("Microphone not available", e)) from e
         self._stream = stream
 
     async def stop_listening(self, client_request_id: str) -> str:
@@ -187,11 +239,20 @@ class WhisperVoice:
         else:  # the default: no post-roll
             self._earcon("stopped")  # mic is about to close; no need to wait
             audio, rolled = self._close(stream), 0.0
+        # Each drop is logged with its reason and numbers only, never words, so an empty push-to-talk
+        # can be told apart: a tap, a silent hold, or (later) Whisper's no-speech filter.
         if len(audio) < RATE * (MIN_SECONDS + rolled):
+            log.warning("Release dropped: too short (%.2f s of audio, needs %.2f s)", len(audio) / RATE, MIN_SECONDS + rolled)
             return ""
-        if loudest_rms(audio) < MIN_RMS:
+        level = loudest_rms(audio)
+        if level < MIN_RMS:
+            log.warning("Release dropped: silent (loudest 100 ms RMS %.5f, needs %.3f)", level, MIN_RMS)
             return ""  # nobody spoke
-        text = await asyncio.to_thread(self._transcribe, audio)
+        self.transcribing = True
+        try:
+            text = await asyncio.to_thread(self._transcribe, audio)
+        finally:
+            self.transcribing = False
         return strip_wake_word(text)
 
     def _close(self, stream) -> np.ndarray:
@@ -202,7 +263,7 @@ class WhisperVoice:
         except Exception as e:  # mic unplugged mid-recording
             with self._lock:
                 self._chunks, self._frames = [], 0
-            raise VoiceError(f"Microphone stopped unexpectedly: {e}") from e
+            raise VoiceError(_sentence("Microphone stopped unexpectedly", e)) from e
         with self._lock:
             audio = np.concatenate(self._chunks)[: RATE * MAX_SECONDS] if self._chunks else np.zeros(0, np.float32)
             self._chunks, self._frames = [], 0

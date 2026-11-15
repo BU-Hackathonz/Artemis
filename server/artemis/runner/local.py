@@ -32,10 +32,17 @@ def _is_core_python(path: Path) -> bool:
         resolved = path.resolve()
     except OSError:
         return True
-    if resolved == Path(sys.executable).resolve():
-        return True
-    venv = Path(sys.prefix).resolve()
-    return sys.prefix != sys.base_prefix and venv in resolved.parents
+    in_venv = sys.prefix != sys.base_prefix
+    if in_venv:
+        # In a venv the core's interpreter is the venv's python, and on Linux and macOS that is a
+        # symlink to the base interpreter (/usr/bin/python3.12). Resolving it would make the system
+        # Python count as "ours" and refuse every candidate, so compare the venv paths as given and
+        # resolved, but never the base interpreter the link points at.
+        if _is_core_venv_path(path):
+            return True
+        return Path(sys.prefix).resolve() in resolved.parents or resolved == Path(sys.prefix).resolve()
+    # No venv: the core runs on the system interpreter itself, which user code must not share.
+    return resolved == Path(sys.executable).resolve()
 
 
 def _is_core_venv_path(path: Path) -> bool:
