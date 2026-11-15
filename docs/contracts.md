@@ -61,7 +61,7 @@ stays silent while the core can speak, and turns on whenever it can't (§5.3).
 |---|---|
 | `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal (an empty one is silent). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
 | `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
-| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`) is `progress` at `low` |
+| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`) is `progress` at `low` (with the opt-in tick, §5.7, the same event is sent but not spoken) |
 | `approval.requested` | `Approval` (below), announced with its `summary` at high, right after `task.state` `awaiting_approval` |
 | `approval.resolved` | `{approval_id, decision: "approve"\|"reject", by: "user"\|"invalidated"}`, not announced. An invalidated one (files changed, or the task was canceled) carries `"reject"` |
 | `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}`, announced "Created main.py, 1 line." at normal. No tool deletes, so `deleted` is never sent today |
@@ -184,7 +184,7 @@ The event bus calls `announce()` for every event that has an `announce` field, s
 component speaks directly. The core also uses these when a voice has them (none are required):
 `warm()` (load the speech model at startup), `announcer` (`status()` for `voice_ready` and
 `screen_reader`, `watch()` for `voice.status` changes, `current().busy()`), `set_rate(delta)`
-(§5.3) and `working_cue()` (replaces the "Still working." line; no voice has one yet).
+(§5.3) and `working_cue` (a callable, or None to keep the spoken "Still working." line; §5.7).
 
 ### 3.4 Runner (Avery, infrastructure)
 
@@ -367,6 +367,24 @@ It starts nothing that typing couldn't, and every write and run still needs a ke
 - `voice.activity` is `listening` from a bare "Hey Artemis" until the request or the window's end,
   never while it is only waiting for the phrase.
 - Push-to-talk keeps working alongside. Without the variable nothing changes.
+
+### 5.7 Working tick (**Proposed (Avery)**, opt-in: `ARTEMIS_WORKING_CUE=earcon`, default off)
+Like §5.5, an earcon that adds to the words, never a replacement for them in the event stream. With it
+off (unset, `off` or `spoken`, and the voice setting `working_cue` false, §7), nothing changes: the
+heartbeat says "Still working." as in §2. With it on, and only while the voice can speak (`voice_ready`):
+- The heartbeat (same timing: about 3 s of silence while `working` or `running`) plays the voice's
+  `"working"` earcon, one 90 ms tone at half the earcon volume, instead of saying the line. It goes
+  through the same audio output as every other earcon, so it mixes with Orca, NVDA and Artemis's voice
+  instead of cutting them, and they don't cut it (a result earcon, §5.5, that starts during it replaces it).
+- **The client sees the same event as before**: `agent.message` `{text: "Still working.", kind:
+  "progress"}` with `announce` "Still working." at `low`. The core just doesn't speak it. The log
+  region still shows it, so a screen-reader user without sound still gets the progress line.
+- No tick (the beat is skipped, the event is still sent): from the push-to-talk press until the mic
+  closes (§5.1, post-roll included), while transcribing, while the wake word's request window is open
+  (§5.6), while another of the voice's earcons is playing, or while Artemis is speaking or has a line
+  queued. In wake mode the microphone's audio is dropped during the tick and 0.2 s after, as for speech.
+- With `voice_ready` false the voice offers no tick, and the line is spoken (and the live region is on)
+  as with the flag off.
 
 ## 6. Launcher and launch token (decided 2026-11-14)
 
