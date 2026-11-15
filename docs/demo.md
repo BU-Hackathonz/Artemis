@@ -318,7 +318,9 @@ Monitor off, NVDA on (or exactly as it will be on stage), one person at the keyb
 the log and timing. Run all five demos twice, then once with a forced failure (Wi-Fi off for the
 API error, Escape on every approval). With Wi-Fi off, "Working on: ..." (and perhaps "Still
 working.") is followed by "The task failed. No internet connection to Claude. You can try again.",
-said once, and the next request is accepted.
+said once, and the next request is accepted. After Escape, Artemis does not propose the same
+change or run again in that conversation. If the next request needs it, Artemis asks in one
+sentence first, so answer "yes, do it" rather than waiting for a new dialog.
 
 - [ ] Every state change is spoken: request taken ("Working on: ..."), each approval, each file
       written, "Running main.py.", every result, every error, cancel.
