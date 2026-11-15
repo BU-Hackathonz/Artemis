@@ -25,12 +25,8 @@ laptop (the "developer"). Yaovi narrates **only while Artemis is silent**, never
 >
 > Now I'll hand it to Avery, our team lead.
 
-Pause after the number. Then Avery says a few notes in his own words (about 20 s) and ends with:
-
-> This is David. He's going to build a web page by voice, from an empty folder to GitHub. Watch the
-> small notch at the top of the screen: it shows when Artemis is listening, thinking or speaking.
-
-David starts on Avery's nod.
+Pause after the number. Then Avery gives his own notes (about 20 s) and introduces David, who starts
+the demo.
 
 ## 2. Live demo (1:00 to 3:30)
 
