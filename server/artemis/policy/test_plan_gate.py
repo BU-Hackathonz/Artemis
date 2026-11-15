@@ -97,3 +97,25 @@ def test_ring_done_frees_the_plan_and_the_cues(tmp_path):
     assert log.of("ring.cue")[-1].data["action"] == "done"
     # The next request has to plan again.
     assert run(g.call("t1", "write_files", FILES)).error == "plan_required"
+
+
+def test_the_plan_is_spoken_step_by_step(tmp_path):
+    g, log = gate(tmp_path)
+    plan = {"goal": "Make a calculator", "steps": [
+        {"say": "I'll start a new project called calculator.", "action": "think", "target": None},
+        {"say": "I'll write the calculator", "action": "write", "target": "editor"},
+        {"say": "I'll run it once to check it works.", "action": "run", "target": "terminal"}]}
+    run(g.call("t1", "plan", plan))
+    announce = log.of("agent.plan")[0].announce
+    assert announce.priority == "normal"  # never cuts an approval, never dropped like progress
+    assert announce.text == ("I'll start a new project called calculator. I'll write the calculator. "
+                             "I'll run it once to check it works.")
+    run(g.call("t1", "plan", PLAN))
+    assert log.of("agent.plan")[1].announce.text == "New plan. Write."
+
+
+def test_a_long_plan_says_its_first_steps_and_how_many_follow(tmp_path):
+    g, log = gate(tmp_path)
+    steps = [{"say": f"Step {i}.", "action": "read", "target": None} for i in range(6)]
+    run(g.call("t1", "plan", {"goal": "Look around", "steps": steps}))
+    assert log.of("agent.plan")[0].announce.text == "Step 0. Step 1. Step 2. Step 3. Then 2 more steps, in the panel."

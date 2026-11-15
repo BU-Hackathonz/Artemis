@@ -145,6 +145,17 @@ def test_hello_world_tool_loop(tmp_path):
     assert spoken.index("main.py ran successfully. It printed: Hello, World!") < len(spoken) - 1
 
 
+def test_a_sentence_beside_a_tool_call_is_spoken_as_progress(tmp_path):
+    script = hello_script()
+    script[0] = message(thinking(), text("I'll start a **new project** first."),
+                        tool("toolu_1", "create_project", name="hello world"), stop_reason="tool_use")
+    w = World(tmp_path, script)
+    asyncio.run(w.run())
+    first = w.log.events[0]
+    assert first.type == "agent.message" and first.data == {"text": "I'll start a **new project** first.", "kind": "progress"}
+    assert (first.announce.text, first.announce.priority) == ("I'll start a new project first.", "low")
+
+
 def test_request_shape(tmp_path):
     w = World(tmp_path, [message(text("Hello."))])
     asyncio.run(w.run())
@@ -501,7 +512,7 @@ def test_system_prompt_is_frozen_and_covers_the_rules():
 # sha256 of main's SYSTEM_PROMPT (updated when the prompt itself changes, last when code went into files
 # and VS Code was opened with open_path, not typed, on top of the plan and the desktop tools) as it
 # is on Windows: with ARTEMIS_CONVERSATION off the agent must see exactly that prompt.
-MAIN_SYSTEM_PROMPT_SHA256 = "ed64f9cd320cdc4344cd47d21b2344f0bb235a222883471b04640f1eff7d7283"
+MAIN_SYSTEM_PROMPT_SHA256 = "b0525683752671a37a03bf80b27ab6cf95426b82ef87723790dc6ed98a0dcb84"
 
 
 def test_spoken_answers_are_short_and_true_to_the_tool_results():

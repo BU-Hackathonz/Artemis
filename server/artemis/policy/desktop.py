@@ -35,6 +35,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from artemis.agent.speech_text import for_speech
 from artemis.agent.untrusted import wrap
 from artemis.contracts import (
     AgentPlanData,
@@ -147,6 +148,25 @@ def _clean(text: str, limit: int) -> str:
     text = "".join(c if unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp") else " " for c in text)
     text = " ".join(text.split())
     return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+SPOKEN_PLAN_STEPS = 4  # a longer plan is shown in full but only its first steps are said
+
+
+def spoken_plan(plan: PlanArgs, again: bool = False) -> str:
+    """What the developer hears when the plan is made (§10: each step is spoken): the steps' own
+    sentences in order, so they know what is coming before the first approval. A re-plan says so."""
+    lines = []
+    for step in plan.steps[:SPOKEN_PLAN_STEPS]:
+        line = _clean(for_speech(step.say), 200)
+        if line:
+            lines.append(line if line[-1] in ".?!" else line + ".")
+    rest = len(plan.steps) - SPOKEN_PLAN_STEPS
+    if rest > 0:
+        lines.append(f"Then {rest} more step{'s' if rest > 1 else ''}, in the panel.")
+    if not lines:
+        lines.append(_clean(for_speech(plan.goal), 200).rstrip(".") + ".")
+    return ("New plan. " if again else "") + " ".join(lines)
 
 
 def _is_terminal(window: str) -> bool:
@@ -609,9 +629,11 @@ class DesktopTools:
     # ----- the plan and the ring -----
 
     async def _plan(self, task_id: str, a: PlanArgs) -> dict:
+        again = task_id in self._plans
         self._plans[task_id] = a
         self._cued.pop(task_id, None)
-        await self._emit(task_id, "agent.plan", AgentPlanData(goal=a.goal, steps=[s.model_dump() for s in a.steps]))
+        await self._emit(task_id, "agent.plan", AgentPlanData(goal=a.goal, steps=[s.model_dump() for s in a.steps]),
+                         spoken_plan(a, again), "normal")
         await self._emit(task_id, "ring.cue", RingCueData(action="think"))  # the plan is made: the ring thinks
         return {"planned": len(a.steps), "note": "Now carry out the steps. Each action still asks the developer."}
 
