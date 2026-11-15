@@ -486,14 +486,13 @@ task contract is needed: `voice.activity` (§2) adds the voice's own states.
 | thinking | `voice.activity` `transcribing`, or `task.state` `queued` or `working` with no `file.changed` yet in this task | the next row's event |
 | editing | `approval.requested` of kind `write_files` (waiting), then `file.changed` after it is approved | `task.state` `running`, `succeeded`, `failed` or `canceled` |
 | running | `task.state` `running` | `run.result` |
-| speaking | `voice.activity` `speaking`, on top of whichever task state holds | `voice.activity` leaves `speaking` |
+| speaking | `voice.activity` `speaking` while no task state holds (idle). **Proposed (Avery):** over a task, the task's state stays shown and named, and the island only marks that Artemis is talking | `voice.activity` leaves `speaking` |
 | done | `task.state` `succeeded` (the `run.result` exit code is 0 or there was no run) | the next request or about 3 s, client's choice |
 | error | `task.state` `failed`, an `error` event, or `run.result` with a non-zero exit code or `timed_out` | the next request |
 
 - `awaiting_approval` is not a separate island state: the approval dialog is focused (Enter guard,
   §5) while the island keeps the state it had, marked as waiting.
 - `canceled` returns to idle after the spoken "Canceled.".
-- Speaking overlays the task states because Artemis talks while it works. Listening and
-  transcribing take priority over speaking, since push-to-talk stops speech (§5.1).
+- **Proposed (Avery), from David's run with real speech:** Artemis talks through most of a task, so an overlay hid Editing, Running and Done for the whole task. Speaking now shows on its own only when idle. Listening and transcribing still take priority over everything, since push-to-talk stops speech (§5.1).
 - On Linux there is no NVDA estimate: `speaking` comes from the engine that plays the audio.
   Orca's own speech is the screen reader's and is never reported.
