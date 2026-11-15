@@ -338,7 +338,7 @@ transcript.
   | `stop`, `stop talking`, `be quiet` | Stops speech only; the task keeps going. With a task active and no approval open, the core adds "Say cancel to stop the task." unless speech was cut off |
   | `cancel`, `cancel the task`, `never mind` | Drops the waiting follow-up if there is one ("Dropped: …"); otherwise cancels the active task; otherwise "Nothing to cancel." |
   | `repeat`, `say that again` | With an approval open, its summary again at `high`; otherwise the last announcement |
-  | `what are you doing`, `status`, `are you done` | A fixed sentence from task state. No task is created. The "Still working." heartbeat is never reported as the last step |
+  | `what are you doing`, `status`, `are you done` | A fixed sentence from task state, plus what was actually observed: the files changed so far, the last run's exit code (or that it timed out), and the security scan result, each only if its event arrived. A check that never reported is not mentioned, and a failed run is never called a success. While a decision is open, the decision is said alone. No task is created. The "Still working." heartbeat is never reported as the last step |
   | `which file did you change`, `what changed` | The files changed by the current or last task |
   | `keep it brief`, `deep dive`, `normal mode`, `visual mode`, `code mode` | Sets `TaskContext.style` for the following tasks and confirms it |
   | `slower`, `faster` | See §5.3 |
