@@ -70,19 +70,23 @@ FOCUS_POLL_S = 0.5
 FOCUS_TRIES = 3
 RECENT_OPEN_S = 120.0  # an app opened longer ago than this is no longer the one typing is meant for
 
+# How long the ring gets to reach its target before a window opens or typing starts: the island's
+# flight (CUE_FLY_MS, 600 ms) plus a beat. Tests set it to 0.
+RING_LEAD_S = 0.8
+
 # The plan action each tool carries out, for the ring.
 TOOL_ACTIONS = {
     "create_project": "think", "open_project": "think", "list_files": "read", "read_file": "read",
     "read_path": "read", "inspect_page": "read", "scan_project": "read", "write_files": "write",
     "edit_file": "write", "run_program": "run", "run_command": "run", "open_app": "open",
-    "open_path": "open", "type_text": "type", "press_keys": "type", "publish_github": "run",
+    "open_path": "open", "open_url": "open", "type_text": "type", "press_keys": "type", "publish_github": "run",
 }
 # Where the ring flies for each acting tool, when the call itself names no more (the app, the window):
 # the editor, the terminal, the browser or the file. Every acting tool cues, with or without a plan.
 TOOL_TARGETS = {
     "create_project": "editor", "open_project": "editor", "write_files": "editor", "edit_file": "editor",
     "list_files": "file", "read_file": "file", "read_path": "file", "scan_project": "file",
-    "inspect_page": "browser", "run_program": "terminal", "run_command": "terminal",
+    "inspect_page": "browser", "run_program": "terminal", "run_command": "terminal", "open_url": "browser",
 }
 # Tools that change something or reach outside the project: the plan comes first (§10).
 # Opening an app or one of the developer's own files is not here: "open VS Code" must just open it
@@ -669,8 +673,8 @@ async def _spawn_detached(argv: list[str]) -> None:
             raise RuntimeError(err.read(200).decode(errors="replace").strip() or f"exit code {proc.returncode}")
 
 
-async def _open_default(path: Path) -> None:
-    """Open a document or folder in its default app: gio open, then xdg-open."""
+async def _open_default(path: Path | str) -> None:
+    """Open a document, a folder or a web address in its default app: gio open, then xdg-open."""
     reasons = []
     for argv in (["gio", "open", str(path)], ["xdg-open", str(path)]):
         try:
@@ -846,6 +850,11 @@ class DesktopTools:
                     break
         target = target or TOOL_TARGETS.get(name) or plan_target
         await self._emit(task_id, "ring.cue", RingCueData(step=step, action=action, target=target))
+        if action in ("open", "type") and RING_LEAD_S > 0:
+            # The ring flies to where the window will be (the island's dock press for a new app, or
+            # the window itself) before it appears or is typed into, not after (David's test run:
+            # windows opened suddenly while the ring was still on its way).
+            await asyncio.sleep(RING_LEAD_S)
 
     async def ring_done(self, task_id: str) -> None:
         """The task ended: the ring goes home. Called by the core when the task's state is final."""
@@ -965,6 +974,28 @@ class DesktopTools:
         self._note_opened(task_id, found)
         await self._say(task_id, f"Opened {name}.")
         return {"opened": name, "app_id": app_id}
+
+    async def _open_url(self, task_id: str, a) -> dict:
+        """A web page in the default browser. http(s) only, with no user name or password in it, so it can
+        never run anything local (file:, javascript:, ssh: and custom schemes are refused). Like opening
+        one of the developer's own files it asks nothing: it changes nothing and the browser can close it."""
+        from urllib.parse import urlsplit
+
+        url = a.url.strip()
+        try:
+            parts = urlsplit(url)
+            host = parts.hostname or ""
+        except ValueError:
+            raise PathRejected("That isn't a web address I can open.") from None
+        if parts.scheme not in ("https", "http") or not host or parts.username or parts.password or any(c in url for c in "\n\r\t\x00 "):
+            raise PathRejected("I only open web addresses that start with https:// or http://.")
+        await self._cue(task_id, "open_url", "browser")
+        try:
+            await _open_default(url)
+        except Exception as exc:
+            raise self._launch_failed(host, exc) from None
+        await self._say(task_id, f"Opened {host.removeprefix('www.')} in the browser.")
+        return {"opened": url}
 
     async def _open_path(self, task_id: str, a: OpenPathArgs) -> dict:
         found = _lookup(a.with_app) if a.with_app else None

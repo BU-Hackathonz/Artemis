@@ -65,8 +65,9 @@ export function describeApproval(approval) {
       if (!hasText) return unknown;
       const [visibility, ...rest] = d.text.split('\n');
       if (visibility !== 'private' && visibility !== 'public') return unknown;
-      const files = Array.isArray(approval.files) ? approval.files.filter(f => f && isText(f.path)) : [];
-      if (!files.length) return unknown; // never publish what we can't list
+      const files = Array.isArray(approval.files) ? approval.files : [];
+      // never publish what we can't list: one malformed entry and nothing is shown as approvable
+      if (!files.length || !files.every(f => f && isText(f.path))) return unknown;
       const about = rest.join('\n').trim();
       return {title, known: true, lines: [
         `Repository: ${d.target}, ${visibility}.`,

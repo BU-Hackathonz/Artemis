@@ -17,6 +17,7 @@ from artemis.contracts import (
     ListFilesArgs,
     OpenAppArgs,
     OpenPathArgs,
+    OpenUrlArgs,
     PlanArgs,
     PressKeysArgs,
     PublishGithubArgs,
@@ -62,6 +63,8 @@ RULES: dict[str, Rule] = {
     # The desktop (contracts.md §9): every one waits for the developer.
     "open_app": Rule(OpenAppArgs, approval_kind="open"),
     "open_path": Rule(OpenPathArgs, approval_kind="open"),
+    # A web page in the default browser: http(s) only, so nothing local runs (contracts.md §9).
+    "open_url": Rule(OpenUrlArgs, approval_kind="open"),
     "read_path": Rule(ReadPathArgs, approval_kind="read_outside"),
     "run_command": Rule(RunCommandArgs, approval_kind="run_command"),
     "type_text": Rule(TypeTextArgs, approval_kind="type"),

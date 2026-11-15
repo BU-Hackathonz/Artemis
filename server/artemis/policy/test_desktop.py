@@ -1112,3 +1112,38 @@ def test_a_canceled_focus_question_is_not_asked_again(home, fast_focus):
         return False, "canceled", None
     g, _, _ = gate(home, [Decision.approve], desktop=desktop)
     assert run(g.call("t1", "type_text", {"text": "x"})).error == "desktop_unavailable" and calls == ["focus"]
+
+
+# ----- David's test run: websites, and the ring before the window -----
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "javascript:alert(1)", "ssh://host", "https://user:pw@example.com",
+                                 "https:///nohost", "https://exa mple.com"])
+def test_open_url_refuses_anything_but_a_plain_web_address(home, url):
+    g, _, _ = gate(home, [])
+    assert run(g.call("t1", "open_url", {"url": url})).error == "path_rejected"
+
+
+def test_open_url_opens_in_the_default_browser_without_asking(home, monkeypatch):
+    opened = []
+
+    async def fake_open(target):
+        opened.append(target)
+    monkeypatch.setattr("artemis.policy.desktop._open_default", fake_open)
+    g, log, approvals = gate(home, [])
+    result = run(g.call("t1", "open_url", {"url": "https://www.google.com/search?q=artemis"}))
+    assert result.ok and opened == ["https://www.google.com/search?q=artemis"] and approvals.requests == []
+    assert "Opened google.com in the browser." in log.spoken()
+
+
+def test_the_ring_gets_a_head_start_before_a_window_opens(home, monkeypatch):
+    import time
+    monkeypatch.setattr("artemis.policy.desktop.RING_LEAD_S", 0.3)
+    seen = []
+
+    async def fake_open(target):
+        seen.append(time.monotonic())
+    monkeypatch.setattr("artemis.policy.desktop._open_default", fake_open)
+    g, log, _ = gate(home, [])
+    start = time.monotonic()
+    assert run(g.call("t1", "open_url", {"url": "https://example.com"})).ok
+    assert log.of("ring.cue") and seen[0] - start >= 0.3

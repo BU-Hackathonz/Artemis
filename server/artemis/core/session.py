@@ -300,7 +300,11 @@ class Session:
         self._by_request[request.client_request_id] = task.task_id
         if self.conversation:
             self.conversation.begin(task.task_id, request.text)
-        await self._state(task.task_id, "queued", f"Working on: {request.text}", "normal")
+        # A spoken request isn't read back (David's test run: after "Hey Artemis" it was redundant and
+        # slow); the agent's plan is the first thing heard, and the island shows the request. A typed
+        # one is still read back once.
+        readback = None if request.source == "voice" else f"Working on: {request.text}"
+        await self._state(task.task_id, "queued", readback, "normal")
         task.job = asyncio.create_task(self._run(task))
         task.heartbeat = asyncio.create_task(self._heartbeat(task))
         # However the job ends (even canceled before it starts), the heartbeat stops with it.

@@ -151,6 +151,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "\"Files\", \"Firefox\", \"browser\") or desktop id, whichever build is installed. It opens right away and never asks the developer. "
         "If it says the app isn't installed, tell the developer in one sentence."
     ),
+    "open_url": (
+        "Open a web page in the developer's default browser, for example https://www.google.com, a search "
+        "(https://www.google.com/search?q=...) or a repository you published. Only http and https addresses. "
+        "Use this, never run_command, to open anything on the web: commands can't reach the screen."
+    ),
     "open_path": (
         "Open a file or folder in the developer's home folder, in its default app or in the app "
         "you name in with_app (null for the default). A relative path is in the current project. "
