@@ -151,6 +151,15 @@ class OpenAppArgs(_Args):
     )
 
 
+class OpenUrlArgs(_Args):
+    url: str = Field(
+        min_length=8,
+        max_length=2000,
+        description="A web address starting with https:// or http://, for example https://www.google.com or "
+        "https://github.com/owner/repo. Opens in the developer's default browser.",
+    )
+
+
 class OpenPathArgs(_Args):
     path: str = Field(
         min_length=1,
@@ -273,6 +282,7 @@ class PlanArgs(_Args):
 DESKTOP_TOOL_ARGS: dict[str, type[BaseModel]] = {
     "open_app": OpenAppArgs,
     "open_path": OpenPathArgs,
+    "open_url": OpenUrlArgs,
     "read_path": ReadPathArgs,
     "run_command": RunCommandArgs,
     "type_text": TypeTextArgs,

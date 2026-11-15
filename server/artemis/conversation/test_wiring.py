@@ -273,10 +273,9 @@ async def test_a_request_during_a_task_waits_and_then_starts_read_back(tmp_path)
     assert first.state == "succeeded" and second.state == "succeeded"
     assert second.request.text == "Then add a dark mode toggle."  # the exact words, not a rewrite
     spoken = w.voice.spoken
-    start = spoken.index("Starting the follow-up.")
-    assert spoken[start + 1] == "Working on: Then add a dark mode toggle."
-    assert "Heard: build a to-do app" not in spoken  # read back once, by "Working on: ..."
-    assert spoken.count("Working on: build a to-do app") == 1
+    assert "Starting the follow-up." in spoken
+    assert "Heard: build a to-do app" not in spoken  # a spoken request isn't read back
+    assert not [line for line in spoken if line.startswith("Working on:")]
     assert [t.request for t in agent.seen] == ["build a to-do app", "Then add a dark mode toggle."]
 
 

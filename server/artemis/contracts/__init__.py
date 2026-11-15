@@ -54,6 +54,7 @@ from .tools import (
     CreateProjectArgs,
     OpenAppArgs,
     OpenPathArgs,
+    OpenUrlArgs,
     PlanArgs,
     PlanStep,
     PressKeysArgs,

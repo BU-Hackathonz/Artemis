@@ -161,6 +161,7 @@ describe('describeApproval, publish (contracts §9.1)', () => {
 
   it('is unknown without files, a visibility, or the publish action', () => {
     expect(describeApproval({...base, files: []}).known).toBe(false);
+    expect(describeApproval({...base, files: [{path: 'index.html'}, {}]}).known).toBe(false);
     expect(describeApproval({...base, desktop: {...base.desktop, text: 'secret\n'}}).known).toBe(false);
     expect(describeApproval({...base, desktop: {...base.desktop, action: 'run_command'}}).known).toBe(false);
   });

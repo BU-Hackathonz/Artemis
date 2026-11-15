@@ -345,18 +345,18 @@ async def test_push_to_talk_creates_a_task(client, core, voice):
     assert next(iter(session.tasks.values())).request.source == "voice"
 
 
-async def test_a_voice_request_is_read_back_once(client, core, voice):
-    """The transcript is spoken once, by "Working on: ..." (no "Heard:" before it); it is still in
-    the transcript.final event. A typed request is unchanged; a non-task utterance keeps "Heard:"."""
+async def test_a_voice_request_is_not_read_back(client, core, voice):
+    """A spoken request starts silently (David's test run: the read-back after "Hey Artemis" was
+    redundant and slow): no "Heard:" and no "Working on:". The words stay in transcript.final and the
+    queued state. A typed request is still read back; a non-task utterance keeps "Heard:"."""
     sid, session = await start(client, core)
     await session.spoken("create a Python program", "cr_v")
     final = [e for e in session.bus.history if e.type == "transcript.final"][0]
     assert final.announce is None and final.data["text"] == "create a Python program"
     queued = [e for e in session.bus.history if e.type == "task.state" and e.data["state"] == "queued"][0]
-    assert queued.announce.text == "Working on: create a Python program"
+    assert queued.announce is None
     await asyncio.sleep(0.05)
-    assert [t for _, t in voice.spoken].count("Working on: create a Python program") == 1
-    assert not [t for _, t in voice.spoken if t.startswith("Heard:")]
+    assert not [t for _, t in voice.spoken if t.startswith(("Heard:", "Working on:"))]
     await session.cancel(session.active_task.task_id)
     n = len(session.bus.history)
     await session.spoken("cancel", "cr_c")  # no task: not a request, so still confirmed

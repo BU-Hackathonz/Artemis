@@ -189,7 +189,7 @@ def unified_diff(path: str, old: str | None, new: str) -> tuple[str, int, int]:
 
 
 # Desktop tools send their ring cue themselves, after the approval, when the action really starts.
-_SELF_CUED = {"open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "plan",
+_SELF_CUED = {"open_app", "open_path", "open_url", "read_path", "run_command", "type_text", "press_keys", "plan",
               "write_files", "edit_file", "run_program", "publish_github"}
 
 

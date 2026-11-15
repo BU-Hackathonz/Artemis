@@ -28,7 +28,7 @@ class RunSpec(BaseModel):
 class DesktopSpec(BaseModel):
     """What a desktop approval will do, shown and spoken word for word before it is approved."""
 
-    action: Literal["open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "publish_github"]
+    action: Literal["open_app", "open_path", "open_url", "read_path", "run_command", "type_text", "press_keys", "publish_github"]
     # The app id, the resolved path, the command's resolved folder, or for typing the focused
     # window as the island reported it ("org.gnome.Ptyxis: ~/project"). The hash covers it.
     target: str
