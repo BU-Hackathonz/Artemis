@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest';
-import {cueTargetRect} from '../prototypes/water-desktop/artemis-water@bu-hackathonz.github.io/ringTargets.js';
+import {cueTargetRect, caretAnchor} from '../prototypes/water-desktop/artemis-water@bu-hackathonz.github.io/ringTargets.js';
 
 const screen = {x: 0, y: 0, width: 1920, height: 1080};
 const home = {x: 960, y: 40};
@@ -53,5 +53,15 @@ describe('cueTargetRect: where the ring flies for a cue', () => {
   it('with no windows at all, a named target is the centre, and done still goes home', () => {
     expect(cueTargetRect({action: 'write', target: 'editor'}, {windows: [], screen, home})).toEqual(centre);
     expect(cueTargetRect({action: 'done'}, {windows: [], screen})).toEqual(centre);
+  });
+});
+
+describe('caretAnchor', () => {
+  it('sits just above and to the right of the caret line', () => {
+    expect(caretAnchor({x: 500, y: 300, height: 20}, screen)).toEqual({x: 518, y: 272});
+  });
+  it('stays inside the screen at its edges', () => {
+    expect(caretAnchor({x: 1915, y: 5, height: 10}, screen)).toEqual({x: 1902, y: 18});
+    expect(caretAnchor({x: -40, y: 2000, height: 20}, screen)).toEqual({x: 18, y: 1062});
   });
 });
