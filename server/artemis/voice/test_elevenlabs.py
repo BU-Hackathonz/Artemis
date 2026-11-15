@@ -403,6 +403,45 @@ def test_the_next_line_is_fetched_while_this_one_plays():
     assert e.last_first_audio_s is not None and e.last_first_audio_s < 0.2  # its audio was already there
 
 
+def test_an_interrupt_plays_the_next_line_at_once_even_if_the_stream_is_stalled():
+    outputs = []
+    first = {"made": False}
+
+    def make():
+        if not first["made"]:
+            first["made"] = True
+            return SlowResponse([b"a" * 2, b"b" * 2], [0, 5.0])  # one chunk, then a 5 s stall
+        return FakeResponse([b"z" * 2])
+
+    e = eleven(Opener(make), outputs, timeout_s=8.0)
+    e.speak("A long answer.", interrupt=False)
+    wait_for(lambda: outputs and outputs[0].written)  # playing; the worker is waiting on the stalled stream
+    started = time.monotonic()
+    e.speak("Canceled.", interrupt=True)
+    wait_for(lambda: len(outputs) > 1 and outputs[1].written)
+    assert time.monotonic() - started < 0.5
+    assert outputs[1].written == [b"zz"]
+    assert e.wait_idle(2)
+
+
+def test_an_interrupt_during_the_first_chunk_wait_plays_the_next_line_at_once():
+    outputs = []
+    calls = []
+
+    def make():
+        calls.append(1)
+        return SlowResponse([b"a" * 2], [5.0]) if len(calls) == 1 else FakeResponse([b"z" * 2])
+
+    e = eleven(Opener(make), outputs, timeout_s=8.0)
+    e.speak("A long answer.", interrupt=False)
+    wait_for(lambda: calls)
+    started = time.monotonic()
+    e.speak("Canceled.", interrupt=True)
+    wait_for(lambda: outputs and outputs[-1].written == [b"zz"])
+    assert time.monotonic() - started < 0.5
+    assert e.wait_idle(2)
+
+
 def test_a_stall_after_the_first_audio_does_not_cut_the_line():
     outputs = []
     # The first-audio deadline is 0.2 s; a 0.4 s stall mid-line is a slow network, not a failure.

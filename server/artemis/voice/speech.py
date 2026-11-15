@@ -223,6 +223,8 @@ SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
 FAILURES_BEFORE_SAPI = 3
 PERMANENT_FAILURES = {"HTTP 401", "HTTP 402", "HTTP 403"}  # retrying can't help: give up at once
 STREAM_TIMEOUT_S = 10.0  # one read after the first audio: a slow network stalls, it doesn't cut the line
+CHUNK_POLL_S = 0.05  # how often a waiting reader checks that its line is still wanted
+_GONE = object()  # _next_chunk: the line was abandoned or canceled while waiting
 FALLBACK_WAIT_S = 30.0  # the longest a queued line waits for the local voice to finish a fallen-back line
 def _local_voice_name() -> str:
     return "NVDA or the Windows voice" if sys.platform == "win32" else "the offline voice"
@@ -507,19 +509,32 @@ class ElevenLabsSpeaker:
                 if line.abandoned.is_set():
                     return
                 line.chunks.put(chunk)
-            line.chunks.put(None)
         except Exception as e:
             line.chunks.put(e)
+        finally:
+            line.chunks.put(None)  # always end the queue, so a waiting reader wakes at once (after an error it is ignored)
+
+    def _next_chunk(self, line: _Line, timeout_s: float):
+        """The next item on the line's queue, or _GONE as soon as the line is abandoned or canceled (gen
+        changed). Polls in short steps, so an interrupt is never stuck behind a stalled download."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if line.abandoned.is_set() or not self._current(line.gen):
+                return _GONE
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return TimeoutError("timed out")
+            try:
+                return line.chunks.get(timeout=min(CHUNK_POLL_S, remaining))
+            except queue.Empty:
+                pass
 
     def _chunks(self, line: _Line, first: bytes):
         """The rest of the line's audio. A stall or error mid-line is logged with its reason."""
         yield first
         while True:
-            try:
-                item = line.chunks.get(timeout=STREAM_TIMEOUT_S)
-            except queue.Empty:
-                item = TimeoutError("timed out")
-            if item is None:
+            item = self._next_chunk(line, STREAM_TIMEOUT_S)
+            if item is _GONE or item is None:
                 return
             if isinstance(item, Exception):
                 if not line.abandoned.is_set():
@@ -542,11 +557,8 @@ class ElevenLabsSpeaker:
             return
         started = time.monotonic()
         self._start(line)  # already running when it was prefetched
-        try:
-            first = line.chunks.get(timeout=self.timeout_s)
-        except queue.Empty:
-            first = TimeoutError("timed out")
-        if line.abandoned.is_set():
+        first = self._next_chunk(line, self.timeout_s)
+        if first is _GONE or line.abandoned.is_set():
             return  # canceled, or a stale progress line: a newer line arrived before it was heard
         if first is None or isinstance(first, Exception):
             line.abandon()
