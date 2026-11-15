@@ -26,7 +26,8 @@ import {WaterEffect, MAX_DROPS} from './waterEffect.js';
 import {LensEffect} from './lensEffect.js';
 import {OrbEffect} from './orbEffect.js';
 import {RingEffect} from './ringEffect.js';
-import {cueTargetRect} from './ringTargets.js';
+import {cueTargetRect, caretAnchor} from './ringTargets.js';
+import {CaretTracker} from './caret.js';
 import {Island} from './island.js';
 import {CoreClient} from './core.js';
 import {Typist, focusedWindow} from './desktop.js';
@@ -92,6 +93,8 @@ const HOLD_POKE_MS = [380, 900]; // menu open: random little pokes to its jelly 
 const MORPH_SECONDS = 0.55;     // ring <-> droplet transition (a command waits for it to start)
 const CUE_FLY_MS = 600;         // the droplet flies to the window a ring.cue names (ease-out quad)
 const CUE_ARC = 0.12;           // how far it bows off the straight line on the way (share of the distance)
+const RIDE_POLL_MS = 90;        // while Artemis types: how often the droplet checks where the caret is
+const RIDE_GLIDE_MS = 140;      // ... and how long it glides to the caret's new spot
 const CUE_RUN_PULSE_HZ = 1.2;   // a "run" cue pulses its glow this often
 const TRAIL_HIGHLIGHTS = 1.6;   // agent trail: brighter glossy lines ...
 const TRAIL_DISPERSION = 2.0;   // ... stronger rainbow fringes ...
@@ -136,6 +139,8 @@ export default class ArtemisWaterExtension extends Extension {
         this._typist = Typist.create();   // null when the shell has no virtual keyboard: the island then can't type
         this._desktopOps = new Set();     // op_ids already answered: never type the same op twice
         this._desktopJob = null;          // the last desktop action, so they run one at a time
+        this._caret = null;               // AT-SPI caret tracker, made at the first ring.cue (caret.js)
+        this._rideTimer = 0;              // the droplet follows the caret while Artemis types
 
         this._core = new CoreClient({
             onEvent: (event) => this._onEvent(event),
@@ -179,6 +184,9 @@ export default class ArtemisWaterExtension extends Extension {
         this._closeApproval();
         this._typist?.destroy();
         this._typist = null;
+        this._stopRide();
+        this._caret?.destroy();
+        this._caret = null;
         if (this._doneTimer) GLib.source_remove(this._doneTimer);
         this._doneTimer = 0;
         if (this._talkTimer) GLib.source_remove(this._talkTimer);
@@ -361,6 +369,11 @@ export default class ArtemisWaterExtension extends Extension {
             return;
         }
         this._cue = {action: cue.action};
+        this._caret ??= new CaretTracker(); // made now, so it has seen the focus before any typing starts
+        if (cue.action === 'type') {
+            const at = this._caretTarget();
+            if (at) { this._agentFlyTo(at); return; }
+        }
         const monitor = Main.layoutManager.primaryMonitor;
         const dest = cueTargetRect(cue, {
             windows: this._cueWindows(),
@@ -391,7 +404,7 @@ export default class ArtemisWaterExtension extends Extension {
     // Flies the droplet to a point over ~CUE_FLY_MS with an ease-out, bowing a little on the way.
     // While it flies or waits at a target it counts as awake, so a layout change doesn't snap it
     // home mid-task (only a finished task, or _agentGoHome, brings it back). Reduce motion: jump.
-    _agentFlyTo(to) {
+    _agentFlyTo(to, ms = CUE_FLY_MS, arc = CUE_ARC) {
         const A = this._agent;
         if (!A) return;
         if (this._homeTimer) { GLib.source_remove(this._homeTimer); this._homeTimer = 0; }
@@ -406,9 +419,9 @@ export default class ArtemisWaterExtension extends Extension {
         }
         const t0 = GLib.get_monotonic_time();
         this._homeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ACTIVE_MS, () => {
-            const t = Math.min((GLib.get_monotonic_time() - t0) / 1000 / CUE_FLY_MS, 1);
+            const t = Math.min((GLib.get_monotonic_time() - t0) / 1000 / ms, 1);
             const e = easeOutQuad(t);
-            const bend = CUE_ARC * Math.sin(Math.PI * t) * dist;
+            const bend = arc * Math.sin(Math.PI * t) * dist;
             const nx = -(to.y - from.y) / dist, ny = (to.x - from.x) / dist;
             A.x = mix(from.x, to.x, e) + nx * bend;
             A.y = mix(from.y, to.y, e) + ny * bend;
@@ -419,6 +432,37 @@ export default class ArtemisWaterExtension extends Extension {
             }
             return GLib.SOURCE_CONTINUE;
         });
+    }
+
+    // Where the droplet should sit for the focused window's caret, or null when the app doesn't say.
+    _caretTarget() {
+        const caret = this._caret?.position(global.display.focus_window);
+        if (!caret) return null;
+        const m = Main.layoutManager.primaryMonitor;
+        return caretAnchor(caret, {x: m.x, y: m.y, width: m.width, height: m.height});
+    }
+
+    // While Artemis types, the droplet rides the caret: it checks every RIDE_POLL_MS and glides to
+    // the caret's new spot. Returns the stop function. Ring look only; nothing when the app gives no caret.
+    _rideCaret() {
+        this._stopRide();
+        if (!this._agent || !this._isRing()) return () => {};
+        this._caret ??= new CaretTracker();
+        let last = null;
+        this._rideTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, RIDE_POLL_MS, () => {
+            const at = this._caretTarget();
+            if (at && (!last || Math.hypot(at.x - last.x, at.y - last.y) > 2)) {
+                last = at;
+                this._agentFlyTo(at, RIDE_GLIDE_MS, 0);
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
+        return () => this._stopRide();
+    }
+
+    _stopRide() {
+        if (this._rideTimer) GLib.source_remove(this._rideTimer);
+        this._rideTimer = 0;
     }
 
     // The per-action look of the ring while a cue is shown: "run" pulses its glow, "type" holds a
@@ -629,8 +673,13 @@ export default class ArtemisWaterExtension extends Extension {
             }
             if (!typist || (kind !== 'type' && kind !== 'keys'))
                 return answer({ok: false, message: 'the island cannot type on this desktop'});
-            const {ok, message} = await typist.run(kind, text, window, generation);
-            return answer(ok ? {ok: true} : {ok: false, message});
+            const stopRide = this._rideCaret();
+            try {
+                const {ok, message} = await typist.run(kind, text, window, generation);
+                return answer(ok ? {ok: true} : {ok: false, message});
+            } finally {
+                stopRide();
+            }
         };
         this._desktopJob = (this._desktopJob ?? Promise.resolve()).then(run).catch(() => answer({ok: false, message: 'the island could not type'}));
     }

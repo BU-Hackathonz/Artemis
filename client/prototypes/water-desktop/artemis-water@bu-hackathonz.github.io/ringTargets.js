@@ -59,3 +59,13 @@ export function cueTargetRect(cue, {windows = [], screen, home} = {}) {
     if (!win) return centreOf(screen);
     return {x: win.rect.x, y: win.rect.y, width: win.rect.width, height: win.rect.height};
 }
+
+// Where the droplet rides for a caret ({x, y = line centre, height}): just above and to the right
+// of it, so it marks the spot without covering the text being typed, kept inside the screen.
+export function caretAnchor(caret, screen, lift = 18) {
+    const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+    return {
+        x: clamp(caret.x + lift, screen.x + lift, screen.x + screen.width - lift),
+        y: clamp(caret.y - caret.height / 2 - lift, screen.y + lift, screen.y + screen.height - lift),
+    };
+}
