@@ -66,6 +66,8 @@ HEARTBEAT_MAX_S = 9.0  # the cue repeats after 3 s, then 6 s, then every 9 s: pr
 # An approval still open this long after it was asked is said again, once, when the voice is quiet:
 # the line may have been cut off or lost, and the dialog waits silently for a key the user never heard of.
 APPROVAL_REMIND_S = 10.0
+APPROVAL_HEARD_START_S = 0.3  # an approval's summary reaches the speaker within this
+APPROVAL_HEARD_MAX_S = 60.0  # the longest the core waits for it to be said (queued behind a long answer)
 APPROVAL_REMIND_QUIET_S = 6.0  # the longest the reminder waits for Artemis to stop speaking
 EMPTY_PAIR_S = 1.5  # a second empty transcript this soon after the first is the same tap
 # A push-to-talk hold that recorded no sound (contracts.md 3.3): fixed text, never free text.
@@ -204,6 +206,7 @@ class Session:
         self._on_question = on_question
         self.approval_remind_s = approval_remind_s
         self._reminders: dict[str, asyncio.Task] = {}  # approval id -> its reminder
+        self._heard_watch: set[asyncio.Task] = set()  # waits for an approval's summary to be heard (§5.4)
         # contracts.md §5.4, off by default: None means today's §5.2 rules, unchanged.
         if conversation is None:
             conversation = os.environ.get("ARTEMIS_CONVERSATION", "off").lower() == "on"
@@ -250,7 +253,9 @@ class Session:
             reminder = asyncio.create_task(self._remind_approval(draft.task_id, draft.data))
             self._reminders[aid] = reminder
             reminder.add_done_callback(lambda _t, aid=aid: self._reminders.pop(aid, None))
-        elif draft.type == "approval.resolved":
+        if draft.type == "approval.requested" and self.conversation:
+            self._watch_heard(draft.data.get("approval_id"))
+        if draft.type == "approval.resolved":
             reminder = self._reminders.pop(draft.data.get("approval_id"), None)
             if reminder is not None and reminder is not asyncio.current_task():
                 reminder.cancel()  # decided: nothing to remind
@@ -577,6 +582,20 @@ class Session:
             if decision.say and not was_speaking:
                 # Nothing was being said, so "stop" may have meant the task: never stay silent.
                 await self.say(tid, decision.say)
+        elif action == "decide":
+            # Voice approval (§5.4): the same path as the dialog's POST /approvals, with the hash the
+            # approval carried, so a changed or already-decided approval can't be decided by voice.
+            try:
+                self.approvals.resolve(decision.approval_id, decision.verdict, decision.approval_hash)
+            except Exception:
+                await self.say(tid, "That approval isn't open any more.", "high")
+            else:
+                await self.say(tid, decision.say, decision.priority)
+        elif action == "say" and decision.rearm_heard:
+            await self.say(tid, decision.say, decision.priority)
+            aid = (self.conversation.open_approval or {}).get("id")
+            if aid:
+                self._watch_heard(aid)
         elif action == "rate":
             set_rate = getattr(self.voice, "set_rate", None)  # optional (SAPI only, Yaovi)
             if set_rate is None:
@@ -611,6 +630,40 @@ class Session:
             return bool(announcer.status()[0])
         except Exception:
             return False
+
+    def _listening(self) -> bool:
+        return bool(getattr(self.voice, "busy_listening", getattr(self.voice, "listening", False))
+                    or getattr(self.voice, "transcribing", False))
+
+    def _watch_heard(self, approval_id: str | None) -> None:
+        """Tell the controller when Artemis has finished saying this approval's summary (§5.4).
+
+        The summary is queued after what Artemis is saying (#192), and push-to-talk cuts speech, so
+        the voice approval's reveal guard starts only when speech falls silent with no one talking.
+        Cut off by push-to-talk, it is not heard: "approve" then gets the summary read again."""
+        if not approval_id or self.conversation is None:
+            return
+
+        async def watch() -> None:
+            open_ = lambda: any(a.approval_id == approval_id for a in self.approvals.pending())  # noqa: E731
+            try:
+                await asyncio.sleep(APPROVAL_HEARD_START_S)
+                waited = APPROVAL_HEARD_START_S
+                while open_() and self._speaking() and waited < APPROVAL_HEARD_MAX_S:
+                    if self._listening():
+                        return  # push-to-talk cut it off
+                    await asyncio.sleep(0.1)
+                    waited += 0.1
+                if open_() and not self._listening():
+                    self.conversation.approval_heard(approval_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # never touches the task
+                log.exception("approval heard watch failed")
+
+        job = asyncio.create_task(watch())
+        self._heard_watch.add(job)
+        job.add_done_callback(self._heard_watch.discard)
 
     def _speaking(self) -> bool:
         """True only when we know Artemis is speaking. NVDA can't tell us, so that is False."""
