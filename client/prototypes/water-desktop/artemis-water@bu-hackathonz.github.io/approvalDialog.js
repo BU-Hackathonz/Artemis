@@ -153,8 +153,8 @@ export class ApprovalDialog {
     }
 
     async _send(decision) {
-        if (this._busy)
-            return;
+        if (this._busy || !decision)
+            return; // a blocked Approve click decides nothing
         this._busy = true;
         this._setSensitive(false);
         this._status.text = 'Sending decision…';
