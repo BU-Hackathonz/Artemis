@@ -3,7 +3,11 @@
 import sys
 import types
 
-from artemis.voice import setup
+import pytest
+
+pytest.importorskip("numpy")  # the voice group: CI's main server job runs without it
+
+from artemis.voice import setup  # noqa: E402
 
 
 def _fake_whisper(monkeypatch):
