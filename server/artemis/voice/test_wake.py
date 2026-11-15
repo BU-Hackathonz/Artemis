@@ -501,3 +501,20 @@ def test_quick_model_setting(monkeypatch):
     assert quick_model() is None
     monkeypatch.setenv("ARTEMIS_WAKE_QUICK_MODEL", "base.en")
     assert quick_model() == "base.en"
+
+
+def test_a_quick_model_not_loaded_yet_leaves_the_early_look_to_the_full_model():
+    full = Script("Hey Artemis.")
+    loop = WakeLoop(full, quick=lambda audio: None)
+    events = feed(loop, quiet(1) + speech(0.8) + quiet(0.4))
+    assert [(e.kind, e.quiet_s) for e in events] == [("wake", 0.4)] and full.heard == 1
+    assert feed(loop, quiet(0.1)) == []  # nothing to confirm: the full model already decided
+
+
+def test_a_confirmation_that_fails_takes_the_quick_wake_back():
+    def broken(audio):
+        raise RuntimeError("whisper fell over")
+
+    loop = WakeLoop(broken, quick=Script("Hey Artemis."))
+    feed(loop, quiet(1) + speech(0.8) + quiet(0.4))
+    assert [e.kind for e in feed(loop, quiet(0.1))] == ["misheard"] and not loop.armed

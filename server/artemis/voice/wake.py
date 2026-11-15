@@ -299,7 +299,7 @@ class WakeLoop:
         vad: Callable[[np.ndarray], float | None] | None = None,  # VoiceDetector: endpoint on voice, not loudness
         clean: bool = True,  # denoise each utterance with the room's own noise before transcribing it
         wake_silence_s: float | None = 0.4,  # quiet that is enough to hear a bare "Hey Artemis"; None: wait for the end
-        quick: Callable[[np.ndarray], str] | None = None,  # a fast, rougher transcriber for the early look
+        quick: Callable[[np.ndarray], str | None] | None = None,  # fast, rougher, for the early look; None: not ready
         quick_max_s: float = 1.5,  # more voice than this before the pause is not a bare "Hey Artemis" (about 0.9 s)
     ) -> None:
         self.transcribe = transcribe
@@ -327,7 +327,11 @@ class WakeLoop:
     def feed(self, frame: np.ndarray) -> Event | None:
         if self._confirm is not None:
             audio, self._confirm = self._confirm, None
-            if wake_request(self._hear(audio)[0]) is None:  # the full model heard no "Hey Artemis": take it back
+            try:
+                confirmed = wake_request(self._hear(audio)[0]) is not None
+            except Exception:  # unconfirmed is not confirmed: tiny.en alone must never lead to a request
+                confirmed = False
+            if not confirmed:  # the full model heard no "Hey Artemis": take it back
                 self._armed = 0
                 self.stats.wakes -= 1
                 self.stats.misheard += 1
@@ -394,12 +398,14 @@ class WakeLoop:
         self._armed = 0
         return self._emit(Event("request", request, seconds, quiet, took))
 
-    def _hear(self, audio: np.ndarray, transcribe: Callable[[np.ndarray], str] | None = None) -> tuple[str, float]:
-        """(transcript, seconds it took), the audio denoised first."""
+    def _hear(self, audio: np.ndarray, transcribe: Callable[[np.ndarray], str | None] | None = None) -> tuple:
+        """(transcript, seconds it took), the audio denoised first. The transcript is None when a quick
+        transcriber is not ready."""
         began = time.monotonic()
         if self.clean and len(self._room) >= 5:
             audio = denoise(audio, np.concatenate(self._room))
-        return (transcribe or self.transcribe)(audio).strip(), time.monotonic() - began
+        text = (transcribe or self.transcribe)(audio)
+        return (None if text is None else text.strip()), time.monotonic() - began
 
     def _early_look(self) -> Event | None:
         """A pause after the first words: if they were just "Hey Artemis", arm now (see the class doc)."""
@@ -409,11 +415,11 @@ class WakeLoop:
         took = 0.0
         if self.quick is not None and seg.voiced <= self.quick_frames:
             text, took = self._hear(audio, self.quick)
-            found = wake_request(text)
+            found = None if text is None else wake_request(text)
             if found == "":
                 self._confirm = audio
                 return self._arm_early(audio, took)
-            if found is None:
+            if text is not None and found is None:
                 return None  # most likely other people talking: the full model hears it once, at the end
         text, more = self._hear(audio)  # the full model: its transcript can be the final one
         took += more
@@ -487,7 +493,7 @@ class WakeListener:
         self._stream = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._quick_name: str | None = None
-        self._quick_model = None  # loaded on the worker thread, so startup is not held up
+        self._quick_model = None  # loaded on its own thread, so neither startup nor the mic is held up
         make = loop_factory or WakeLoop
         if loop_factory is None and stream_factory is None:
             # the voice detector and the quick model are for the real microphone (tests feed synthetic tones)
@@ -531,11 +537,11 @@ class WakeListener:
             log.warning("Wake word: the quick model %s is not available (%s); small.en spots the phrase alone",
                         self._quick_name, type(e).__name__)
 
-    def _quick(self, audio) -> str:
-        """The quick model's transcript, or "" while it is not loaded (the full model then decides)."""
+    def _quick(self, audio) -> str | None:
+        """The quick model's transcript, or None while it is not loaded (the full model then decides)."""
         model = self._quick_model
         if model is None:
-            return ""
+            return None
         segments, _ = model.transcribe(audio, language="en", beam_size=1, vad_filter=True,
                                        initial_prompt=getattr(self.voice, "prompt", None) or None)
         return " ".join(s.text.strip() for s in segments)
@@ -546,6 +552,8 @@ class WakeListener:
         self._stream.start()
         self._thread = threading.Thread(target=self._run, name="artemis-wake", daemon=True)
         self._thread.start()
+        if self._quick_name is not None:  # its own thread: frames heard meanwhile are judged on time, not late
+            threading.Thread(target=self._load_quick, name="artemis-wake-quick", daemon=True).start()
         log.warning("Wake word on: say \"Hey Artemis\" and the request")  # warning so core.log shows it
 
     def stop(self) -> None:
@@ -567,7 +575,6 @@ class WakeListener:
             pass  # the worker is behind (a slow transcription): dropping beats unbounded memory
 
     def _run(self) -> None:
-        self._load_quick()
         while not self._stop.is_set():
             try:
                 frame = self._frames.get(timeout=0.2)
