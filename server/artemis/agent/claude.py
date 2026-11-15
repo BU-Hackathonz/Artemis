@@ -143,6 +143,13 @@ class ClaudeAgent:
                 await say(emit, task.task_id, text)
                 return Answered(text=text)
 
+            # A sentence written alongside the tool calls ("I'll check the file first.") is what Claude
+            # is doing right now: say it as progress, so the work is explained while it happens.
+            # Low priority: it never cuts or delays an approval or a result, and a newer line replaces it.
+            between = "\n".join(b.text for b in response.content if b.type == "text").strip()
+            if between:
+                await say(emit, task.task_id, between, "progress")
+
             # The model may ask for several tools at once; run them one at a time, in order,
             # so there is never more than one approval open (design A7).
             results: list[dict] = []

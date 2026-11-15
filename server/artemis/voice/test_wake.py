@@ -703,3 +703,43 @@ def test_backlog_captured_while_artemis_spoke_is_not_heard_when_it_is_processed_
     t.join(2)
     assert voice.transcripts == ["Hey Artemis, run main.py"]  # never transcribed
     assert listener.wake.stats.utterances == 0
+
+
+# ----- the reply to a question needs no wake phrase -----
+
+
+def test_after_a_question_the_reply_needs_no_wake_phrase():
+    talking = {"now": False}
+    loop = WakeLoop(Script("Call it notes."), speaking=lambda: talking["now"])
+    feed(loop, quiet(1))
+    loop.expect_reply()
+    talking["now"] = True  # Artemis says the question: nothing opens while it talks
+    assert feed(loop, quiet(2)) == [] and not loop.armed
+    talking["now"] = False
+    events = feed(loop, quiet(1) + utterance())
+    assert [(e.kind, e.text) for e in events] == [("reply", ""), ("request", "Call it notes.")]
+    assert loop.armed is False  # one reply: the next request needs the phrase again
+
+
+def test_the_reply_window_closes_when_nobody_answers():
+    loop = WakeLoop(Script("so anyway about lunch"), reply_window_s=2.0, reply_wait_s=0.5)
+    loop.expect_reply()  # the question was never heard spoken (no voice): it opens after reply_wait_s
+    events = feed(loop, quiet(3) + utterance())
+    assert [e.kind for e in events] == ["reply", "timeout", "ignored"]
+
+
+def test_the_reply_window_plays_the_listening_tone():
+    played = []
+
+    class Voice:
+        def _earcon(self, name):
+            played.append(name)
+
+    listener = WakeListener(Voice(), lambda text: None, stream_factory=lambda cb: None,
+                            loop_factory=lambda *a, **k: WakeLoop(Script(), reply_wait_s=0.2))
+    listener.expect_reply()
+    for frame in quiet(1):
+        event = listener.wake.feed(frame)
+        if event is not None:
+            listener._handle(event)
+    assert played == ["listening"] and listener.armed

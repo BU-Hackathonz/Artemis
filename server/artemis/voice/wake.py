@@ -261,7 +261,7 @@ def denoise(audio: np.ndarray, noise: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class Event:
-    kind: str  # "wake", "request", "ignored", "suppressed", "timeout", "misheard" (a quick wake taken back)
+    kind: str  # "wake", "request", "ignored", "suppressed", "timeout", "misheard" (a quick wake taken back), "reply" (listening for the answer to a question)
     text: str = ""
     seconds: float = 0.0  # length of the utterance
     quiet_s: float = 0.0  # quiet after the last word before it was decided (the end silence)
@@ -302,6 +302,9 @@ class WakeLoop:
     - Anything else is `ignored`: its text is not kept (only the word count), because it is
       other people's conversation.
     - While `speaking()` is true, audio is dropped unheard, so Artemis can't wake itself.
+    - `expect_reply()` (Artemis just asked the user a question) opens the same window with no wake
+      phrase, as `reply`, once Artemis has finished saying the question (or after `reply_wait_s` if it
+      was never heard speaking), for `reply_window_s`.
     """
 
     def __init__(
@@ -317,6 +320,8 @@ class WakeLoop:
         wake_silence_s: float | None = 0.4,  # quiet that is enough to hear a bare "Hey Artemis"; None: wait for the end
         quick: Callable[[np.ndarray], str | None] | None = None,  # fast, rougher, for the early look; None: not ready
         quick_max_s: float = 1.5,  # more voice than this before the pause is not a bare "Hey Artemis" (about 0.9 s)
+        reply_window_s: float = 10.0,  # after a question: how long the reply needs no wake phrase
+        reply_wait_s: float = 3.0,  # after a question: arm this soon if Artemis is never heard saying it
     ) -> None:
         self.transcribe = transcribe
         self.quick = quick
@@ -336,10 +341,20 @@ class WakeLoop:
         self._early: tuple[int, int, str, float] | None = None  # (utterance, voiced frames, transcript, seconds)
         self._looked = 0  # the utterance last given an early look: one per utterance, at its first pause
         self._retry: tuple[int, int] = (0, 0)  # (utterance, voiced frames) of a look that heard only "Hey": look again
+        self.reply_frames = round(reply_window_s * RATE / FRAME)
+        self.reply_wait_frames = round(reply_wait_s * RATE / FRAME)
+        self._reply_heard = False  # Artemis was heard speaking since expect_reply()
+        self._reply_wait = 0  # frames left to wait for the question to be said; 0: no reply expected
 
     @property
     def armed(self) -> bool:
         return self._armed > 0
+
+    def expect_reply(self) -> None:
+        """Artemis asked the user something: their answer needs no "Hey Artemis". Safe to call from
+        another thread (the event loop): the worker picks it up on its next frame."""
+        self._reply_heard = False
+        self._reply_wait = self.reply_wait_frames
 
     def feed(self, frame: np.ndarray) -> Event | None:
         if self._confirm is not None:
@@ -356,6 +371,8 @@ class WakeLoop:
         talking = self.speaking()
         if talking:
             self._tail = self.tail_frames
+            if self._reply_wait:
+                self._reply_heard = True
         if talking or self._tail > 0:
             if not talking:
                 self._tail -= 1
@@ -363,6 +380,13 @@ class WakeLoop:
             self._early = None
             self.stats.suppressed += 1
             return None
+
+        if self._reply_wait:
+            if self._reply_heard or self._reply_wait == 1:  # the question was said (or never will be)
+                self._reply_wait = 0
+                self._armed = max(self._armed, self.reply_frames)
+                return self._emit(Event("reply"))
+            self._reply_wait -= 1
 
         was_armed = self.armed
         if self._armed and not self.segmenter.in_speech:
@@ -541,6 +565,10 @@ class WakeListener:
     def armed(self) -> bool:
         return self.wake.armed
 
+    def expect_reply(self) -> None:
+        """Artemis asked a question: listen for the answer without the wake phrase (see WakeLoop)."""
+        self.wake.expect_reply()
+
     def _muted(self) -> bool:
         """Drop the microphone's audio: Artemis is talking, or push-to-talk owns the mic."""
         voice = self.voice
@@ -631,7 +659,7 @@ class WakeListener:
         if event.kind in ("wake", "request"):  # numbers only: how long after the last word it was decided (warning: core.log keeps warning+)
             log.warning("Wake word: %s %.2f s after the last word (%.1f s quiet + %.2f s Whisper)", event.kind,
                      event.quiet_s + event.whisper_s, event.quiet_s, event.whisper_s)
-        if event.kind == "wake":
+        if event.kind in ("wake", "reply"):
             self._earcon("listening")
         elif event.kind == "request":
             self._earcon("stopped")

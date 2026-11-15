@@ -50,6 +50,7 @@ def test_happy_path_event_order(tmp_path):
     assert [(c["step"], c["action"], c["target"]) for c in cues] == [
         (None, "think", None), (None, "think", "editor"), (0, "write", "editor"), (1, "run", "terminal")]
     assert log.spoken() == [
+        "I'll write main.py. Then I'll run it.",  # the plan, step by step (§10)
         "Starting project hello-world.",
         "Create project hello-world with 1 file: main.py, 1 line. Not scanned: the security scanner isn't installed. Enter to approve, Escape to reject.",
         "Created main.py, 1 line.",
