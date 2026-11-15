@@ -29,6 +29,8 @@ from artemis.contracts import (
     TaskStateData,
     TranscriptData,
     TurnSummary,
+    plan_draft,
+    ring_cue_draft,
 )
 from artemis.conversation import Controller
 from artemis.conversation.controller import NVDA_RATE_LINE
@@ -132,6 +134,7 @@ class Task:
         self.job: asyncio.Task | None = None
         self.heartbeat: asyncio.Task | None = None
         self.cancel_reported = False  # the job already said what its cancel stopped
+        self.done_cued = False  # ring.cue done was sent (once, after the final task.state)
 
     @property
     def active(self) -> bool:
@@ -223,11 +226,27 @@ class Session:
         await self.bus.emit(draft)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
+            await self._cue_done(self.tasks[draft.task_id])
         if self.conversation:
             try:
                 self.conversation.observe(draft)
             except Exception:  # a controller bug must never break the event stream
                 log.exception("conversation controller failed to observe %s", draft.type)
+
+    async def _cue_done(self, task: Task) -> None:
+        """A task reached a final state: tell the ring, once (contracts.md section 10)."""
+        if task.active or task.done_cued:
+            return
+        task.done_cued = True
+        await self.ring_cue(task.task_id, "done")
+
+    async def plan(self, task_id: str, goal: str, steps: list) -> None:
+        """Emit agent.plan (silent). The gate can do the same with its emit and contracts.plan_draft."""
+        await self.emit(plan_draft(task_id, goal, steps))
+
+    async def ring_cue(self, task_id: str, action: str, step: int | None = None, target: str | None = None) -> None:
+        """Emit ring.cue (silent). The gate can do the same with its emit and contracts.ring_cue_draft."""
+        await self.emit(ring_cue_draft(task_id, action, step, target))
 
     @property
     def active_task(self) -> Task | None:
