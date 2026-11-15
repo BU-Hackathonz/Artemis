@@ -33,6 +33,10 @@ class EventBus:
     def last_seq(self) -> int:
         return self._seq
 
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._subscribers)
+
     async def emit(self, draft: EventDraft) -> Event:
         self._seq += 1
         event = Event(
@@ -62,9 +66,17 @@ class EventBus:
         try:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
             with self._log_path.open("a", encoding="utf-8") as f:
-                f.write(event.model_dump_json() + "\n")
+                f.write(self._log_line(event) + "\n")
         except OSError:
             log.exception("event log write failed")
+
+    @staticmethod
+    def _log_line(event: Event) -> str:
+        """The JSONL line. Typed text never goes to disk: SSE carries it, the log only its length."""
+        if event.type == "desktop.action":
+            data = {**event.data, "text": f"<redacted {len(str(event.data.get('text', '')))} chars>"}
+            event = event.model_copy(update={"data": data})
+        return event.model_dump_json()
 
     def since(self, seq: int) -> list[Event]:
         return [e for e in self.history if e.seq > seq]

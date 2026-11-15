@@ -37,6 +37,7 @@ from artemis.policy.gateway import ToolGateway
 
 from .approvals import SessionApprovals
 from .bus import EventBus
+from .desktop import DesktopOps
 
 log = logging.getLogger(__name__)
 
@@ -167,6 +168,10 @@ class Session:
             log_path=(log_dir / f"{session_id}.jsonl") if log_dir else None,
         )
         self.approvals = SessionApprovals()
+        self.desktop_ready = False  # set by /ready when the island can type (contracts.md §9)
+        self.desktop = DesktopOps(
+            self.emit, ready=lambda: self.desktop_ready, subscribers=lambda: self.bus.subscriber_count
+        )
         self.gateway = ToolGateway(runner, self.approvals, self.emit, projects_dir=projects_dir, scan=scan)
         self.agent = agent
         self.tasks: dict[str, Task] = {}
@@ -356,6 +361,7 @@ class Session:
         if not task or not task.active or not task.job:
             return False
         task.job.cancel()
+        self.desktop.cancel_all()
         try:
             await asyncio.wait_for(asyncio.shield(task.job), timeout=5)
         except (asyncio.CancelledError, asyncio.TimeoutError):

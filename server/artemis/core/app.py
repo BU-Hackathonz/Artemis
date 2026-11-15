@@ -23,6 +23,7 @@ from artemis.contracts import (
     ApprovalResponse,
     ClientDiagnostic,
     ClientReady,
+    DesktopResult,
     TaskRequest,
     VoiceSettingsPatch,
 )
@@ -169,6 +170,12 @@ class Core:
             if s.approvals.has(aid):
                 return s
         raise HTTPException(404, {"error": "approval_not_found"})
+
+    def find_desktop_op(self, op_id: str) -> Session:
+        for s in self.sessions.values():
+            if s.desktop.has(op_id):
+                return s
+        raise HTTPException(404, {"error": "desktop_op_not_found"})
 
     def current(self) -> Session | None:
         """Voice belongs to the newest session (one per app launch)."""
@@ -327,6 +334,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             if task and not task.done():
                 task.cancel()
         for s in core.sessions.values():
+            s.desktop.cancel_all()  # the session is over: nothing waits for the island
             for t in s.tasks.values():
                 if t.job and not t.job.done():
                     t.job.cancel()
@@ -454,6 +462,13 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             raise HTTPException(404, {"error": "approval_not_found"})
         return Response(status_code=204)
 
+    @app.post("/desktop/{op_id}/result", status_code=204)
+    async def desktop_result(op_id: str, body: DesktopResult):
+        session = core.find_desktop_op(op_id)
+        if not session.desktop.resolve(op_id, body):
+            raise HTTPException(404, {"error": "desktop_op_not_found"})
+        return Response(status_code=204)
+
     @app.post("/voice/listen", status_code=204)
     async def listen(body: ListenBody):
         session = core.current()
@@ -501,6 +516,7 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
         it registered, so the first thing a blind user hears is how to start. Fixed text, like the
         diagnostics; normal priority, so it never talks over an error."""
         session = core.session(sid)
+        session.desktop_ready = body.desktop
         if not session.greeted:
             session.greeted = True
             await session.say(None, ready_text(body.shortcut))
