@@ -17,7 +17,7 @@ Work from one PowerShell window in the repo root. Core log: `%LOCALAPPDATA%\Arte
 - [ ] `powershell -ExecutionPolicy Bypass -File infra\setup-demo.ps1 -Force` ends "Demo projects ready:
       calc, old-app, signup-page." **Smoke test:** launch, run demo 1, then do the reset below.
 - [ ] **Voice or typing:** hold Ctrl+Shift+Space and say demo 1's sentence. Use voice on stage only if the
-      "Heard:" line matches it word for word (row 3 failed on David's laptop earlier today); otherwise type.
+      "Working on:" line matches it word for word (row 3 failed on David's laptop earlier today); otherwise type.
 
 ## Launch
 ```powershell
@@ -52,7 +52,7 @@ tests (rows 6 to 10 of the pass/fail sheet are "not run"), so rehearse them with
    Not 0: type `Fix the rest.`
 
 ## When something fails
-- **No speech recognized** (no "Heard: ..." after release): type the request. Typing always works.
+- **No speech recognized** (no "Working on: ..." after release): type the request. Typing always works.
 - **Mic or recognition bad:** Tab to **Start listening**, press, speak, press **Stop listening**; or type.
   Mic gone for good: relaunch with `-Voice stub` added (no mic, typing only).
 - **API down** ("The task failed. No internet connection to Claude." or "Claude is still busy"): close

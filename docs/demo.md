@@ -41,7 +41,7 @@ the real agent isn't installed: run the uv sync from the setup checklist again.
 | Approval dialog | Escape | Reject. |
 | Blocked approval | Tab, then Shift+Enter | Override: on **Approve blocked action (Shift+Enter)**, only Shift+Enter approves. Enter and clicks do nothing there. |
 | Main window | Tab to the buttons | **Cancel task**, **Repeat last speech**, **Stop speech**. |
-| Anywhere | hold Ctrl+Shift+Space | Push-to-talk: rising earcon, speak, release, falling earcon, then "Heard: ...". Works without window focus. |
+| Anywhere | hold Ctrl+Shift+Space | Push-to-talk: rising earcon, speak, release, falling earcon, then "Working on: ...". Works without window focus. |
 | Main window | **Start listening**, then **Stop listening** | The same, as a toggle: press once to start, again to stop. Works with NVDA browse-mode clicks. |
 
 If another app already owns Ctrl+Shift+Space, Artemis says so once ("The push-to-talk shortcut Control
@@ -133,12 +133,11 @@ before/after comparison is kept in memory for the session.
   program that prints Hello World, and run it"; release):
   `Create a Python program that prints Hello World, and run it.`
 - **Hear:**
-  1. (voice only) "Heard: create a Python program that prints Hello World, and run it"
-     (the transcript as Whisper wrote it, wake word removed)
-  2. "Working on: Create a Python program that prints Hello World, and run it."
-     (typed; for a spoken request it repeats the transcript: "Working on: create a Python program …")
-  3. "Starting project hello-world."
-  4. "Create project hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject."
+  1. "Working on: Create a Python program that prints Hello World, and run it."
+     (typed; for a spoken request it is the transcript as Whisper wrote it, wake word removed:
+     "Working on: create a Python program …". There is no separate "Heard:" line)
+  2. "Starting project hello-world."
+  3. "Create project hello-world with 1 file: main.py, 1 line. No security findings. Enter to approve, Escape to reject."
      (the project name and line count are whatever Claude chose; if an earlier `hello-world` is still
      there, it is `hello-world-2`, `hello-world-3` and so on; "No security findings" only when the
      scan from #11 is present)
@@ -290,7 +289,7 @@ exact spoken lines or transcript text, not "it worked". Never paste keys or `.en
 | # | Check | How | Pass means | Owner | Status |
 |---|---|---|---|---|---|
 | 1 | Shortcut registers | Start Artemis. There must be no "couldn't be registered" announcement; read the Voice input section | NVDA reads "Global shortcut is registered." there (it is text, not spoken by the core). If it isn't registered, a manually applied alternative chord (for example `Control+Alt+Space`) registers | Yaovi | pass, Sat Nov 14, verified on Yaovi's and David's laptops (registration only; the NVDA line was not checked) |
-| 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Heard: ..." | Yaovi | not run |
+| 2 | Hold-to-talk | Hold the shortcut, say the demo 1 sentence (row 3), release | Rising and falling earcon, then "Working on: ..." | Yaovi | not run |
 | 3 | Known-sentence accuracy | Say "Artemis, create a Python program that prints Hello World, and run it" (same as demo 1) | `transcript.final` has the words of "create a Python program that prints Hello World, and run it" (the wake word is stripped; punctuation and capitals are ignored, Whisper never writes the comma before "and"), or the misses are posted. Try `ARTEMIS_WHISPER_PROMPT=natural` too (8/10 vs 5/10 on Yaovi's laptop) | Yaovi | not run on the demo laptop; David's laptop failed with the defaults |
 | 4 | Keyboard path to Start listening | NVDA on, Tab from the request field | Reaches **Start listening** past the enabled buttons (Repeat, Stop) and the activity log (Send and Cancel are disabled when idle) | Yaovi | not run |
 | 5 | Start listening toggle | Press, speak, press again | Same result as hold-to-talk | Yaovi | not run |
