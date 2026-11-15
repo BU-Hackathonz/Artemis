@@ -389,3 +389,115 @@ def test_voice_detector_on_the_real_model():
         pytest.skip("faster-whisper (voice group) is not installed")
     probs = [detector(f) for f in quiet(1) + noise(1)]
     assert max(probs) < 0.5  # hiss is not a voice
+
+
+# ----- reacting fast: the early look at a pause -----
+
+
+def test_a_bare_wake_phrase_arms_after_the_short_pause_not_the_full_end_silence():
+    loop = WakeLoop(Script("Hey Artemis."))
+    frames = quiet(1) + speech(0.8)
+    assert feed(loop, frames) == []
+    events = feed(loop, quiet(0.4))  # 0.4 s of quiet is enough for the wake phrase
+    assert [(e.kind, e.quiet_s) for e in events] == [("wake", 0.4)]
+    assert loop.armed
+
+
+def test_without_the_early_look_the_wake_waits_for_the_full_end_silence():
+    loop = WakeLoop(Script("Hey Artemis."), wake_silence_s=None)
+    assert feed(loop, quiet(1) + speech(0.8) + quiet(0.4)) == []
+    assert [e.kind for e in feed(loop, quiet(0.4))] == ["wake"]
+
+
+def test_a_request_still_gets_the_full_end_silence_after_arming():
+    loop = WakeLoop(Script("Hey Artemis.", "Build a to-do app."))
+    feed(loop, quiet(1) + speech(0.8) + quiet(0.4))
+    # a 0.5 s pause in the middle of the request does not end it
+    events = feed(loop, speech(1) + quiet(0.5) + speech(1) + quiet(0.7))
+    assert events == []
+    assert [(e.kind, e.text) for e in feed(loop, quiet(0.2))] == [("request", "Build a to-do app.")]
+
+
+def test_a_one_breath_request_is_transcribed_once_when_nothing_follows_the_pause():
+    script = Script("Hey Artemis, run main.py")
+    loop = WakeLoop(script)
+    events = feed(loop, quiet(1) + utterance())
+    assert [(e.kind, e.text) for e in events] == [("request", "run main.py")]
+    assert script.heard == 1  # the early transcript was the final one
+
+
+def test_speech_after_the_early_look_is_transcribed_again_in_full():
+    script = Script("Hey Artemis, open the", "Hey Artemis, open the readme")
+    loop = WakeLoop(script)
+    events = feed(loop, quiet(1) + speech(1.5) + quiet(0.5) + speech(0.6) + quiet(1.2))
+    assert [(e.kind, e.text) for e in events] == [("request", "open the readme")]
+    assert script.heard == 2
+
+
+def test_only_one_early_look_per_utterance():
+    script = Script("I think the", "I think the judges are coming over now")
+    loop = WakeLoop(script)
+    frames = quiet(1) + speech(1) + quiet(0.5) + speech(1) + quiet(0.5) + speech(1) + quiet(1.2)
+    assert [e.kind for e in feed(loop, frames)] == ["ignored"]
+    assert script.heard == 2  # the first pause and the end, not every pause
+
+
+def test_the_quick_model_arms_first_and_the_full_model_confirms():
+    quick, full = Script("Hey Artemis."), Script("Hey Artemis!", "Build a to-do app.")
+    loop = WakeLoop(full, quick=quick)
+    events = feed(loop, quiet(1) + speech(0.8) + quiet(0.4))
+    assert [e.kind for e in events] == ["wake"] and full.heard == 0  # armed on the quick model alone
+    events = feed(loop, utterance())
+    assert [(e.kind, e.text) for e in events] == [("request", "Build a to-do app.")]
+    assert (quick.heard, full.heard, loop.stats.misheard) == (1, 2, 0)
+
+
+def test_a_quick_wake_the_full_model_does_not_hear_is_taken_back():
+    quick, full = Script("Hey Artemis.", "so anyway"), Script("Hey Arthur.", "so anyway about lunch")
+    loop = WakeLoop(full, quick=quick)
+    feed(loop, quiet(1) + speech(0.8) + quiet(0.4))
+    events = feed(loop, quiet(0.1))
+    assert [e.kind for e in events] == ["misheard"] and not loop.armed
+    assert [e.kind for e in feed(loop, utterance())] == ["ignored"]  # never a request
+    assert (loop.stats.wakes, loop.stats.requests, loop.stats.misheard) == (0, 0, 1)
+
+
+def test_the_quick_model_is_not_asked_about_long_speech():
+    quick, full = Script(), Script("Hey Artemis, check my codebase for security vulnerabilities.")
+    loop = WakeLoop(full, quick=quick)
+    events = feed(loop, quiet(1) + utterance(2.5))
+    assert [e.kind for e in events] == ["request"] and quick.heard == 0
+
+
+def test_speech_without_the_phrase_to_the_quick_model_waits_for_the_end():
+    quick, full = Script("so anyway"), Script("so anyway about lunch")
+    loop = WakeLoop(full, quick=quick)
+    feed(loop, quiet(1) + speech(1) + quiet(0.4))
+    assert full.heard == 0  # no full transcription at the pause
+    assert [e.kind for e in feed(loop, quiet(0.8))] == ["ignored"] and full.heard == 1
+
+
+def test_the_early_look_never_hears_artemis_speaking():
+    talking = {"now": True}
+    quick, full = Script(), Script()
+    loop = WakeLoop(full, quick=quick, speaking=lambda: talking["now"])
+    assert feed(loop, quiet(0.5) + speech(0.8) + quiet(1)) == []
+    assert quick.heard == full.heard == 0
+
+
+def test_a_misheard_wake_plays_the_stopped_earcon(monkeypatch):
+    voice = FakeVoice([])
+    listener = WakeListener(voice, lambda text: None, stream_factory=FakeStream)
+    from artemis.voice.wake import Event
+    listener._handle(Event("misheard"))
+    assert voice.earcons == ["stopped"]
+
+
+def test_quick_model_setting(monkeypatch):
+    from artemis.voice.wake import quick_model
+    monkeypatch.delenv("ARTEMIS_WAKE_QUICK_MODEL", raising=False)
+    assert quick_model() == "tiny.en"
+    monkeypatch.setenv("ARTEMIS_WAKE_QUICK_MODEL", "off")
+    assert quick_model() is None
+    monkeypatch.setenv("ARTEMIS_WAKE_QUICK_MODEL", "base.en")
+    assert quick_model() == "base.en"
