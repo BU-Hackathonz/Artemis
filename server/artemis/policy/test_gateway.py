@@ -206,6 +206,28 @@ def test_read_and_run_paths_are_checked_too(tmp_path):
     assert w.runner.runs == [] and len(w.approvals.requests) == 1  # only the hello write
 
 
+def test_a_link_to_a_protected_file_is_not_read(tmp_path):
+    # Issue #158 (Jun's repro): an innocently named link must not return .env or .git contents.
+    async def go():
+        w = World(tmp_path)
+        root = await w.hello()
+        (root / ".env.local").write_text("SYNTHETIC_FIXTURE")
+        (root / ".git").mkdir()
+        (root / ".git" / "config").write_text("SYNTHETIC_FIXTURE")
+        try:
+            os.symlink(root / ".env.local", root / "public.txt")
+            os.symlink(root / ".git", root / "docs", target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks need Developer Mode on Windows")
+        return (await w.call("read_file", path="public.txt"), await w.call("read_file", path="docs/config"),
+                await w.call("list_files"))
+
+    file_link, dir_link, listed = asyncio.run(go())
+    assert [r.error for r in (file_link, dir_link)] == ["path_rejected"] * 2
+    assert "SYNTHETIC_FIXTURE" not in repr(listed.data)
+    assert ".env.local" not in repr(listed.data) and "public.txt" not in repr(listed.data)
+
+
 def test_one_bad_path_rejects_the_whole_batch(tmp_path):
     async def go():
         w = World(tmp_path)

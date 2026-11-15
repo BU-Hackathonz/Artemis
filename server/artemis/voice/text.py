@@ -1,6 +1,9 @@
 """Pure text helpers for voice input. No audio, no Windows calls."""
 
+import logging
 import re
+
+log = logging.getLogger(__name__)
 
 # "Artemis, ...", "hey Artemis. ..." -> "..."; push-to-talk means no wake-word engine.
 # Whisper often hears "Artemis" as a near miss (Artemus, Arthemis, Artimis...), so the middle accepts those,
@@ -13,7 +16,37 @@ _WAKE = re.compile(r"^\s*(?:(?:hey|ok|okay)[\s,.]+)?ar[td]h?[aei]m(?:[iu]s+)?\b(
 PROMPT_MAX_CHARS = 600
 
 # Always first in the Whisper prompt, so the wake word and common demo words are primed even before a project opens.
-PROMPT_LEAD = ["Hey Artemis", "Artemis", "Python", "main.py"]
+# The coding words after main.py are for the demo request ("create a Python program that prints Hello World"),
+# which Whisper heard as "princehello" and "brings the low world". A list, not a sentence, so there is none to copy.
+PROMPT_LEAD = ["Hey Artemis", "Artemis", "Python", "main.py", "print", "prints", "Hello World", "function",
+               "variable", "program", "run", "file", "create"]
+
+# Known Whisper mishearings, fixed in the final transcript: (heard, meant). Whole words or phrases only, any case;
+# the words of a phrase may be split by spaces, commas or hyphens. Add a row for each new mishearing seen on hardware.
+CORRECTIONS = [
+    ("princehelloworld", "prints hello world"),
+    ("princehello", "prints hello"),
+    ("prince hello", "prints hello"),
+    ("brings the low world", "prints hello world"),
+    ("hollow world", "hello world"),
+    ("hallow world", "hello world"),
+    ("hallo world", "hello world"),
+    ("hullo world", "hello world"),
+    ("pie thon", "python"),
+    ("pi thon", "python"),
+]
+
+
+def _phrase(heard: str) -> re.Pattern:
+    words = [re.escape(w) for w in heard.split()]
+    return re.compile(r"(?<!\w)" + r"[\s,-]+".join(words) + r"(?!\w)", re.IGNORECASE)
+
+
+_CORRECTIONS = [(_phrase(heard), meant) for heard, meant in CORRECTIONS]
+
+# Opt-in (ARTEMIS_WHISPER_HOTWORDS=on): the same fixed lead, also passed as faster-whisper's hotwords. Project words
+# stay out, so the two together never crowd Whisper's prompt window.
+HOTWORDS = ", ".join(PROMPT_LEAD)
 
 # Opt-in (ARTEMIS_WHISPER_PROMPT=natural; for the stage only once demo.md row 3 passes with it on the demo laptop).
 # Whisper reads the prompt as the text just before the audio, so this lead is written like a spoken command rather
@@ -42,6 +75,27 @@ class Heard(str):
 def strip_wake_word(text: str) -> str:
     """Remove a leading "Artemis" (and "hey") from a transcript."""
     return _WAKE.sub("", text, count=1).strip()
+
+
+def correct_transcript(text: str) -> str:
+    """Fix the known mishearings in CORRECTIONS ("Princehello world" -> "Prints hello world"); nothing else changes.
+
+    A capital first letter is kept. Logs how many fixes were made, never the words.
+    """
+    fixed = 0
+
+    def swap(meant: str):
+        def repl(m: re.Match) -> str:
+            nonlocal fixed
+            fixed += 1
+            return meant[:1].upper() + meant[1:] if m.group(0)[:1].isupper() else meant
+        return repl
+
+    for pattern, meant in _CORRECTIONS:
+        text = pattern.sub(swap(meant), text)
+    if fixed:
+        log.warning("Transcript: fixed %d known mishearing(s)", fixed)  # warning so core.log shows it
+    return text
 
 
 def vocabulary_prompt(words: list[str], max_chars: int = PROMPT_MAX_CHARS, natural: bool = False) -> str:

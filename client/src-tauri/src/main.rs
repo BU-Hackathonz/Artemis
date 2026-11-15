@@ -34,13 +34,27 @@ impl CoreConfig {
         })
     }
 
-    fn from_env() -> Result<Self, String> {
-        // Read exactly once at process start. Never log or derive Debug for these values.
-        Self::from_values(
-            std::env::var("ARTEMIS_CORE_URL").ok(),
-            std::env::var("ARTEMIS_TOKEN").ok(),
-        )
+}
+
+// Launch-only variables. ARTEMIS_* are consumed here; the ANTHROPIC_* names are removed
+// defensively in case a parent process ever passes them, so no WebView child process inherits them.
+const LAUNCH_ENV_VARS: [&str; 4] = [
+    "ARTEMIS_CORE_URL",
+    "ARTEMIS_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_WORKSPACE_ID",
+];
+
+// Reads the launch values once and removes every launch-only variable from the process
+// environment. Must run in main() before tauri::Builder creates any WebView.
+// Never log the returned values.
+fn take_launch_env() -> (Option<String>, Option<String>) {
+    let address = std::env::var("ARTEMIS_CORE_URL").ok();
+    let token = std::env::var("ARTEMIS_TOKEN").ok();
+    for name in LAUNCH_ENV_VARS {
+        std::env::remove_var(name);
     }
+    (address, token)
 }
 
 struct LaunchState(Result<CoreConfig, String>);
@@ -51,7 +65,8 @@ fn get_core_config(state: tauri::State<'_, LaunchState>) -> Result<CoreConfig, S
 }
 
 fn main() {
-    let state = LaunchState(CoreConfig::from_env());
+    let (address, token) = take_launch_env();
+    let state = LaunchState(CoreConfig::from_values(address, token));
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(state)
@@ -90,6 +105,21 @@ mod tests {
                 Some(token.into())
             )
             .is_err());
+        }
+    }
+
+    #[test]
+    fn take_launch_env_returns_values_and_clears_launch_variables() {
+        std::env::set_var("ARTEMIS_CORE_URL", "http://127.0.0.1:8123");
+        std::env::set_var("ARTEMIS_TOKEN", "test-only_token");
+        std::env::set_var("ANTHROPIC_API_KEY", "test-only-key");
+        std::env::set_var("ANTHROPIC_WORKSPACE_ID", "test-only-workspace");
+
+        let (address, token) = take_launch_env();
+        assert_eq!(address.as_deref(), Some("http://127.0.0.1:8123"));
+        assert_eq!(token.as_deref(), Some("test-only_token"));
+        for name in LAUNCH_ENV_VARS {
+            assert!(std::env::var(name).is_err(), "{name} still in environment");
         }
     }
 

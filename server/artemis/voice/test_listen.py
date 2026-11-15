@@ -7,10 +7,15 @@ import pytest
 np = pytest.importorskip("numpy")  # skip, don't fail collection, without the voice group
 
 from artemis.voice.listen import MAX_SECONDS, RATE, VoiceError, WhisperVoice  # noqa: E402
-from artemis.voice.text import NATURAL_LEAD
+from artemis.voice.text import CORRECTIONS, HOTWORDS, NATURAL_LEAD, correct_transcript
 
-LIST_PROMPT = "Hey Artemis, Artemis, Python, main.py"  # main's #98 prompt, still the default
-SETTINGS = ("ARTEMIS_WHISPER_MODEL", "ARTEMIS_WHISPER_BEAM", "ARTEMIS_PTT_POST_ROLL", "ARTEMIS_WHISPER_PROMPT")
+# main's #98 prompt plus the demo's coding words, still a word list (the default)
+LIST_PROMPT = ("Hey Artemis, Artemis, Python, main.py, print, prints, Hello World, function, variable, program, run, "
+               "file, create")
+DEMO_WORDS = ["Python", "print", "prints", "Hello World", "main.py", "function", "variable", "program", "run", "file",
+              "create"]
+SETTINGS = ("ARTEMIS_WHISPER_MODEL", "ARTEMIS_WHISPER_BEAM", "ARTEMIS_PTT_POST_ROLL", "ARTEMIS_WHISPER_PROMPT",
+            "ARTEMIS_WHISPER_HOTWORDS")
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +101,7 @@ def test_defaults_are_mains_speech_settings():
     assert asyncio.run(v.stop_listening("cr_1")) == "create a Python program"
     n, kw = model.calls[0]
     assert n == RATE and kw["beam_size"] == 1 and kw["initial_prompt"] == LIST_PROMPT
+    assert "hotwords" not in kw  # opt-in
     assert log == ["stop_speech", "listening", "mic_open", "stopped"]
     assert closed_at_earcon == [None, False]  # as on main: "stopped" plays, then the mic closes at once
     v.set_vocabulary(["LoginForm"])
@@ -225,6 +231,101 @@ def test_natural_prompt_is_opt_in(monkeypatch):
     asyncio.run(v.start_listening())
     asyncio.run(v.stop_listening("cr_1"))
     assert model.calls[0][1]["initial_prompt"] == NATURAL_LEAD + " LoginForm."
+
+
+def test_word_list_prompt_and_hotwords_carry_the_demo_vocabulary():
+    words = [w.strip() for w in LIST_PROMPT.split(",")]
+    assert all(w in words for w in DEMO_WORDS)
+    assert [w.strip() for w in HOTWORDS.split(",")] == words  # the same fixed list, without project words
+
+
+def test_hotwords_are_opt_in_and_only_for_a_model_that_takes_them(monkeypatch):
+    for raw in ("", "off", "1", "yes"):
+        monkeypatch.setenv("ARTEMIS_WHISPER_HOTWORDS", raw)
+        assert make(1)[0].hotwords is False, raw
+    monkeypatch.setenv("ARTEMIS_WHISPER_HOTWORDS", "on")
+    v, model, _ = make(1)
+    v.set_vocabulary(["LoginForm"])
+    asyncio.run(v.start_listening())
+    asyncio.run(v.stop_listening("cr_1"))
+    kw = model.calls[0][1]
+    assert kw["hotwords"] == HOTWORDS and "LoginForm" not in kw["hotwords"]
+    assert kw["initial_prompt"] == LIST_PROMPT + ", LoginForm"  # the prompt is unchanged
+
+    class OldModel:  # faster-whisper before 1.0: no hotwords parameter
+        def __init__(self):
+            self.calls = []
+
+        def transcribe(self, audio, language=None, beam_size=5, vad_filter=False, initial_prompt=None):
+            self.calls.append((language, beam_size, vad_filter, initial_prompt))
+            return iter([Seg(" create a Python program")]), None
+
+    v, _, _ = make(1)
+    v._model = old = OldModel()
+    asyncio.run(v.start_listening())
+    assert asyncio.run(v.stop_listening("cr_2")) == "create a Python program"  # no TypeError: the old call
+    assert old.calls == [("en", 1, True, LIST_PROMPT)]
+
+
+def test_the_locked_faster_whisper_takes_hotwords():
+    fw = pytest.importorskip("faster_whisper")
+    from artemis.voice.listen import takes_hotwords
+
+    assert takes_hotwords(fw.WhisperModel.__new__(fw.WhisperModel))
+
+
+@pytest.mark.parametrize("heard, meant", [
+    ("create a Python program that princehello world", "create a Python program that prints hello world"),
+    ("create a Python program that prince hello world", "create a Python program that prints hello world"),
+    ("create a Python program that Prince, hello world.", "create a Python program that Prints hello world."),  # case kept
+    ("Create a python program that princehelloworld", "Create a python program that prints hello world"),
+    ("create a Python program that brings the low world", "create a Python program that prints hello world"),
+    ("create a Python program that prints hollow world", "create a Python program that prints hello world"),
+    ("prints Hallo World", "prints Hello world"),
+    ("prints hullo-world", "prints hello world"),
+    ("Hollow world.", "Hello world."),
+    ("create a pie thon program", "create a python program"),
+    ("create a Pi-thon program", "create a Python program"),
+])
+def test_known_mishearings_are_fixed(heard, meant):
+    assert correct_transcript(heard) == meant
+
+
+def test_every_correction_row_applies():
+    for heard, meant in CORRECTIONS:
+        assert correct_transcript(f"say {heard} now") == f"say {meant} now", heard
+        assert correct_transcript(heard.upper()) == meant[:1].upper() + meant[1:], heard
+
+
+@pytest.mark.parametrize("text", [
+    "create a Python program that prints Hello World",
+    "run main.py",
+    "the prince said hello",  # "prince" alone, not before "hello"
+    "a hollow log in the world",
+    "pie chart for the thon",
+    "",
+])
+def test_unrelated_text_is_unchanged(text, caplog):
+    with caplog.at_level("INFO"):
+        assert correct_transcript(text) == text
+    assert "mishearing" not in caplog.text
+
+
+@pytest.mark.parametrize("text", [
+    "princehellos", "xprincehello", "prince helloworld", "prince hellos", "hollow worlds", "shallow world",
+    "hallowed world", "pie thong", "pi thonic", "brings the low worldly", "apie thon", "princehello_x",
+])
+def test_corrections_never_apply_inside_other_words(text):
+    assert correct_transcript(text) == text
+
+
+def test_transcripts_are_corrected_and_only_the_count_is_logged(caplog):
+    v, _, _ = make(1, text="Artemis,| create a Python program that princehello world")
+    asyncio.run(v.start_listening())
+    with caplog.at_level("INFO"):
+        assert asyncio.run(v.stop_listening("cr_1")) == "create a Python program that prints hello world"
+    assert "fixed 1 known mishearing" in caplog.text
+    assert "prince" not in caplog.text.lower() and "hello" not in caplog.text.lower()
 
 
 def test_dropped_segments_are_logged_without_their_words(caplog):
@@ -681,3 +782,30 @@ async def test_wake_mode_room_silence_says_nothing(tmp_path, monkeypatch):
         history = core.sessions[sid].bus.history
         assert model.calls == []
         assert not [e for e in history if e.type in ("error", "transcript.final")]
+
+
+class SpeakingAnnouncer(FakeAnnouncer):
+    async def announce(self, text, priority):
+        self.log.append(("say", text, priority))
+
+
+def test_low_lines_are_not_spoken_while_push_to_talk_has_the_mic():
+    # "Still working." during a long run must not be recorded into "cancel" (a whole-utterance control word).
+    log = []
+    v, _, _ = make(1, log=log)
+    v.announcer = SpeakingAnnouncer(log)
+
+    async def run():
+        await v.announce("Still working.", "low")  # idle: spoken
+        v._wanted = True  # pressed: the listening earcon and the mic are next
+        await v.announce("Still working.", "low")  # not spoken
+        await v.announce("Created main.py, 1 line.", "normal")  # normal lines are unchanged
+        v._wanted = False
+        v.transcribing = True
+        await v.announce("Still working.", "low")  # not spoken while Whisper runs
+        v.transcribing = False
+        await v.announce("Still working.", "low")  # spoken again
+
+    asyncio.run(run())
+    said = [e for e in log if isinstance(e, tuple)]
+    assert said == [("say", "Still working.", "low"), ("say", "Created main.py, 1 line.", "normal"), ("say", "Still working.", "low")]

@@ -41,6 +41,20 @@ def is_reserved_name(component: str) -> bool:
     return component.split(".")[0].rstrip(" ").upper() in _RESERVED
 
 
+def is_protected_name(component: str) -> bool:
+    """.git and .env* are never read, written or listed, whatever case they are in."""
+    lowered = component.lower()
+    return lowered == ".git" or lowered.startswith(".env")
+
+
+def _check_protected(part: str) -> None:
+    lowered = part.lower()
+    if lowered == ".git":
+        raise PathRejected("The .git folder is off limits.")
+    if lowered.startswith(".env"):
+        raise PathRejected(".env files are off limits because they hold secrets.")
+
+
 def safe_resolve(root: Path, rel: str, *, for_write: bool = False) -> Path:
     """Return the absolute path for `rel` under `root`, or raise PathRejected."""
     if not rel or not rel.strip():
@@ -69,11 +83,7 @@ def safe_resolve(root: Path, rel: str, *, for_write: bool = False) -> Path:
             raise PathRejected(f"{rel} has a name that ends with a dot or a space.")
         if is_reserved_name(part):
             raise PathRejected(f"{part} is a reserved Windows device name.")
-        lowered = part.lower()
-        if lowered == ".git":
-            raise PathRejected("The .git folder is off limits.")
-        if lowered.startswith(".env"):
-            raise PathRejected(".env files are off limits because they hold secrets.")
+        _check_protected(part)
 
     root_resolved = root.resolve()
     resolved = Path(root_resolved, rel).resolve(strict=False)
@@ -83,6 +93,10 @@ def safe_resolve(root: Path, rel: str, *, for_write: bool = False) -> Path:
     prefix = os.path.normcase(str(root_resolved)).rstrip("\\/") + os.sep
     if not os.path.normcase(str(resolved)).startswith(prefix):
         raise PathRejected(f"{rel} is outside the project folder.")
+    # A link inside the project (public.txt -> .env.local, docs -> .git) must not reach a protected
+    # file under another name: check the names of where the path really lands too (issue #158).
+    for part in resolved.relative_to(root_resolved).parts:
+        _check_protected(part)
 
     if for_write and resolved.suffix.lower() not in WRITE_EXTENSIONS:
         kind = resolved.suffix or "no extension"
@@ -113,7 +127,7 @@ def project_files(root: Path, top: Path | None = None) -> list[str]:
 
     Links and junctions are never followed, and anything that resolves outside the project
     is left out, so a link inside the project can't expose files elsewhere. Skips SKIP_DIRS
-    and .env files.
+    and .env files, also when a link points at them.
     """
     base = root.resolve()
     prefix = os.path.normcase(str(base)).rstrip("\\/") + os.sep
@@ -126,6 +140,11 @@ def project_files(root: Path, top: Path | None = None) -> list[str]:
             if file.lower().startswith(".env"):
                 continue
             resolved = Path(folder, file).resolve()
-            if os.path.normcase(str(resolved)).startswith(prefix):
-                names.append(resolved.relative_to(base).as_posix())
+            if not os.path.normcase(str(resolved)).startswith(prefix):
+                continue
+            inside = resolved.relative_to(base)
+            # A file link to .env.local or into .git is left out like the file itself (issue #158).
+            if any(is_protected_name(part) for part in inside.parts):
+                continue
+            names.append(inside.as_posix())
     return names
