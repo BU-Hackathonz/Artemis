@@ -1,11 +1,11 @@
 # Pitch script (presenter: Yaovi)
 
-About 4 minutes: 40 s of setup, 2:30 of live demo, 50 s on safety. The person at the laptop is the
-"developer"; Yaovi narrates **only while Artemis is silent**, never over it. Lines in quotes after
+About 4 minutes: 40 s of setup, 2:30 of live demo, 50 s on safety. David runs the demo at the laptop
+(the "developer"); Yaovi narrates **only while Artemis is silent**, never over it. Lines in quotes after
 "Artemis:" are the core's exact text; *(model)* lines are Claude's and vary. Setup and keys are in
 [demo.md](demo.md#the-closer-a-prototype-from-voice-alone-ubuntu-gnome-46).
 
-**Laptop before judges arrive:** `infra/start.sh --agent claude --conversation` with
+**David's laptop before judges arrive:** `infra/start.sh --agent claude --conversation` with
 `ARTEMIS_LISTEN_MODE=wake` and `ELEVENLABS_API_KEY` set. Say one throwaway request first. No
 `tip-calculator` project or repository yet. Volume up. Orca is off for the demo.
 
@@ -26,7 +26,7 @@ About 4 minutes: 40 s of setup, 2:30 of live demo, 50 s on safety. The person at
 
 ## 2. Live demo (0:40 to 3:10)
 
-| Developer says | Artemis | Yaovi, in the silence after |
+| David says | Artemis | Yaovi, in the silence after |
 |---|---|---|
 | "Hey Artemis, let's build a tip calculator web page. Bill, tip percent and number of people, and it shows what each person pays." | Tone; the notch shows listening, then thinking. Says the plan *(model)* | "Speech is recognised on this laptop. The audio never leaves it." |
 | (waits) | "Approval needed." then the summary: the project, `index.html`, `style.css`, `app.js` and the scan result | "That summary comes from the real files, not from the AI's description of them." |
@@ -42,7 +42,7 @@ About 4 minutes: 40 s of setup, 2:30 of live demo, 50 s on safety. The person at
 
 **If something fails, say it, don't hide it:**
 - "Hey Artemis" not heard: hold **Ctrl+Shift+Space** and say it. "Push-to-talk always works."
-- A long answer: the developer says "stop". "You can interrupt it by voice."
+- A long answer: David says "stop". "You can interrupt it by voice."
 - A wrong step: "Reject", then say what you want instead.
 - Claude down: "The AI service is unreachable, and Artemis says so instead of guessing." Show typing.
 
