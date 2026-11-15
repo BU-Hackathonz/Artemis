@@ -11,6 +11,14 @@ const DESKTOP_TITLES = {
   type: 'Type into a window',
 };
 
+// The desktop.action values each kind may carry (contracts §9). Any other pairing is unknown.
+const DESKTOP_ACTIONS = {
+  open: ['open_app', 'open_path'],
+  read_outside: ['read_path'],
+  run_command: ['run_command'],
+  type: ['type_text', 'press_keys'],
+};
+
 const isText = v => typeof v === 'string';
 
 // Returns {title, lines, known}. lines are plain strings; desktop.text and desktop.target are
@@ -42,6 +50,7 @@ export function describeApproval(approval) {
   const d = approval.desktop;
   if (!title || !d || typeof d !== 'object' || !isText(d.target)) return unknown;
   if (d.text != null && !isText(d.text)) return unknown;
+  if (!DESKTOP_ACTIONS[approval.kind].includes(d.action)) return unknown;
   const hasText = isText(d.text);
 
   switch (approval.kind) {
@@ -52,8 +61,11 @@ export function describeApproval(approval) {
     case 'run_command':
       if (!hasText) return unknown; // never approve a command we can't show
       return {title, known: true, lines: [`Command: ${d.text}`, `Folder: ${d.target}`]};
-    default: // 'type'
+    default: // 'type': typed text, or keys pressed in the window
       if (!hasText) return unknown;
+      if (d.action === 'press_keys') {
+        return {title: 'Press keys in a window', known: true, lines: [`Keys: ${d.text}`, `Into: ${d.target}`]};
+      }
       return {title, known: true, lines: [`Text: ${d.text}`, `Into: ${d.target}`]};
   }
 }

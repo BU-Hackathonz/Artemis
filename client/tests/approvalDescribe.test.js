@@ -47,6 +47,43 @@ describe('describeApproval, desktop kinds', () => {
   });
 });
 
+describe('describeApproval, the approvals the gate really sends (policy/desktop.py)', () => {
+  const SHA = 'a'.repeat(64);
+  it('open_app: the app id and its launcher file', () => {
+    expect(describeApproval(desktop('open', {action: 'open_app', target: 'org.gnome.TextEditor.desktop', sha256: SHA})))
+      .toEqual({title: 'Open', known: true, lines: ['Open: org.gnome.TextEditor.desktop']});
+  });
+  it('open_path with an app: the resolved path and the app id', () => {
+    expect(describeApproval(desktop('open', {action: 'open_path', target: '/home/u/notes.md', text: 'org.gnome.TextEditor.desktop', sha256: SHA})))
+      .toEqual({title: 'Open', known: true, lines: ['Open: /home/u/notes.md', 'With: org.gnome.TextEditor.desktop']});
+  });
+  it('open_path without an app: the path alone', () => {
+    expect(describeApproval(desktop('open', {action: 'open_path', target: '/home/u/Documents', text: null, sha256: null})).lines)
+      .toEqual(['Open: /home/u/Documents']);
+  });
+  it('read_path: the resolved path', () => {
+    expect(describeApproval(desktop('read_outside', {action: 'read_path', target: '/home/u/Documents/plan.md', text: null, sha256: SHA})).lines)
+      .toEqual(['File: /home/u/Documents/plan.md']);
+  });
+  it('run_command: the exact command and its folder', () => {
+    expect(describeApproval(desktop('run_command', {action: 'run_command', target: '/home/u/project', text: 'ls -la'})))
+      .toEqual({title: 'Run a command', known: true, lines: ['Command: ls -la', 'Folder: /home/u/project']});
+  });
+  it('type_text: the exact text and the window', () => {
+    expect(describeApproval(desktop('type', {action: 'type_text', target: 'org.gnome.TextEditor.desktop: notes.txt', text: 'Dear Sam,'})))
+      .toEqual({title: 'Type into a window', known: true, lines: ['Text: Dear Sam,', 'Into: org.gnome.TextEditor.desktop: notes.txt']});
+  });
+  it('press_keys: the keys, not text to type', () => {
+    expect(describeApproval(desktop('type', {action: 'press_keys', target: 'org.gnome.TextEditor.desktop: notes.txt', text: 'ctrl+s'})))
+      .toEqual({title: 'Press keys in a window', known: true, lines: ['Keys: ctrl+s', 'Into: org.gnome.TextEditor.desktop: notes.txt']});
+  });
+  it('a desktop action that does not belong to its kind is unknown', () => {
+    expect(describeApproval(desktop('run_command', {action: 'type_text', target: '~', text: 'rm -rf x'})).known).toBe(false);
+    expect(describeApproval(desktop('read_outside', {action: 'open_path', target: '~/a', text: null})).known).toBe(false);
+    expect(describeApproval(desktop('open', {action: 'press_keys', target: 'x', text: 'ctrl+s'})).known).toBe(false);
+  });
+});
+
 describe('describeApproval, unknown', () => {
   it.each([
     ['unknown kind', {kind: 'delete_everything', desktop: {action: 'x', target: 'y', text: 'z'}}],
