@@ -4,7 +4,31 @@ A GNOME Shell extension (GNOME 46 and 48–50; 46 is Ubuntu 24.04, the demo lapt
 look is the **top-edge island**: a small frosted pill under the top bar with the glassy liquid ring,
 voice bars and a chevron. This is a design prototype; the Windows app is in `client/src-tauri`.
 
-## Try it
+## Run on Ubuntu with the Artemis core
+
+The island talks to the Artemis core. Start the core, and the island connects by itself.
+
+```sh
+bash infra/setup-ubuntu.sh                 # once: apt, uv, dependencies, Whisper model
+client/prototypes/water-desktop/install.sh # copy the extension into your profile
+# On Wayland: log out and back in, then:
+gnome-extensions enable artemis-water@bu-hackathonz.github.io
+infra/start.sh --voice stub                # start the core; type requests in the island
+```
+
+- The island connects when `infra/start.sh` writes `$XDG_RUNTIME_DIR/artemis/launch.json`. You do
+  not need to restart GNOME Shell. With no core, the island stays idle and Orca reads "Artemis core
+  is not running".
+- Type a request: open the island with the chevron or the waveform, type, and press Enter.
+- Push-to-talk: hold Control and Shift, press Space, speak, then release both.
+- Approvals open a GNOME dialog. Enter approves and Escape rejects. A blocked action starts on Reject
+  and needs Shift+Enter to approve.
+- The full steps, the eight island states and troubleshooting are in [`infra/README.md`](../../../infra/README.md#ubuntu-run-the-core-and-the-gnome-island).
+
+The scripted demo presets and the virtual keyboard typing are removed from the connected build. The
+sections below describe the standalone prototype.
+
+## Try it (standalone prototype, no core)
 
 ```sh
 ./install.sh            # install + enable (log out and back in on Wayland)

@@ -359,3 +359,29 @@ said once, and the next request is accepted.
 > checks are real).
 >
 > **Not claimed:** a sandbox. Runs are "gated and limited", not sandboxed (architecture.md, risk 5).
+
+## Ubuntu run
+
+Run the demo on Ubuntu 24.04 (GNOME 46) with the GNOME island as the client. The full steps are in
+[`infra/README.md`](../infra/README.md#ubuntu-run-the-core-and-the-gnome-island).
+
+1. Once: `bash infra/setup-ubuntu.sh`, then `client/prototypes/water-desktop/install.sh`.
+2. On Wayland, log out and back in. Then run
+   `gnome-extensions enable artemis-water@bu-hackathonz.github.io`.
+3. Start the core: `infra/start.sh --voice stub` (or `infra/start.sh` for Whisper voice).
+4. Type `create a Python program that prints Hello World` in the island and press Enter.
+5. Watch the island go idle, thinking, editing, running and done. Approve the write and the run with
+   Enter, or reject with Escape.
+
+Keys on Ubuntu:
+
+| Where | Key | Effect |
+|---|---|---|
+| Island request field | Enter | Send the request. The field clears. |
+| Approval dialog | Enter | Approve (on a normal approval). |
+| Approval dialog | Escape | Reject. |
+| Blocked approval | Shift+Enter | Approve. Enter does nothing here, and focus starts on Reject. |
+| Anywhere | hold Control+Shift, press Space | Push-to-talk. Speak, then release both. The shortcut is set by the gsettings key `push-to-talk`. |
+
+The scripted demo presets and the virtual keyboard typing are removed from the Ubuntu build. The
+scripted five-part demo above does not run on Ubuntu. Use the end-to-end check in `infra/README.md`.
