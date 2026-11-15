@@ -105,7 +105,10 @@ export class ApprovalDialog {
                 vscrollbar_policy: St.PolicyType.AUTOMATIC,
                 style: 'max-height: 16em;',
             });
-            scroll.set_child(diff);
+            // St.ScrollView needs a scrollable child: a BoxLayout, not the label itself.
+            const box = new St.BoxLayout({vertical: true});
+            box.add_child(diff);
+            scroll.set_child(box);
             body.add_child(scroll);
         }
         body.add_child(wrapped(a.blocking
