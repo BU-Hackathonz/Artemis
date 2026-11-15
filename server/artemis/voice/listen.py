@@ -188,6 +188,13 @@ class WhisperVoice:
 
     def warm(self) -> None:
         """Load the model now (about 3 s, longer on first download) instead of on the first request."""
+        # Importing sounddevice initialises PortAudio, which probes every audio device: 1.5 s on David's
+        # Ubuntu laptop. Done lazily, that landed on the first push-to-talk, so the mic opened about 1.4 s
+        # after the tone. Doing it here, at startup, makes the first press as fast as the rest.
+        try:
+            import sounddevice  # noqa: F401
+        except Exception as e:  # no audio stack: push-to-talk reports it when used
+            log.warning("Audio could not be initialised at startup: %s", type(e).__name__)
         if self._model is None:
             from faster_whisper import WhisperModel
 
