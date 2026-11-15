@@ -389,3 +389,30 @@ def test_voice_detector_on_the_real_model():
         pytest.skip("faster-whisper (voice group) is not installed")
     probs = [detector(f) for f in quiet(1) + noise(1)]
     assert max(probs) < 0.5  # hiss is not a voice
+
+
+def test_health_line_says_why_the_wake_word_hears_nothing(caplog):
+    # David's laptop: "Wake word on" and then silence in core.log. The health line tells a muted mic
+    # (and why) from a quiet one, with numbers only.
+    voice = FakeVoice([])
+    listener = WakeListener(voice, lambda text: None, stream_factory=FakeStream)
+    listener.HEALTH_S = 0.0
+    voice.announcer.busy = True  # a speaker that never stops being busy keeps the wake word deaf
+    caplog.set_level("WARNING")
+    for frame in [*quiet(0.2), *speech(0.3)]:
+        listener._muted()
+        listener._note(frame)
+    line = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Wake word:")][-1]
+    assert "muted: speech queued" in line and "loudest" in line and "utterances 0" in line and "voice detector off" in line
+
+
+def test_mute_reasons():
+    voice = FakeVoice([])
+    listener = WakeListener(voice, lambda text: None, stream_factory=FakeStream)
+    assert listener._mute_reason() is None
+    voice.busy_listening = True
+    assert listener._mute_reason() == "push-to-talk"
+    voice.busy_listening, voice.transcribing = False, True
+    assert listener._mute_reason() == "transcribing"
+    voice.transcribing, voice.announcer.engine = False, "speechd"
+    assert listener._mute_reason() == "speaking"
