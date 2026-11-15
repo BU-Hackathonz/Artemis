@@ -74,13 +74,19 @@ def test_strip_wake_word_leaves_other_words_alone():
         assert strip_wake_word(text) == text, text
 
 
+LIST_LEAD = ("Hey Artemis, Artemis, Python, main.py, print, prints, Hello World, function, variable, program, run, "
+             "file, create")  # the #98 word list plus the demo's coding words
+
+
 def test_vocabulary_prompt_dedupes_and_caps():
-    # The default: the #98 word list, unchanged.
-    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm"]) == "Hey Artemis, Artemis, Python, main.py, LoginForm"
-    assert vocabulary_prompt(["artemis", "PYTHON"]) == "Hey Artemis, Artemis, Python, main.py"
-    assert vocabulary_prompt([]) == "Hey Artemis, Artemis, Python, main.py"
-    p = vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=50)
-    assert len(p) <= 50 and p.startswith("Hey Artemis, Artemis, Python, main.py, word0")
+    # The default: the word list.
+    assert vocabulary_prompt(["main.py", "Main.py", " ", "LoginForm"]) == LIST_LEAD + ", LoginForm"
+    assert vocabulary_prompt(["artemis", "PYTHON", "Print"]) == LIST_LEAD
+    assert vocabulary_prompt([]) == LIST_LEAD
+    cap = len(LIST_LEAD) + 10
+    p = vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=cap)
+    assert len(p) <= cap and p.startswith(LIST_LEAD + ", word0")
+    assert len(vocabulary_prompt([f"word{i}" for i in range(500)], max_chars=50)) <= 50
 
 
 def test_natural_vocabulary_prompt_reads_like_speech_then_project_words():
@@ -147,7 +153,7 @@ def test_stub_voice_returns_mvp_request():
     asyncio.run(v.announce(f"Heard: {text}", "normal"))
     assert s.said == [("Heard: create a Python program that prints Hello World", False)]
     v.set_vocabulary(["LoginForm"])
-    assert v.prompt == "Hey Artemis, Artemis, Python, main.py, LoginForm"
+    assert v.prompt == LIST_LEAD + ", LoginForm"
 
 
 def test_watch_reports_at_start_and_on_change_only():

@@ -14,10 +14,14 @@ Settings (environment):
   after release (people let go of the key while still saying the last word), closes, and only then plays
   "stopped", so that beep is never transcribed either.
 - ARTEMIS_WHISPER_PROMPT: unset (default) is the word-list prompt; natural is the spoken-style lead (text.py).
+- ARTEMIS_WHISPER_HOTWORDS: unset (default) is off; on also passes the prompt's fixed lead (wake word and demo
+  words, text.py HOTWORDS) as faster-whisper's hotwords. Ignored by a faster-whisper without that parameter.
 - ARTEMIS_WORKING_CUE: unset (default) keeps the core's spoken "Still working."; earcon plays a soft
   "working" tick instead (working_cue, contracts.md 3.3), only when a voice can speak and never into the mic.
-A beam above 1, a post-roll and the natural prompt are opt-in: switch them on for the stage only after
+A beam above 1, a post-roll, the natural prompt and hotwords are opt-in: switch them on for the stage only after
 docs/demo.md row 3 (the demo sentence, word for word) passes with them on, on the demo laptop.
+
+Every transcript then gets text.py's fixes for known mishearings (CORRECTIONS), push-to-talk and wake word alike.
 
 Manual check on a laptop: python -m artemis.voice.listen  (records 4 s, prints the transcript and time)
 """
@@ -25,6 +29,7 @@ Manual check on a laptop: python -m artemis.voice.listen  (records 4 s, prints t
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import threading
@@ -34,7 +39,7 @@ import numpy as np
 
 from . import earcons
 from .speech import Announcer, Priority, RateStatus
-from .text import strip_wake_word, vocabulary_prompt
+from .text import HOTWORDS, correct_transcript, strip_wake_word, vocabulary_prompt
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +97,20 @@ def whisper_natural_prompt() -> bool:
     return os.environ.get("ARTEMIS_WHISPER_PROMPT", "").strip().lower() == "natural"
 
 
+def whisper_hotwords() -> bool:
+    """ARTEMIS_WHISPER_HOTWORDS=on also passes the fixed demo vocabulary as hotwords; unset or anything else, off."""
+    return os.environ.get("ARTEMIS_WHISPER_HOTWORDS", "").strip().lower() == "on"
+
+
+def takes_hotwords(model) -> bool:
+    """faster-whisper 1.0+ has transcribe(hotwords=...); an older one (or another model) does not."""
+    try:
+        params = inspect.signature(model.transcribe).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "hotwords" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+
 def working_earcon_on() -> bool:
     """ARTEMIS_WORKING_CUE=earcon swaps the spoken "Still working." for a soft tick; anything else keeps the line."""
     return os.environ.get("ARTEMIS_WORKING_CUE", "").strip().lower() == "earcon"
@@ -126,13 +145,15 @@ def _input_stream(callback):
 class WhisperVoice:
     def __init__(self, announcer: Announcer | None = None, model_name: str | None = None, model=None, stream_factory=None,
                  earcon=earcons.play, beam_size: int | None = None, post_roll: float | None = None,
-                 natural_prompt: bool | None = None, working_earcon: bool | None = None) -> None:
+                 natural_prompt: bool | None = None, working_earcon: bool | None = None,
+                 hotwords: bool | None = None) -> None:
         self.announcer = announcer or Announcer()
         self.model_name = model_name or whisper_model()
         self.beam_size = beam_size or whisper_beam()
         self.post_roll = ptt_post_roll() if post_roll is None else post_roll
         self.natural_prompt = whisper_natural_prompt() if natural_prompt is None else natural_prompt
         self.working_earcon = working_earcon_on() if working_earcon is None else working_earcon
+        self.hotwords = whisper_hotwords() if hotwords is None else hotwords
         self._model = model
         self._stream_factory = stream_factory or _input_stream
         self._earcon = earcon
@@ -300,8 +321,9 @@ class WhisperVoice:
     def _transcribe(self, audio: np.ndarray) -> str:
         self.warm()
         # Pass numpy, not a file: faster-whisper's file decoder breaks on current PyAV.
+        extra = {"hotwords": HOTWORDS} if self.hotwords and takes_hotwords(self._model) else {}  # opt-in
         segments, _ = self._model.transcribe(
-            audio, language="en", beam_size=self.beam_size, vad_filter=True, initial_prompt=self.prompt or None
+            audio, language="en", beam_size=self.beam_size, vad_filter=True, initial_prompt=self.prompt or None, **extra
         )
         kept = []
         for s in segments:
@@ -310,7 +332,7 @@ class WhisperVoice:
             else:  # where and how sure, never the words: tells a dropped last phrase from a dropped "Thank you."
                 log.warning("Dropped a segment Whisper scored as probably not speech (no_speech_prob %.2f, %.1f-%.1f s of %.1f s)",
                             s.no_speech_prob, getattr(s, "start", 0.0), getattr(s, "end", 0.0), len(audio) / RATE)
-        return " ".join(s.text.strip() for s in kept).strip()
+        return correct_transcript(" ".join(s.text.strip() for s in kept).strip())
 
     def set_vocabulary(self, words: list[str]) -> None:
         self.prompt = vocabulary_prompt(words, natural=self.natural_prompt)
@@ -339,7 +361,8 @@ if __name__ == "__main__":
         began = time.monotonic()
         text = await v.stop_listening("cr_demo")
         print(repr(text), f"{time.monotonic() - began:.1f} s after release ({v.model_name}, beam {v.beam_size}, "
-              f"post-roll {v.post_roll} s, {'natural' if v.natural_prompt else 'list'} prompt)")
+              f"post-roll {v.post_roll} s, {'natural' if v.natural_prompt else 'list'} prompt, "
+              f"hotwords {'on' if v.hotwords else 'off'})")
         await v.announce(f"Heard: {text}" if text else "I didn't hear anything.", "high")
 
     asyncio.run(_demo())
