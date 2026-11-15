@@ -850,3 +850,30 @@ def test_a_line_whose_playback_fails_is_said_by_the_local_voice_not_dropped():
     assert e.wait_idle(3)
     wait_for(lambda: sapi.said)
     assert sapi.said == [("Write main.py? Enter to approve, Escape to reject.", False)]
+
+
+class TalkingFallback(FakeSpeaker):
+    def __init__(self):
+        super().__init__("speechd")
+        self.talking = False
+
+    def busy(self):
+        return self.talking
+
+
+def test_busy_while_the_local_voice_says_a_line_handed_to_it():
+    """Yaovi's #196 review: a line that fell back to the local voice is still Artemis talking, so the
+    approval reminder and the voice-approval guard wait for it."""
+    local = TalkingFallback()
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=local)
+    assert not e.busy()
+    local.talking = True
+    assert e.busy()  # off any loop: asked directly
+
+    async def on_loop():
+        e._loop = asyncio.get_running_loop()
+        return e.busy()  # on the loop's own thread: asked directly, no wait on the loop
+
+    assert asyncio.run(on_loop())
+    local.talking = False
+    assert not e.busy()

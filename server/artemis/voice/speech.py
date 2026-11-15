@@ -436,7 +436,20 @@ class ElevenLabsSpeaker:
 
     def busy(self) -> bool:
         with self._lock:
-            return self._playing.is_set() or self._now is not None or bool(self._pending)
+            if self._playing.is_set() or self._now is not None or bool(self._pending):
+                return True
+        # A line that failed here was handed to the local voice: Artemis is still talking while it says it
+        # (the core's approval reminder and voice-approval guard wait for this to be False).
+        if self.fallback is None:
+            return False
+        try:
+            if asyncio.get_running_loop() is self._loop:  # on the loop's own thread: ask directly, never wait on it
+                return bool(self.fallback.busy())
+        except RuntimeError:
+            pass  # no loop on this thread (the worker): ask through the loop
+        except Exception:
+            return False
+        return self._fallback_busy() is True
 
     def speaking(self) -> bool:
         """Audio is playing now (a queued or downloading line is not speech yet)."""
