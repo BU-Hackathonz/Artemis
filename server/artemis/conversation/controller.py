@@ -100,8 +100,12 @@ def _scan_text(findings: list) -> str:
 
 def _end(text: str) -> str:
     """The text as the end of a sentence: a question or exclamation keeps its mark, anything
-    else gets one full stop, so "add a docstring?" is never spoken as "add a docstring?."."""
-    return text if text.endswith(("?", "!")) else text + "."
+    else ends in one full stop, so "add a docstring?" is never "add a docstring?." and
+    "add a docstring," or "rename it to:" never end in ",." or ":." (Avery's review on #108)."""
+    text = text.rstrip()
+    if text.endswith(("?", "!")):
+        return text
+    return text.rstrip(".,:;…").rstrip() + "."
 
 
 def _names(files: list[str]) -> str:
@@ -288,7 +292,7 @@ class Controller:
         elif task.active:
             said = f"I'm working on: {about}"
             if task.progress:
-                said += f" Last step: {task.progress.rstrip('.')}."
+                said += f" Last step: {_end(task.progress)}"
             if task.files:
                 said += f" So far I changed {_names(task.files)}."
         elif task.state == "succeeded":

@@ -1,5 +1,7 @@
 """The spoken status: what was actually observed, and sentence endings."""
 
+import pytest
+
 from artemis.contracts import EventDraft
 from artemis.conversation import Controller
 
@@ -192,3 +194,21 @@ def test_a_full_scan_list_is_said_as_fifty_or_more():
     c.observe(event("security.findings", op_id="o4", tool="bandit",
                     findings=[dict(FINDING, severity="low", line=n) for n in range(50)]))
     assert "reported 50 or more findings." in c.status()
+
+
+@pytest.mark.parametrize(
+    ("text", "spoken"),
+    [
+        ("add a docstring,", "add a docstring."),
+        ("rename it to:", "rename it to."),
+        ("keep going…", "keep going."),
+        ("done.", "done."),
+        ("add a docstring?", "add a docstring?"),
+        ("wow!", "wow!"),
+        ("plain", "plain."),
+    ],
+)
+def test_a_sentence_never_ends_in_double_punctuation(text, spoken):
+    from artemis.conversation.controller import _end
+
+    assert _end(text) == spoken
