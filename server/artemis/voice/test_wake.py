@@ -754,7 +754,7 @@ from artemis.voice.wake import barge_request, is_echo  # noqa: E402
     ("Hey Artemis, stop.", "I'm building the page now.", ""),
     ("Hey Artemis, open Google.", "I'm building the page now.", "open Google."),
     ("Stop.", "I'm building the page now.", ""),
-    ("Wait.", "Here is the plan.", ""),
+    ("Hold on.", "Here is the plan.", ""),  # not a bare "Wait.": bystanders say it (#205 review)
     ("I'm building the page now.", "I'm building the page now.", None),        # its own voice
     ("Hi, I'm Artemis, a voice-first coding assistant.", "Hi, I'm Artemis, a voice-first coding assistant, and I can build.", None),
     ("so about lunch", "I'm building the page now.", None),                    # other talk
@@ -788,3 +788,32 @@ def test_push_to_talk_speech_is_never_an_interruption():
     loop = WakeLoop(Script("Hey Artemis, stop."), speaking=lambda: True, saying=lambda: "Here is the plan.",
                     barge_ok=lambda: False)
     assert feed(loop, quiet(1) + utterance()) == []
+
+
+# ----- barge-in follow-ups (#205 review) -----
+
+
+def test_the_tail_of_artemis_question_never_becomes_the_reply():
+    talking = {"now": False}
+    loop = WakeLoop(Script("What should I call the project?"), speaking=lambda: talking["now"],
+                    saying=lambda: "What should I call the project?")
+    feed(loop, quiet(1))
+    loop.expect_reply()
+    talking["now"] = True
+    events = feed(loop, speech(1.5))  # Artemis asks through the speakers
+    talking["now"] = False  # playback ends while the mic still holds its last words
+    events += feed(loop, quiet(2))
+    assert [e.kind for e in events] == ["reply"] and loop.armed  # the window opens; its own words are not the answer
+
+
+def test_long_speech_over_artemis_is_not_transcribed():
+    script = Script()  # any transcription would fail: Script() has no lines
+    loop = WakeLoop(script, speaking=lambda: True, saying=lambda: "a long answer")
+    assert feed(loop, quiet(1) + speech(5) + quiet(1.2)) == [] and script.heard == 0
+
+
+@pytest.mark.parametrize("said", ["Wait.", "Quiet.", "Enough."])
+def test_everyday_words_from_the_room_do_not_stop_artemis(said):
+    from artemis.voice.wake import barge_request
+    assert barge_request(said, "Created main.py, 1 line.") is None
+    assert barge_request("Stop.", "Created main.py, 1 line.") == ""

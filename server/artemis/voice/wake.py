@@ -194,8 +194,10 @@ VOICE_STAY = 0.35   # and that keeps it going
 HALLUCINATIONS = {"you", "thank you", "thanks for watching", "thank you for watching", "bye", "so"}
 
 # Interrupting Artemis while it speaks (David's test run): only these, or "Hey Artemis ...", cut it off.
-STOP_WORDS = {"stop", "stop talking", "artemis stop", "stop artemis", "be quiet", "quiet", "wait", "hold on",
-              "shut up", "enough", "okay stop", "ok stop"}
+# Not "wait", "quiet" or "enough": a bystander says those alone in ordinary talk.
+STOP_WORDS = {"stop", "stop talking", "artemis stop", "stop artemis", "be quiet", "hold on",
+              "shut up", "okay stop", "ok stop"}
+BARGE_MAX_S = 4.0  # while Artemis speaks, longer utterances are its own voice (or talk): not transcribed
 
 
 def _words(text: str) -> list[str]:
@@ -381,6 +383,7 @@ class WakeLoop:
         self._reply_heard = False  # Artemis was heard speaking since expect_reply()
         self._reply_wait = 0  # frames left to wait for the question to be said; 0: no reply expected
         self.saying = saying  # None: the mic is dropped while Artemis speaks, as before
+        self._over = False  # the last frame was heard over Artemis's speech (barge-in)
         self.barge_ok = barge_ok
 
     @property
@@ -414,11 +417,19 @@ class WakeLoop:
             if not talking:
                 self._tail -= 1
             if self.saying is not None:
+                self._over = True
                 return self._over_speech(frame)
             self.segmenter.reset()
             self._early = None
             self.stats.suppressed += 1
             return None
+
+        if self._over:
+            # Artemis just stopped: an utterance still open holds its own last words (no reset while it spoke,
+            # for barge-in). Drop it, or it ends inside the reply window and becomes the "reply".
+            self._over = False
+            self.segmenter.reset()
+            self._early = None
 
         if self._reply_wait:
             if self._reply_heard or self._reply_wait == 1:  # the question was said (or never will be)
@@ -489,6 +500,9 @@ class WakeLoop:
         voice = self.vad(frame) if self.vad is not None else None
         audio = self.segmenter.feed(frame, voice)
         if audio is None:
+            return None
+        if len(audio) / RATE > BARGE_MAX_S:  # not "Hey Artemis, stop": don't spend Whisper on Artemis's own sentences
+            self.stats.suppressed += 1
             return None
         text, took = self._hear(audio)
         del audio
