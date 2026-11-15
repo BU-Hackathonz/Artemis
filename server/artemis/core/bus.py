@@ -33,7 +33,9 @@ class EventBus:
     def last_seq(self) -> int:
         return self._seq
 
-    async def emit(self, draft: EventDraft) -> Event:
+    async def emit(self, draft: EventDraft, *, speak: bool = True) -> Event:
+        """speak=False sends, logs and replays the event as usual but doesn't say its announce: the
+        opt-in working tick already gave that cue as a sound (contracts.md 5.7)."""
         self._seq += 1
         event = Event(
             **draft.model_dump(),
@@ -47,7 +49,7 @@ class EventBus:
         self._write_log(event)
         for queue in list(self._subscribers):
             queue.put_nowait(event)
-        if event.announce and self._speak:
+        if speak and event.announce and self._speak:
             try:
                 await self._speak(event.announce.text, event.announce.priority)
             except Exception:  # speech failing must never stop the task or the stream

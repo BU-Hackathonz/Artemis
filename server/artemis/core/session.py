@@ -181,7 +181,7 @@ class Session:
             result_earcons = os.environ.get("ARTEMIS_RESULT_EARCONS", "off").lower() == "on"
         self._earcon: Callable[[str], float] | None = (earcon or _default_earcon()) if result_earcons else None
 
-    async def emit(self, draft: EventDraft) -> None:
+    async def emit(self, draft: EventDraft, *, speak: bool = True) -> None:
         if draft.announce or draft.type == "task.state":
             # Something was said, or the state changed (e.g. back to working after an approval):
             # the heartbeat waits a full interval from here.
@@ -203,7 +203,7 @@ class Session:
                     duration = 0.0
                 # Let the tone finish (capped) so the spoken line does not talk over it.
                 await asyncio.sleep(_cue_wait(duration))
-        await self.bus.emit(draft)
+        await self.bus.emit(draft, speak=speak)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
         if self.conversation:
@@ -255,24 +255,29 @@ class Session:
             self._quiet_since = time.monotonic()  # next check a full interval later
 
     async def _still_working(self, task_id: str) -> None:
-        """voice/earcons.py has "listening" and "stopped" (both mean the mic) and the result cues
-        "success", "failure" and "approval", none of which means progress, so none is reused here.
-        Use voice.working_cue() if a voice ever offers one; until then a
-        low-priority progress line, which the Announcer drops while speech is busy, so it never
-        talks over anything."""
+        """The heartbeat: a low-priority "Still working." progress line, which the Announcer drops
+        while speech is busy, so it never talks over anything.
+
+        Opt-in (ARTEMIS_WORKING_CUE=earcon, contracts.md 5.7): when the voice offers working_cue(),
+        the voice plays a soft tick instead of saying the line (or skips the beat while the mic or
+        speech is busy). The same event is still sent, announce and all, just not spoken, so the
+        log and a screen reader reading it still get "Still working."."""
         cue = getattr(self.voice, "working_cue", None)
         if callable(cue):
-            result = cue()
-            if asyncio.iscoroutine(result):
-                await result
-            return
+            try:
+                result = cue()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:  # a tick failing must never stop the task or the log line
+                log.exception("working cue failed")
         await self.emit(
             EventDraft(
                 task_id=task_id,
                 type="agent.message",
                 announce=Announce(text=STILL_WORKING, priority="low"),
                 data=AgentMessageData(text=STILL_WORKING, kind="progress").model_dump(),
-            )
+            ),
+            speak=not callable(cue),
         )
 
     async def _run(self, task: Task) -> None:
