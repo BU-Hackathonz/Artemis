@@ -28,6 +28,7 @@ import {OrbEffect} from './orbEffect.js';
 import {RingEffect} from './ringEffect.js';
 import {Island} from './island.js';
 import {CoreClient} from './core.js';
+import {Typist, focusedWindow} from './desktop.js';
 import {ApprovalDialog} from './approvalDialog.js';
 import {initial, reduce, setConnected, view, expireDone, DONE_MS} from './islandState.js';
 
@@ -125,6 +126,9 @@ export default class ArtemisWaterExtension extends Extension {
         this._readySid = null;          // the session ready was last sent for
         this._doneTimer = 0;
         this._talkTimer = 0;
+        this._typist = Typist.create();   // null when the shell has no virtual keyboard: the island then can't type
+        this._desktopOps = new Set();     // op_ids already answered: never type the same op twice
+        this._desktopJob = null;          // the last desktop action, so they run one at a time
 
         this._core = new CoreClient({
             onEvent: (event) => this._onEvent(event),
@@ -166,6 +170,8 @@ export default class ArtemisWaterExtension extends Extension {
             core?.destroy();
         }
         this._closeApproval();
+        this._typist?.destroy();
+        this._typist = null;
         if (this._doneTimer) GLib.source_remove(this._doneTimer);
         this._doneTimer = 0;
         if (this._talkTimer) GLib.source_remove(this._talkTimer);
@@ -460,7 +466,32 @@ export default class ArtemisWaterExtension extends Extension {
         this._state = reduce(this._state, event);
         if (event.type === 'approval.requested') this._openApproval(event.data ?? {});
         else if (event.type === 'approval.resolved' && event.data?.approval_id === this._approval?.approval_id) this._closeApproval();
+        else if (event.type === 'desktop.action') this._onDesktopAction(event.data ?? {});
+        else if (event.type === 'task.state' && event.data?.state === 'canceled') this._typist?.stop();
+        else if (event.type === 'task.state' && event.data?.state === 'queued') this._typist?.resume();
         this._applyState();
+    }
+
+    // The core asks for focus (before an approval) or for typing (after it) and waits for POST
+    // /desktop/{op_id}/result. Each op is answered once; a repeated op_id is ignored.
+    _onDesktopAction(action) {
+        const {op_id: op, kind, text = '', window = null} = action;
+        if (typeof op !== 'string' || this._desktopOps.has(op)) return;
+        if (this._desktopOps.size > 500) this._desktopOps.clear();
+        this._desktopOps.add(op);
+        const core = this._core;
+        const answer = (result) => core?.desktopResult(op, result);
+        const run = async () => {
+            if (kind === 'focus') {
+                const label = focusedWindow();
+                return answer(label ? {ok: true, window: label} : {ok: false, message: 'no window has the keyboard focus'});
+            }
+            if (!this._typist || (kind !== 'type' && kind !== 'keys'))
+                return answer({ok: false, message: 'the island cannot type on this desktop'});
+            const {ok, message} = await this._typist.run(kind, text, window);
+            return answer(ok ? {ok: true} : {ok: false, message});
+        };
+        this._desktopJob = (this._desktopJob ?? Promise.resolve()).then(run).catch(() => answer({ok: false, message: 'the island could not type'}));
     }
 
     // A drop keeps the task and its approval: a reconnect to the same session replays only what was
@@ -491,7 +522,7 @@ export default class ArtemisWaterExtension extends Extension {
         if (connected && session !== this._readySid && this._core) {
             this._readySid = session;
             if (this._shortcutFailed) this._core.diagnostics('shortcut_registration_failed', SHORTCUT);
-            this._core.ready(this._shortcutFailed ? null : SHORTCUT);
+            this._core.ready(this._shortcutFailed ? null : SHORTCUT, {desktop: !!this._typist});
         }
         this._applyState();
     }
