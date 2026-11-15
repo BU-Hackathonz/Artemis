@@ -377,17 +377,23 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             last = 0
         queue = session.bus.subscribe()
 
+        stale = session.desktop.is_stale  # a finished desktop.action is never sent again, live or replayed
+
         async def stream():
             try:
                 seen = last
                 for event in session.bus.since(last):  # replay, then live
                     seen = event.seq
+                    if stale(event):
+                        continue
                     yield {"id": str(event.seq), "data": event.model_dump_json()}
                 while True:
                     event = await queue.get()
                     if event.seq <= seen:
                         continue
                     seen = event.seq
+                    if stale(event):
+                        continue
                     yield {"id": str(event.seq), "data": event.model_dump_json()}
             finally:
                 session.bus.unsubscribe(queue)

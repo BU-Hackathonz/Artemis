@@ -61,7 +61,7 @@ async def test_success(core):
     op_id = await op_id_of(session)
     event = next(e for e in session.bus.history if e.type == "desktop.action")
     assert op_id.startswith("op_") and len(op_id) == 27
-    assert event.data == {"op_id": op_id, "kind": "type", "text": SECRET}
+    assert event.data == {"op_id": op_id, "kind": "type", "text": SECRET, "window": None}
     assert event.task_id == "tsk_1" and event.announce is None
     assert session.desktop.resolve(op_id, DesktopResult(ok=True))
     assert (await request) == DesktopResult(ok=True)
@@ -177,3 +177,36 @@ async def test_log_redacts_text_but_sse_event_keeps_it(tmp_path):
     await request
     bus.unsubscribe(queue)
     assert bus.subscriber_count == 0
+
+
+async def test_focus_asks_for_the_window_and_type_carries_it(core):
+    session = ready_session(core)
+    ask = asyncio.create_task(session.desktop.request("focus", task_id="tsk_1"))
+    op = await op_id_of(session)
+    event = next(e for e in session.bus.history if e.type == "desktop.action")
+    assert event.data["kind"] == "focus" and event.data["text"] == "" and event.data["window"] is None
+    assert session.desktop.resolve(op, DesktopResult(ok=True, window="org.gnome.TextEditor.desktop: notes.txt"))
+    assert (await ask).window == "org.gnome.TextEditor.desktop: notes.txt"
+
+    session.bus.history.clear()
+    typing = asyncio.create_task(
+        session.desktop.request("type", "hello", "tsk_1", window="org.gnome.TextEditor.desktop: notes.txt")
+    )
+    op = await op_id_of(session)
+    event = next(e for e in session.bus.history if e.type == "desktop.action")
+    assert event.data["window"] == "org.gnome.TextEditor.desktop: notes.txt"
+    session.desktop.resolve(op, DesktopResult(ok=True))
+    assert (await typing).ok
+
+
+async def test_a_finished_action_is_stale_so_the_stream_never_sends_it_again(core):
+    session = ready_session(core)
+    request = asyncio.create_task(session.desktop.request("type", "hello", "tsk_1"))
+    op = await op_id_of(session)
+    event = next(e for e in session.bus.history if e.type == "desktop.action")
+    assert not session.desktop.is_stale(event)  # pending: an island that connects now still gets it
+    session.desktop.resolve(op, DesktopResult(ok=True))
+    await request
+    assert session.desktop.is_stale(event)  # answered: a reconnect replay must not type it twice
+    other = event.model_copy(update={"type": "agent.message"})
+    assert not session.desktop.is_stale(other)  # only desktop.action is ever skipped

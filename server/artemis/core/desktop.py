@@ -11,7 +11,7 @@ import secrets
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
-from artemis.contracts import DesktopActionData, DesktopResult, EventDraft
+from artemis.contracts import DesktopActionData, DesktopResult, Event, EventDraft
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +40,20 @@ class DesktopOps:
     def has(self, op_id: str) -> bool:
         return op_id in self._pending
 
-    async def request(self, kind: Literal["type", "keys"], text: str, task_id: str | None) -> DesktopResult:
+    def is_stale(self, event: Event) -> bool:
+        """A desktop.action whose op is already answered, expired or canceled. The event stream skips
+        these, so an island that reconnects (or starts fresh and replays from 0) never types twice."""
+        return event.type == "desktop.action" and not self.has(str(event.data.get("op_id")))
+
+    async def request(
+        self,
+        kind: Literal["focus", "type", "keys"],
+        text: str = "",
+        task_id: str | None = None,
+        window: str | None = None,
+    ) -> DesktopResult:
+        """focus: ask which window has the keyboard (the answer's `window`), before the approval.
+        type / keys: type into `window`, the one the developer approved; the island refuses if focus moved."""
         if not self.available():
             return UNAVAILABLE.model_copy()
         op_id = "op_" + secrets.token_hex(12)
@@ -53,7 +66,7 @@ class DesktopOps:
                     task_id=task_id,
                     type="desktop.action",
                     announce=None,
-                    data=DesktopActionData(op_id=op_id, kind=kind, text=text).model_dump(),
+                    data=DesktopActionData(op_id=op_id, kind=kind, text=text, window=window).model_dump(),
                 )
             )
             return await asyncio.wait_for(future, timeout=BASE_TIMEOUT_S + PER_CHAR_S * len(text))
