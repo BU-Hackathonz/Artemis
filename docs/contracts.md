@@ -617,6 +617,29 @@ The `op_id` rules (point 7):
 
 Opening apps and paths runs in the core (`gtk-launch`, `gio open`), with or without the island.
 
+### 9.1 Publishing to GitHub (Proposed (David))
+
+`publish_github {repo, public, description?}` publishes the current project as a new repository in
+the developer's own GitHub account (`gh api user`). Approval `kind` is `publish`, and it is decided
+on the keyboard only, never by voice (§5.4).
+- The dialog names the repository (`owner/repo`), private or public, and every file.
+- `public: true` is a high-severity finding, so it needs the override key.
+- **The push never comes from the project folder.** The gate copies the project's files (`project_files`,
+  never `.env` or `.git`, minus anything `.gitignore` excludes) byte for byte into a fresh private
+  folder. It runs `git init` there with hooks, fsmonitor, templates and system/global config off, and
+  pushes from there. So an existing `.git` (its history, index, hooks, config or `origin`) can't add
+  anything, and publishing again works.
+- Files that look like they hold a key, token, password or private key, by name or content, stop the
+  publish before anyone is asked.
+- The dialog lists every file (`Approval.files`). The spoken summary names the first eight and the
+  description.
+- The hash covers the repository, the visibility, the description and every file's name and bytes. A
+  fresh copy is hashed again after the decision, and a change invalidates the approval.
+- On approval: one commit ("First version") as `<id>+<login>@users.noreply.github.com`, then `gh repo
+  create owner/repo --private|--public --source . --remote origin --push` from the private copy. `gh`
+  gets the session environment for its keyring login, with hooks still off, and none of Artemis's
+  keys. A timeout kills gh's whole process group.
+
 ## 10. The plan and the ring (Proposed (David), for Avery to merge)
 
 - **The plan comes first.** For each request the agent calls `plan {goal, steps: [{say, action, target?}]}`

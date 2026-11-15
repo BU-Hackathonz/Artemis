@@ -19,6 +19,7 @@ from artemis.contracts import (
     OpenPathArgs,
     PlanArgs,
     PressKeysArgs,
+    PublishGithubArgs,
     ReadPathArgs,
     RunCommandArgs,
     TypeTextArgs,
@@ -65,6 +66,8 @@ RULES: dict[str, Rule] = {
     "run_command": Rule(RunCommandArgs, approval_kind="run_command"),
     "type_text": Rule(TypeTextArgs, approval_kind="type"),
     "press_keys": Rule(PressKeysArgs, approval_kind="type"),
+    # Outward-facing: the code leaves the laptop. Keyboard only, never by voice (contracts.md §5.4).
+    "publish_github": Rule(PublishGithubArgs, approval_kind="publish"),
 }
 
 

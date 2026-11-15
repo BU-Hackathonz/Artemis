@@ -53,7 +53,7 @@ from artemis.contracts import (
     WriteFilesArgs,
 )
 
-from .desktop import DesktopBridge, DesktopTools
+from .desktop import DesktopBridge, DesktopTools, GithubTools
 from .hashing import approval_hash, run_payload, write_payload
 from .paths import (
     MAX_FILES_PER_BATCH,
@@ -190,10 +190,10 @@ def unified_diff(path: str, old: str | None, new: str) -> tuple[str, int, int]:
 
 # Desktop tools send their ring cue themselves, after the approval, when the action really starts.
 _SELF_CUED = {"open_app", "open_path", "read_path", "run_command", "type_text", "press_keys", "plan",
-              "write_files", "edit_file", "run_program"}
+              "write_files", "edit_file", "run_program", "publish_github"}
 
 
-class ToolGateway(DesktopTools):
+class ToolGateway(DesktopTools, GithubTools):
     _tool_error = _ToolError  # DesktopTools raises the gate's own error type
 
     def __init__(

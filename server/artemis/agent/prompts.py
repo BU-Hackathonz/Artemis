@@ -179,6 +179,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Press a key or a shortcut in the focused window, after the developer approves it, for "
         "example ctrl+s, Return or ctrl+shift+grave."
     ),
+    "publish_github": (
+        "Publish the current project to GitHub as a new repository in the developer's own account, "
+        "when they ask for it: one commit of the project's files, pushed to a repository named repo. "
+        "Private unless they say public. The developer approves on the keyboard, and the dialog lists "
+        "every file. Never publish without being asked. Returns the repository's address."
+    ),
     "create_project": (
         "Start a new project and make it the current one. Call this first when the developer "
         "asks for a new program and no suitable project is open. The name becomes a folder "

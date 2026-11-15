@@ -25,6 +25,7 @@ The gate checks the hash again after the decision, so a swapped file or a moved 
 import asyncio
 import configparser
 import hashlib
+import inspect
 import os
 import re
 import shlex
@@ -74,7 +75,7 @@ TOOL_ACTIONS = {
     "create_project": "think", "open_project": "think", "list_files": "read", "read_file": "read",
     "read_path": "read", "inspect_page": "read", "scan_project": "read", "write_files": "write",
     "edit_file": "write", "run_program": "run", "run_command": "run", "open_app": "open",
-    "open_path": "open", "type_text": "type", "press_keys": "type",
+    "open_path": "open", "type_text": "type", "press_keys": "type", "publish_github": "run",
 }
 # Where the ring flies for each acting tool, when the call itself names no more (the app, the window):
 # the editor, the terminal, the browser or the file. Every acting tool cues, with or without a plan.
@@ -86,7 +87,8 @@ TOOL_TARGETS = {
 # Tools that change something or reach outside the project: the plan comes first (§10).
 # Opening an app or one of the developer's own files is not here: "open VS Code" must just open it
 # (it asks nothing and changes nothing), not bounce off plan_required first.
-NEEDS_PLAN = {"write_files", "edit_file", "run_program", "run_command", "read_path", "type_text", "press_keys"}
+NEEDS_PLAN = {"write_files", "edit_file", "run_program", "run_command", "read_path", "type_text", "press_keys",
+              "publish_github"}
 
 # Opening one of these would run it, not open it.
 _RUNNABLE_SUFFIXES = {".desktop", ".sh", ".bash", ".zsh", ".appimage", ".run", ".jar", ".bin",
@@ -854,7 +856,7 @@ class DesktopTools:
     # ----- one approval for a desktop action -----
 
     async def _approve_desktop(self, task_id: str, kind: str, spec: DesktopSpec, action: str, nothing: str,
-                               findings: list[Finding] = (), still=None) -> None:
+                               findings: list[Finding] = (), still=None, files=()) -> None:
         """Ask, and check after the decision that `still()` (the current spec) matches what was approved."""
         workspace = self.project.slug if self.project else "desktop"
         payload = lambda s: [s.action, s.target, s.text, s.sha256]  # noqa: E731
@@ -864,11 +866,13 @@ class DesktopTools:
         summary = (f"Blocked: {reasons} {action} Escape to reject, or use the override key to approve anyway."
                    if blocking else f"{action} Enter to approve, Escape to reject.")
         approval = Approval(approval_id=f"apr_{uuid.uuid4().hex[:12]}", kind=kind, approval_hash=digest,
-                            summary=summary, desktop=spec, findings=list(findings), blocking=blocking)
+                            summary=summary, desktop=spec, findings=list(findings), blocking=blocking, files=list(files))
         decision = await self._ask(task_id, approval, nothing)
         if decision is not Decision.approve:
             await self._rejected(task_id, approval, nothing)
         now = still() if still else spec
+        if inspect.isawaitable(now):
+            now = await now
         if approval_hash(kind, workspace, payload(now)) != digest:
             await self._resolved(task_id, approval, "reject", "invalidated")
             await self._state(task_id, "working")
@@ -1111,3 +1115,200 @@ class DesktopTools:
             raise PathRejected(f"{a.keys} opens a launcher or a shell, so I don't press it.")
         paste = " (this pastes the clipboard, which I can't show)" if _pastes(a.keys) else ""
         return await self._type_into(task_id, "keys", a.keys, f"Press {a.keys.replace('+', ' ')}{paste}")
+
+
+# ----- publishing to GitHub (contracts.md §9.1, Proposed) -----
+#
+# The push never comes from the project folder: the approved files are copied byte for byte into a
+# fresh private folder, committed there with hooks and fsmonitor off, and pushed from there. So an
+# existing .git (its history, index, hooks or config) in the project can't add anything, an earlier
+# publish's remote can't get in the way, and what is pushed is exactly what was hashed and shown.
+
+PUBLISH_TIMEOUT_S = 60
+MAX_PUBLISH_FILES = 200
+SPOKEN_FILES = 8
+
+# Never-run git: no hooks, no fsmonitor, no system config. gh's own push needs the global config for
+# its credential helper, so it keeps that, with hooks and fsmonitor still forced off.
+_GIT_SAFE = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_COUNT": "3",
+             "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": "/dev/null",
+             "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": "false",
+             "GIT_CONFIG_KEY_2": "init.templateDir", "GIT_CONFIG_VALUE_2": ""}
+
+# What a secret looks like, on top of redact(): tokens and keys people paste into code.
+_SECRET_TEXT = re.compile(
+    r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{30,}|"
+    r"\bsk-[A-Za-z0-9_-]{20,}|\bsk_(live|test)_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|aws_secret_access_key|_authToken\s*=|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]+@", re.I)
+_SECRET_NAMES = re.compile(r"^(id_(rsa|dsa|ecdsa|ed25519)|credentials(\.json)?|secrets?\.(json|ya?ml|toml)|\.npmrc|"
+                           r"\.pypirc|\.netrc|.*\.(pem|key|p12|pfx|keystore|jks))$", re.I)
+
+
+def _publish_env() -> dict[str, str]:
+    """gh keeps its login in the GNOME keyring, so it needs the session bus; nothing else of ours."""
+    return {**desktop_env(for_command=False), **_GIT_SAFE}
+
+
+def _git_env() -> dict[str, str]:
+    """Plain git in the private copy: no session, no global or system config, no hooks."""
+    return {**desktop_env(for_command=True), **_GIT_SAFE, "GIT_CONFIG_GLOBAL": "/dev/null"}
+
+
+async def _git(args: list[str], cwd: Path, env: dict[str, str], timeout: int = PUBLISH_TIMEOUT_S) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *args, cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT, env=env, start_new_session=True)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)  # the whole group: gh's own git push goes too
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        return 124, "timed out"
+    return proc.returncode, out.decode(errors="replace")[-2000:]
+
+
+def _last_line(out: str) -> str:
+    from .redact import redact
+    lines = [line for line in out.strip().splitlines() if line.strip()]
+    return redact(lines[-1])[:200] if lines else "no details"
+
+
+def _secret_files(root: Path, names: list[str]) -> list[str]:
+    """Files that look like they hold a secret: they never leave the laptop."""
+    from .redact import redact
+    bad = []
+    for name in names:
+        f = root / name
+        try:
+            text = f.read_bytes()[:MAX_READ_BYTES].decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        if _SECRET_NAMES.match(f.name) or _SECRET_TEXT.search(text) or redact(text) != text:
+            bad.append(name)
+    return bad
+
+
+class _Snapshot:
+    """The project's publishable files, copied into a private folder with a fresh repository: the
+    names git would commit (after .gitignore) and the hash of exactly those bytes."""
+
+    def __init__(self, folder: Path, names: list[str], digest: str):
+        self.folder, self.names, self.digest = folder, names, digest
+
+    @classmethod
+    async def take(cls, root: Path) -> "_Snapshot":
+        import shutil
+        import tempfile
+
+        from .paths import project_files
+        listed = project_files(root)
+        if len(listed) > MAX_PUBLISH_FILES:
+            raise ValueError("too_many")
+        folder = Path(tempfile.mkdtemp(prefix="artemis-publish-"))
+        os.chmod(folder, 0o700)
+        try:
+            for rel in listed:
+                src = (root / rel).resolve()
+                dst = folder / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(read_capped(src))  # contents only: no links, modes or attributes
+            env = _git_env()
+            for step in (["git", "init", "-q", "-b", "main"], ["git", "add", "-A"]):
+                code, out = await _git(step, folder, env)
+                if code:
+                    raise RuntimeError(f"git {step[1]}: {_last_line(out)}")
+            code, out = await _git(["git", "ls-files", "-z"], folder, env)
+            if code:
+                raise RuntimeError(f"git ls-files: {_last_line(out)}")
+            names = sorted(n for n in out.split("\0") if n)
+            digest = hashlib.sha256()
+            for name in names:
+                digest.update(name.encode() + b"\0" + (folder / name).read_bytes() + b"\0")
+            return cls(folder, names, digest.hexdigest())
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+
+    def discard(self) -> None:
+        import shutil
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+
+class GithubTools:
+    """publish_github, as a ToolGateway method (mixed in next to DesktopTools)."""
+
+    async def _publish_github(self, task_id: str, a) -> dict:
+        from artemis.contracts import FileSummary
+
+        project = self._require_project()
+        root = Path(project.root)
+        if not root.is_dir():
+            raise self._tool_error("not_found", "The project has no files yet. Write them first, then publish.")
+        env = _publish_env()
+        code, who = await _git(["gh", "api", "user", "--jq", '"\(.login) \(.id)"'], root, env, 20)
+        login, _, uid = who.strip().partition(" ")
+        if code != 0 or not login or not all(c.isalnum() or c == "-" for c in login) or not uid.isdigit():
+            raise self._tool_error("tool_failed", "GitHub isn't signed in on this computer. Run gh auth login, then try again.")
+        full = f"{login}/{a.repo}"
+        try:
+            snap = await _Snapshot.take(root)
+        except ValueError:
+            raise self._tool_error("invalid_args", f"The project has more than {MAX_PUBLISH_FILES} files, which is too many to publish this way.") from None
+        except RuntimeError as exc:
+            raise self._tool_error("tool_failed", f"I couldn't prepare the files: {exc}.") from None
+        try:
+            if not snap.names:
+                raise self._tool_error("not_found", "The project has no files to publish yet.")
+            secrets = _secret_files(snap.folder, snap.names)
+            if secrets:
+                raise PathRejected("I won't publish this: " + ", ".join(secrets[:3]) +
+                                   " looks like it holds a key or a password. Remove it first.")
+            visibility = "public" if a.public else "private"
+            about = f" Description: {a.description}." if a.description else ""
+
+            def spec(s: "_Snapshot") -> DesktopSpec:
+                return DesktopSpec(action="publish_github", target=full, text=f"{visibility}\n{a.description or ''}", sha256=s.digest)
+
+            async def still() -> DesktopSpec:
+                again = await _Snapshot.take(root)
+                again.discard()
+                return spec(again)
+
+            shown = ", ".join(snap.names[:SPOKEN_FILES]) + (f" and {len(snap.names) - SPOKEN_FILES} more" if len(snap.names) > SPOKEN_FILES else "")
+            findings = []
+            if a.public:
+                findings.append(Finding(rule="publish-public", severity="high", path="repository", line=1,
+                                        message="This makes the code public: anyone on the internet can see it."))
+            files = [FileSummary(path=n, action="created", lines_added=(snap.folder / n).read_bytes().count(b"\n"), lines_removed=0)
+                     for n in snap.names]
+            await self._approve_desktop(
+                task_id, "publish", spec(snap),
+                f"Publish {project.slug} to GitHub as a {visibility} repository, {full}, with {len(snap.names)} "
+                f"file{'s' if len(snap.names) != 1 else ''}: {shown}.{about}",
+                "Nothing was published.", findings=findings, still=still, files=files)
+            await self._cue(task_id, "publish_github", "browser")
+            await self._state(task_id, "running", "Publishing to GitHub.")
+            try:
+                git = _git_env()
+                commit = ["git", "-c", f"user.name={login}", "-c", f"user.email={uid}+{login}@users.noreply.github.com",
+                          "commit", "-q", "-m", "First version"]
+                code, out = await _git(commit, snap.folder, git)
+                if code:
+                    raise self._tool_error("tool_failed", f"git commit failed: {_last_line(out)}.")
+                create = ["gh", "repo", "create", full, f"--{visibility}", "--source", ".", "--remote", "origin", "--push"]
+                if a.description:
+                    create += ["--description", a.description]
+                code, out = await _git(create, snap.folder, env)
+                if code:
+                    raise self._tool_error("tool_failed", f"GitHub said: {_last_line(out)}.")
+            finally:
+                await self._state(task_id, "working")
+        finally:
+            snap.discard()
+        await self._say(task_id, f"Published to GitHub as {full}, {visibility}.", "normal")
+        return {"repository": full, "url": f"https://github.com/{full}", "visibility": visibility, "files": len(snap.names)}
