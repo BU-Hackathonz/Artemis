@@ -147,7 +147,7 @@ _RISKY = [
     (re.compile(r"\b(curl|wget|fetch)\b[^;&]*(\|\s*(sudo\s+)?(" + _SHELL + "|" + _INTERP + r")\b|<\()|"
                 r"\b(curl|wget)\b.*(&&|;)\s*(sudo\s+)?(" + _SHELL + r"|chmod\s+\+?[ugoa]*x)\b|\$\(\s*(curl|wget)\b"),
      "it runs a script straight from the internet"),
-    (re.compile(r"\|\s*(sudo\s+|env\s+|exec\s+)*(" + _SHELL + "|" + _INTERP + r")\b|(^|[\s;&|])(source|\.)\s+<\(|"
+    (re.compile(r"\|\s*(sudo\s+|(?:\S*/)?env\s+|exec\s+)*(" + _SHELL + "|" + _INTERP + r")\b|(^|[\s;&|])(source|\.)\s+<\(|"
                 + _SHELL + r"\s+<\(|" + _B + r"eval\b|" + _B + _SHELL + r"\s+(-[a-zA-Z]*c|<)"),
      "it feeds text to a shell or interpreter, so the check can't read what runs"),
     (re.compile(_B + _INTERP + r"(\s+-[A-Za-z-]+)*\s+(-[A-Za-z]*[ceErp]\b|--eval|--print)"), "it runs code the check can't read"),
