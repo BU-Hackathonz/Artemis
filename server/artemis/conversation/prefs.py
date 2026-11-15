@@ -26,15 +26,11 @@ _FOCUS = ("none", "visual", "code")
 
 
 def default_path() -> Path:
-    """`ARTEMIS_PREFS_FILE` if set to an absolute path (a leading ~ is expanded), otherwise
-    ~/.artemis/preferences.json. A relative value is ignored: the core runs in server/, so it would
-    land inside the repo (Avery's review on #103)."""
-    default = Path.home() / ".artemis" / "preferences.json"
+    """`ARTEMIS_PREFS_FILE` if set (a leading ~ is expanded), otherwise ~/.artemis/preferences.json.
+    Where the file may live is the core's call: it refuses a relative path or one inside the
+    projects folder or the repo (core/main.py, #104)."""
     override = os.environ.get("ARTEMIS_PREFS_FILE", "").strip()
-    if not override:
-        return default
-    path = Path(override).expanduser()
-    return path if path.is_absolute() else default
+    return Path(override).expanduser() if override else Path.home() / ".artemis" / "preferences.json"
 
 
 def load_style(path: Path) -> Style:
