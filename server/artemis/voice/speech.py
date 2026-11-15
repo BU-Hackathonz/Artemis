@@ -224,6 +224,7 @@ SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
 FAILURES_BEFORE_SAPI = 3
 PERMANENT_FAILURES = {"HTTP 401", "HTTP 402", "HTTP 403"}  # retrying can't help: give up at once
 STREAM_TIMEOUT_S = 10.0  # one read after the first audio: a slow network stalls, it doesn't cut the line
+STOP_WAIT_S = 0.3  # stop_speech: the longest it waits for the voice to fall silent
 CHUNK_POLL_S = 0.05  # how often a waiting reader checks that its line is still wanted
 _GONE = object()  # _next_chunk: the line was abandoned or canceled while waiting
 FALLBACK_BUSY_TIMEOUT_S = 0.5  # one busy() question to the loop thread
@@ -368,7 +369,6 @@ class ElevenLabsSpeaker:
         self._playing = threading.Event()
         self._idle = threading.Event()
         self._idle.set()
-        self._stream = None  # the open output stream, so cancel() can abort it from the loop thread
         self._failures = 0
         self._handed: threading.Event | None = None  # set when a line went to the local voice
         self.gave_up = False
@@ -421,16 +421,13 @@ class ElevenLabsSpeaker:
     def cancel(self) -> None:
         with self._lock:
             self._gen += 1
-            stream = self._stream
             dropped = list(self._pending) + ([self._now] if self._now is not None else [])
             self._pending.clear()
         for line in dropped:
             line.abandon()  # abandon the downloads, the prefetched one too
-        if stream is not None:
-            try:
-                stream.abort()  # stop the sound now
-            except Exception:
-                pass
+        # The worker aborts its own stream at its next chunk (about 0.1 s). Aborting it from this thread
+        # while the worker sits in write() breaks ALSA (mmap errors), and the next line, often an
+        # approval, then fails to play.
         if self.fallback is not None:
             try:
                 self.fallback.cancel()  # a line that fell back stops too (push-to-talk)
@@ -616,7 +613,6 @@ class ElevenLabsSpeaker:
                 rejected = True
             else:
                 rejected = False
-                self._stream = stream
                 self._playing.set()
         if rejected:
             try:
@@ -629,19 +625,23 @@ class ElevenLabsSpeaker:
             stream.start()
             for chunk in chunks:
                 if not self._current(gen) or (line is not None and line.abandoned.is_set()):
+                    stream.abort()  # interrupted: drop what is buffered, on the thread that writes
                     return None
                 stream.write(chunk)
                 kept += chunk
+            if not self._current(gen) or (line is not None and line.abandoned.is_set()):
+                stream.abort()  # interrupted during the last write: don't drain it
+                return None
             stream.stop()  # drains the buffer, so busy() stays true until the last word is heard
             return bytes(kept) if self._current(gen) and not (line is not None and line.abandoned.is_set()) else None
         except Exception as e:
-            if self._current(gen):
-                log.warning("ElevenLabs playback stopped: %s", type(e).__name__)
+            if self._current(gen) and line is not None and not line.abandoned.is_set():
+                # The audio device failed, not the line: say it with the local voice, never drop it silently.
+                self._playing.clear()
+                self._failed(line, f"playback {type(e).__name__}")
             return None
         finally:
             self._playing.clear()
-            with self._lock:
-                self._stream = None
             try:
                 stream.close()
             except Exception:
@@ -1152,7 +1152,14 @@ class Announcer:
             speaker.speak(text, interrupt=priority == "high")
 
     async def stop_speech(self) -> None:
-        self.current().cancel()
+        speaker = self.current()
+        speaker.cancel()
+        # ElevenLabs stops at its worker's next chunk: wait (briefly) until it is silent, so push-to-talk
+        # never records the end of Artemis's own line.
+        speaking = getattr(speaker, "speaking", None)
+        deadline = time.monotonic() + STOP_WAIT_S
+        while speaking is not None and speaking() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
 
     async def repeat_last(self) -> None:
         if self.last:
