@@ -662,3 +662,155 @@ def test_a_failed_launch_reports_why(tmp_path):
     script.chmod(0o755)
     with pytest.raises(RuntimeError, match="no such app"):
         run(_spawn_detached([str(script)]))
+
+
+# ----- VS Code: how it is installed, what the developer calls it, and what opens in it -----
+
+_VSCODE_INSTALLS = {
+    # deb package: /usr/share/applications/code.desktop
+    "deb": ("code", "Name=Visual Studio Code\nExec=/usr/share/code/code --unity-launch %F\n"
+                    "Categories=Utility;TextEditor;Development;IDE;\n"),
+    # snap: snapd exports code_code.desktop; its Exec starts with env
+    "snap": ("code_code", "Name=Visual Studio Code\nExec=env BAMF_DESKTOP_FILE_HINT=/var/lib/snapd/desktop/"
+                          "applications/code_code.desktop /snap/bin/code --unity-launch %F\n"
+                          "Categories=Utility;TextEditor;Development;IDE;\n"),
+    # flatpak: exported under /var/lib/flatpak/exports/share/applications
+    "flatpak": ("com.visualstudio.code", "Name=Visual Studio Code\nExec=/usr/bin/flatpak run --branch=stable "
+                                         "--arch=x86_64 --command=code com.visualstudio.code %F\n"
+                                         "Categories=Utility;TextEditor;Development;IDE;\n"),
+    # VSCodium, the open build
+    "vscodium": ("codium", "Name=VSCodium\nExec=/usr/share/codium/codium --unity-launch %F\n"
+                           "Categories=TextEditor;IDE;\n"),
+}
+
+
+def _only(home, monkeypatch, **files):
+    """Only these desktop entries are installed: a fake applications folder, nothing from this machine."""
+    folder = home / "apps"
+    folder.mkdir(exist_ok=True)
+    for name, body in files.items():
+        (folder / f"{name}.desktop").write_text("[Desktop Entry]\nType=Application\n" + body)
+    monkeypatch.setattr("artemis.policy.desktop._app_dirs", lambda: [folder])
+    return folder
+
+
+def _launches(monkeypatch):
+    launched = []
+
+    async def fake(argv):
+        launched.append(argv)
+    monkeypatch.setattr("artemis.policy.desktop._spawn_detached", fake)
+    return launched
+
+
+def test_the_app_folders_cover_snap_flatpak_and_the_deb_menu(monkeypatch):
+    from artemis.policy.desktop import _app_dirs
+    monkeypatch.setenv("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
+    folders = [str(p) for p in _app_dirs()]
+    assert "/usr/share/applications" in folders
+    assert "/var/lib/snapd/desktop/applications" in folders
+    assert "/var/lib/flatpak/exports/share/applications" in folders
+
+
+@pytest.mark.parametrize("install", sorted(_VSCODE_INSTALLS))
+@pytest.mark.parametrize("said", ["VS Code", "vscode", "Visual Studio Code", "code", "editor"])
+def test_vs_code_is_found_whatever_the_install(home, monkeypatch, install, said):
+    from artemis.policy.desktop import find_app
+    stem, body = _VSCODE_INSTALLS[install]
+    _only(home, monkeypatch, **{stem: body})
+    assert find_app(said)[0] == f"{stem}.desktop"
+
+
+def test_editor_falls_back_to_the_text_editor_without_vs_code(home, monkeypatch):
+    from artemis.policy.desktop import find_app
+    _only(home, monkeypatch, **{"org.gnome.TextEditor": "Name=Text Editor\nExec=gnome-text-editor %U\n"
+                                                      "Categories=GNOME;GTK;Utility;TextEditor;\n"})
+    assert find_app("editor") == ("org.gnome.TextEditor.desktop", "Text Editor")
+    assert find_app("vs code") is None
+
+
+def test_code_does_not_match_an_app_that_only_contains_it(home, monkeypatch):
+    from artemis.policy.desktop import find_app
+    _only(home, monkeypatch, barcode="Name=Barcode Scanner\nExec=barcode\n")
+    assert find_app("code") is None and find_app("vs code") is None
+
+
+def test_the_launcher_hash_is_the_file_that_launches(home, monkeypatch):
+    from artemis.policy.desktop import app_digest, file_sha256
+    folder = _only(home, monkeypatch, **{"code_code": _VSCODE_INSTALLS["snap"][1]})
+    assert app_digest("code_code.desktop") == file_sha256(folder / "code_code.desktop")
+    assert app_digest("vs code") == file_sha256(folder / "code_code.desktop")
+
+
+def test_a_snap_vs_code_is_an_editor_and_an_env_prefixed_python_is_not(home, monkeypatch):
+    from artemis.policy.desktop import app_is_editor, app_runs_files
+    _only(home, monkeypatch, **{"code_code": _VSCODE_INSTALLS["snap"][1],
+                                "py": "Name=Py\nExec=/usr/bin/env python3 %F\n"})
+    assert app_runs_files("code_code.desktop") is False
+    assert app_is_editor("code_code.desktop") is True
+    assert app_runs_files("py") is True
+
+
+def _project_with_main(g):
+    assert run(g.call("t1", "create_project", {"name": "Hello App"})).ok
+    written = run(g.call("t1", "write_files", {"files": [{"path": "main.py", "content": "print('hi')\n"}]}))
+    assert written.ok, written
+    return Path(g.project.root)
+
+
+def test_vs_code_opens_the_program_the_agent_just_wrote(home, monkeypatch):
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    g, _, _ = gate(home)
+    project = _project_with_main(g)
+    result = run(g.call("t1", "open_path", {"path": "main.py", "with_app": "vs code"}))
+    assert result.ok, result
+    assert launched == [["gtk-launch", "code.desktop", str(project / "main.py")]]
+    assert result.data["with"] == "Visual Studio Code"
+
+
+def test_vs_code_opens_the_project_folder_by_relative_or_full_path(home, monkeypatch):
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    g, _, _ = gate(home)
+    project = _project_with_main(g)
+    assert run(g.call("t1", "open_path", {"path": ".", "with_app": "code"})).ok
+    assert launched[-1] == ["gtk-launch", "code.desktop", str(project)]
+    assert run(g.call("t1", "open_path", {"path": str(project), "with_app": None})).ok
+    assert launched[-1] == ["gio", "open", str(project)]
+
+
+def test_a_program_still_does_not_open_in_the_default_app(home, monkeypatch):
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    g, _, _ = gate(home)
+    _project_with_main(g)
+    assert run(g.call("t1", "open_path", {"path": "main.py", "with_app": None})).error == "path_rejected"
+    assert launched == []
+
+
+def test_vs_code_still_refuses_launchers_and_executables(home, monkeypatch):
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    g, _, _ = gate(home)
+    project = _project_with_main(g)
+    (project / "launch.desktop").write_text("[Desktop Entry]\nExec=sh -c evil\n")
+    (project / "index.html").write_text("<script>1</script>")
+    tool = project / "tool"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    for path in ("launch.desktop", "index.html", "tool"):
+        assert run(g.call("t1", "open_path", {"path": path, "with_app": "vs code"})).error == "path_rejected"
+    assert launched == []
+
+
+def test_a_project_outside_the_home_folder_opens_in_vs_code(tmp_path, home, monkeypatch):
+    from artemis.policy.testing import EventLog, FakeApprovals, FakeRunner
+    _only(home, monkeypatch, **{"code": _VSCODE_INSTALLS["deb"][1]})
+    launched = _launches(monkeypatch)
+    projects = tmp_path / "elsewhere" / "projects"
+    projects.mkdir(parents=True)
+    g = ToolGateway(FakeRunner(projects), FakeApprovals([]), EventLog(), projects_dir=projects)
+    project = _project_with_main(g)
+    assert run(g.call("t1", "open_path", {"path": "main.py", "with_app": "vs code"})).ok
+    assert launched == [["gtk-launch", "code.desktop", str(project / "main.py")]]

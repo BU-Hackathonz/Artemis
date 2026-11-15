@@ -83,6 +83,13 @@ _RUNNABLE_SUFFIXES = {".desktop", ".sh", ".bash", ".zsh", ".appimage", ".run", "
                       ".ps1", ".vbs", ".command", ".jnlp",
                       # A browser runs the scripts in these (and an .svg can hold them).
                       ".html", ".htm", ".xhtml", ".svg", ".svgz", ".mht", ".mhtml"}
+# Source and markup a code editor shows and never runs: what the agent writes for the developer, which
+# may open in VS Code (and only there; in the default app these are refused as above).
+# Browsers run .html and .svg, so they are not here: they are refused in any app.
+_EDITABLE_SUFFIXES = {".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".css",
+                      ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1", ".rb", ".pl", ".lua", ".go", ".rs", ".java",
+                      ".c", ".h", ".cpp", ".hpp", ".cs", ".kt", ".swift", ".php", ".sql", ".json", ".yaml", ".yml",
+                      ".toml", ".md", ".txt"}
 # Terminal apps, which run what they are given (editors are not, see _EDITORS).
 _TERMINAL_APPS = re.compile(r"ptyxis|gnome-terminal|org\.gnome\.console|kgx|kitty|alacritty|xterm|konsole|"
                             r"terminator|tilix|wezterm|\bfoot\b|terminal", re.I)
@@ -317,9 +324,21 @@ def _app_dirs() -> list[Path]:
     return [Path(d) / "applications" for d in data if d]
 
 
-# What people say for an app whose real name differs.
-_ALIASES = {"vs code": "visual studio code", "vscode": "visual studio code", "code": "visual studio code",
-            "browser": "firefox", "web browser": "firefox", "file manager": "files", "editor": "text editor",
+# VS Code and the builds that are VS Code for the developer, by the desktop id or the name each one
+# ships under: deb (code.desktop), snap (code_code.desktop, exported by snapd), flatpak
+# (com.visualstudio.code.desktop), VSCodium. Only these exact matches count, so "code" never picks
+# some other app whose name merely contains it.
+_VSCODE_LOOKUP = ("code", "code_code", "com.visualstudio.code", "code-oss", "visual studio code",
+                  "codium", "com.vscodium.codium", "vscodium")
+_VSCODIUM_LOOKUP = ("codium", "com.vscodium.codium", "vscodium")
+_TEXT_EDITOR_LOOKUP = ("org.gnome.texteditor", "text editor")
+_CODE_IDS = {"code", "code_code", "com.visualstudio.code", "code-oss", "codium", "com.vscodium.codium", "vscodium"}
+# What the developer says for an app: each lookup list is tried in order, exact matches only.
+_FAMILIES = {"vs code": _VSCODE_LOOKUP, "vscode": _VSCODE_LOOKUP, "visual studio code": _VSCODE_LOOKUP,
+             "code": _VSCODE_LOOKUP, "editor": _VSCODE_LOOKUP + _TEXT_EDITOR_LOOKUP,
+             "codium": _VSCODIUM_LOOKUP, "vscodium": _VSCODIUM_LOOKUP}
+# Other names for an app whose real name differs; matched as before, by name or id that contains it.
+_ALIASES = {"browser": "firefox", "web browser": "firefox", "file manager": "files",
             "terminal": "terminal", "calculator": "calculator", "settings": "settings"}
 
 
@@ -329,11 +348,11 @@ _MAX_DESKTOP_FILE = 256 * 1024
 _OWN_FOLDERS = ("Documents", "Desktop", "Downloads", "Projects")
 
 
-def _find_app_file(query: str) -> tuple[Path, str, configparser.SectionProxy] | None:
+def _find_app_file(query: str, exact: bool = False) -> tuple[Path, str, configparser.SectionProxy] | None:
     """(file, display name, entry) of the installed app that best matches `query`: an exact desktop
-    id, then an exact name, then a name or id that contains it. Hidden and NoDisplay apps are skipped."""
+    id, then an exact name, then (unless `exact`) a name or id that contains it. Hidden and NoDisplay
+    apps are skipped."""
     want = query.strip().lower().removesuffix(".desktop")
-    want = _ALIASES.get(want, want)
     if not want:
         return None
     best: tuple[int, Path, str, configparser.SectionProxy] | None = None
@@ -358,31 +377,74 @@ def _find_app_file(query: str) -> tuple[Path, str, configparser.SectionProxy] | 
                 continue
             name = entry.get("Name", file.stem)
             app_id = file.stem.lower()
-            score = 3 if want == app_id else 2 if want == name.lower() else 1 if (want in name.lower() or want in app_id) else 0
+            if want == app_id:
+                score = 3
+            elif want == name.lower():
+                score = 2
+            else:
+                score = 0 if exact else 1 if (want in name.lower() or want in app_id) else 0
             if score and (best is None or score > best[0]):
                 best = (score, file, name, entry)
     return best[1:] if best else None
 
 
+def _lookup(query: str) -> tuple[Path, str, configparser.SectionProxy] | None:
+    """The installed app for what the developer said or for a desktop id: a family ("VS Code", "editor")
+    tries each of its builds in order, exact matches only; anything else is `_find_app_file`."""
+    want = query.strip().lower().removesuffix(".desktop")
+    if want in _FAMILIES:
+        for candidate in _FAMILIES[want]:
+            found = _find_app_file(candidate, exact=True)
+            if found is not None:
+                return found
+        return None
+    return _find_app_file(_ALIASES.get(want, want))
+
+
 def find_app(query: str) -> tuple[str, str] | None:
-    """(desktop id, display name) of the app `_find_app_file` finds."""
-    found = _find_app_file(query)
+    """(desktop id, display name) of the app `_lookup` finds."""
+    found = _lookup(query)
     return (found[0].name, found[1]) if found else None
 
 
 def app_digest(query: str) -> str | None:
     """The sha256 of the .desktop file that would launch, so the approval binds what it runs
     (a user file in ~/.local/share/applications can shadow a system app of the same name)."""
-    found = _find_app_file(query)
+    found = _lookup(query)
     return file_sha256(found[0]) if found else None
+
+
+def _program_words(exec_line: str) -> list[str]:
+    """The program and its first argument in an Exec line, past `env` and VAR=value prefixes: snap's
+    VS Code launches as `env BAMF_DESKTOP_FILE_HINT=... /snap/bin/code`, which is not an interpreter."""
+    words = exec_line.split()
+    while words and (os.path.basename(words[0]) == "env" or re.match(r"[A-Za-z_]\w*=", words[0])):
+        words = words[1:]
+    return words[:2]
+
+
+def app_runs_files(query: str) -> bool:
+    """True for an app that would execute a file it is given: a terminal, or an interpreter."""
+    found = _lookup(query)
+    return found is not None and _runs_files(*found)
 
 
 def _runs_files(file: Path, name: str, entry: configparser.SectionProxy) -> bool:
     """True for an app that would execute a file it is given: a terminal, or an interpreter."""
     if entry.getboolean("Terminal", False) or _TERMINAL_APPS.search(file.stem) or _TERMINAL_APPS.search(name):
         return True
-    words = entry.get("Exec", "").split()
-    return any(_INTERPRETERS.match(os.path.basename(w)) for w in words[:2])
+    return any(_INTERPRETERS.match(os.path.basename(w)) for w in _program_words(entry.get("Exec", "")))
+
+
+def app_is_editor(query: str) -> bool:
+    """True for an app that shows source code and never runs it: VS Code or a build of it, or a text
+    editor or IDE by its categories. Only meaningful after `app_runs_files` is False."""
+    found = _lookup(query)
+    if found is None:
+        return False
+    file, _name, entry = found
+    categories = {c for c in entry.get("Categories", "").split(";") if c}
+    return file.stem.lower() in _CODE_IDS or bool(categories & {"TextEditor", "IDE"})
 
 
 def _in_user_apps(file: Path) -> bool:
@@ -619,12 +681,19 @@ class DesktopTools:
             raise self._tool_error("not_found", f"There is no folder {cwd}.")
         return folder
 
-    def _openable(self, raw: str) -> Path:
+    def _openable(self, raw: str, editor: bool = False) -> Path:
+        """The path to open. `editor` is true when the app it goes to shows source code and never runs
+        it (VS Code): then a program the agent wrote (.py, .js, .html) opens; launchers and executables
+        still don't."""
         path = home_resolve(raw, self._base(), self._roots())
         if not path.exists():
             raise self._tool_error("not_found", f"There is no file or folder {raw}.")
-        if path.is_file() and (path.suffix.lower() in _RUNNABLE_SUFFIXES or os.access(path, os.X_OK)):
-            raise PathRejected(f"{path.name} is a program or a script, so opening it would run it. I only open documents and folders.")
+        if path.is_file():
+            suffix = path.suffix.lower()
+            if editor and suffix in _EDITABLE_SUFFIXES:
+                return path
+            if suffix in _RUNNABLE_SUFFIXES or os.access(path, os.X_OK):
+                raise PathRejected(f"{path.name} is a program or a script, so opening it would run it. I only open documents and folders.")
         return path
 
     def _readable(self, raw: str) -> Path:
@@ -668,20 +737,22 @@ class DesktopTools:
         return {"opened": name, "app_id": app_id}
 
     async def _open_path(self, task_id: str, a: OpenPathArgs) -> dict:
-        path = self._openable(a.path)
         found = _find_app_file(a.with_app) if a.with_app else None
         if a.with_app and found is None:
+            self._openable(a.path)  # a program is refused whichever app was named, before the app's absence
             raise self._tool_error("not_found", f"I couldn't find an app called {a.with_app}.")
         if found and _runs_files(*found):
             raise PathRejected(f"{found[1]} would run the file, not show it, so I won't open anything with it.")
         app = (found[0].name, found[1]) if found else None
+        editor = bool(app) and app_is_editor(app[0])
+        path = self._openable(a.path, editor)
         where = f" in {app[1]}" if app else ""
         findings = _app_findings(found) if found else []  # a planted launcher is blocking, as for open_app
         # Asked when the app's launcher may be planted, or the file is outside the developer's own folders.
         asked = bool(findings) or not self._own_place(path)
 
         def spec() -> DesktopSpec:
-            p = self._openable(a.path)
+            p = self._openable(a.path, editor)
             return DesktopSpec(action="open_path", target=str(p), text=app[0] if app else None,
                                sha256=file_sha256(p) if p.is_file() else None)
 

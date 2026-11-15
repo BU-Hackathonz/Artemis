@@ -409,8 +409,15 @@ def test_a_link_inside_a_project_cannot_read_the_key_without_asking(world):
 def test_open_path_refuses_what_would_run(world, name):
     w = world()
     (w.home / "Documents" / name).write_text("x")
-    for with_app in (None, "text editor"):
-        assert w.call("open_path", {"path": f"~/Documents/{name}", "with_app": with_app}).error == "path_rejected"
+    assert w.call("open_path", {"path": f"~/Documents/{name}", "with_app": None}).error == "path_rejected"
+    assert w.approvals.requests == [] and w.spawned == []
+
+
+@pytest.mark.parametrize("name", ["evil.desktop", "EVIL.DESKTOP", "x.AppImage", "x.jar", "x.run", "x.deb"])
+def test_an_editor_still_does_not_open_a_launcher(world, name):
+    w = world()
+    (w.home / "Documents" / name).write_text("x")
+    assert w.call("open_path", {"path": f"~/Documents/{name}", "with_app": "text editor"}).error == "path_rejected"
     assert w.approvals.requests == [] and w.spawned == []
 
 
