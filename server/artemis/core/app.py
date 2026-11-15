@@ -469,6 +469,8 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
                     await session.error("mic_error", mic_message(exc), "Check the microphone, or type the request.")
                     return
                 await session.spoken(text, cid)
+                if getattr(text, "dropped", None) == "silent":  # a held key with no sound; never a tap
+                    await session.no_speech()
 
             asyncio.create_task(finish())  # the transcript arrives as events
         else:

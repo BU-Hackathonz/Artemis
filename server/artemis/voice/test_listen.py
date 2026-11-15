@@ -646,6 +646,144 @@ def test_warm_initialises_audio_so_the_first_press_is_fast(monkeypatch):
     assert "sounddevice" in sys.modules
 
 
+# ----- why a release gave no request (contracts.md 5.1, Proposed (Avery)) -----
+
+
+def hiss(seconds, level=0.0002):
+    return (np.random.default_rng(3).standard_normal(int(RATE * seconds)) * level).astype(np.float32)
+
+
+def release(v):
+    async def run():
+        await v.start_listening()
+        return await v.stop_listening("cr_1")
+
+    return asyncio.run(run())
+
+
+def test_a_silent_hold_says_it_was_silent_and_never_reaches_whisper():
+    v, model, _ = make(2, audio=hiss(2))
+    heard = release(v)
+    assert heard == "" and heard.dropped == "silent" and model.calls == []
+
+
+def test_a_tap_is_short_and_a_repeated_stop_has_no_reason():
+    v, model, _ = make(0.1)
+    heard = release(v)
+    assert heard == "" and heard.dropped == "short" and model.calls == []
+    again = asyncio.run(v.stop_listening("cr_2"))  # the client's stop barrier: not a release
+    assert again == "" and getattr(again, "dropped", None) is None
+
+
+def test_let_go_during_the_listening_earcon_is_short():
+    v, _, streams = make(1, earcon_s=0.05)
+
+    async def tap():
+        start = asyncio.create_task(v.start_listening())
+        await asyncio.sleep(0.01)
+        heard = await v.stop_listening("cr_1")
+        await start
+        return heard
+
+    heard = asyncio.run(tap())
+    assert heard == "" and heard.dropped == "short" and streams == []
+
+
+def test_speech_is_a_normal_transcript_and_sound_without_words_is_empty():
+    v, _, _ = make(2, text="Artemis,| run main.py")
+    heard = release(v)
+    assert heard == "run main.py" and getattr(heard, "dropped", None) is None
+    v, model, _ = make(2, segs=[Seg(" Thank you.", 0.70)])  # loud enough, but Whisper's words are dropped
+    heard = release(v)
+    assert heard == "" and heard.dropped == "empty" and len(model.calls) == 1
+    v, _, _ = make(2, text="Hey Artemis.")  # only the wake word
+    assert release(v).dropped == "empty"
+
+
+def core_with(v, tmp_path):
+    from artemis.core.test_activity import FakeSpeaker
+    from artemis.core.test_settings import make_core
+    from artemis.voice.speech import Announcer
+
+    v.announcer = Announcer(nvda=FakeSpeaker("nvda"), sapi=FakeSpeaker("sapi"), is_nvda_running=lambda: False)
+    return make_core(v, tmp_path)
+
+
+async def hold_and_release(client, auth, stops=1):
+    await client.post("/voice/listen", headers=auth, json={"action": "start"})
+    for _ in range(stops):
+        await client.post("/voice/listen", headers=auth, json={"action": "stop"})
+    await asyncio.sleep(0.2)
+
+
+@pytest.mark.parametrize("audio, text, line", [
+    (hiss(2), "", True),  # a silent hold: the one fixed line
+    (speech_like(0.1), "", False),  # a tap
+    (None, "create a Python program", False),  # speech
+])
+async def test_only_a_silent_hold_through_the_core_says_check_the_microphone(tmp_path, monkeypatch, audio, text, line):
+    from artemis.core.test_settings import TOKEN, serve
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    monkeypatch.delenv("ARTEMIS_LISTEN_MODE", raising=False)
+    v, _, _ = make(2, audio=audio)
+    core = core_with(v, tmp_path)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    async with serve(core) as client:
+        sid = (await client.post("/sessions", headers=auth)).json()["session_id"]
+        await hold_and_release(client, auth, stops=2)  # a release, then the client's stop barrier
+        history = core.sessions[sid].bus.history
+        errors = [e for e in history if e.type == "error"]
+        finals = [e for e in history if e.type == "transcript.final"]
+        # The stop barrier's empty transcript can come first while Whisper runs; two empties count once.
+        assert [f.data["text"] for f in finals if f.data["text"]] == ([text] if text else [])
+        assert len(finals) == (2 if text else 1)
+        if line:
+            assert len(errors) == 1 and errors[0].task_id is None
+            assert errors[0].data == {"code": "no_speech", "message": "I didn't hear anything.", "recovery": "Check the microphone."}
+            assert errors[0].announce.model_dump() == {"text": "I didn't hear anything. Check the microphone.", "priority": "normal"}
+        else:
+            assert errors == []
+
+
+async def test_wake_mode_room_silence_says_nothing(tmp_path, monkeypatch):
+    from artemis.core.test_settings import TOKEN, serve
+    from artemis.voice.wake import FRAME, WakeListener
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    v, model, _ = make(2)
+    core = core_with(v, tmp_path)
+
+    class Mic:
+        def __init__(self, callback):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    async with serve(core) as client:
+        sid = (await client.post("/sessions", headers=auth)).json()["session_id"]
+        listener = WakeListener(v, core.wake_request, stream_factory=Mic)
+        listener.start()
+        try:
+            room = hiss(5)
+            for i in range(0, len(room), FRAME):  # five seconds of room silence, hands-free
+                listener._on_audio(room[i : i + FRAME].reshape(-1, 1), FRAME, None, None)
+            await asyncio.sleep(0.5)
+        finally:
+            listener.stop()
+        history = core.sessions[sid].bus.history
+        assert model.calls == []
+        assert not [e for e in history if e.type in ("error", "transcript.final")]
+
+
 class SpeakingAnnouncer(FakeAnnouncer):
     async def announce(self, text, priority):
         self.log.append(("say", text, priority))

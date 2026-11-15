@@ -39,7 +39,7 @@ import numpy as np
 
 from . import earcons
 from .speech import Announcer, Priority, RateStatus
-from .text import HOTWORDS, correct_transcript, strip_wake_word, vocabulary_prompt
+from .text import HOTWORDS, Heard, correct_transcript, strip_wake_word, vocabulary_prompt
 
 log = logging.getLogger(__name__)
 
@@ -254,13 +254,15 @@ class WhisperVoice:
         self._stream = stream
 
     async def stop_listening(self, client_request_id: str) -> str:
+        """The transcript. An empty release says why in `dropped` (short, silent or empty)."""
         held = self._wanted  # False for a repeated stop, or after start failed and spoke its error
         self._wanted = False
         self._gen += 1
         if self._stream is None:
             if held:
                 self._earcon("stopped")  # released during the listening earcon: still say the mic is off
-            return ""
+                return Heard("", "short")
+            return ""  # not a release: a repeated stop has no reason, so the core reacts once per release
         stream, self._stream = self._stream, None
         if self.post_roll > 0:
             audio, rolled = await self._roll_then_close(stream)
@@ -271,17 +273,18 @@ class WhisperVoice:
         # can be told apart: a tap, a silent hold, or (later) Whisper's no-speech filter.
         if len(audio) < RATE * (MIN_SECONDS + rolled):
             log.warning("Release dropped: too short (%.2f s of audio, needs %.2f s)", len(audio) / RATE, MIN_SECONDS + rolled)
-            return ""
+            return Heard("", "short")
         level = loudest_rms(audio)
         if level < MIN_RMS:
             log.warning("Release dropped: silent (loudest 100 ms RMS %.5f, needs %.3f)", level, MIN_RMS)
-            return ""  # nobody spoke
+            return Heard("", "silent")  # nobody spoke: the core says "I didn't hear anything."
         self.transcribing = True
         try:
             text = await asyncio.to_thread(self._transcribe, audio)
         finally:
             self.transcribing = False
-        return strip_wake_word(text)
+        text = strip_wake_word(text)
+        return text if text else Heard("", "empty")  # sound, but no words (or only the wake word)
 
     def _close(self, stream) -> np.ndarray:
         """Close the mic and take its audio."""

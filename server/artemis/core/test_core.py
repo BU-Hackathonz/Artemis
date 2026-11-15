@@ -549,6 +549,94 @@ async def test_accidental_tap_is_quiet(client, core, voice):
     assert not session.tasks
 
 
+NO_SPEECH_LINE = "I didn't hear anything. Check the microphone."
+
+
+def releases(voice, *heard):
+    """stop_listening returns these in turn: a release, then the client's stop barrier, and so on."""
+    queue = list(heard)
+
+    async def stop_listening(client_request_id):
+        voice.calls.append("stop")
+        return queue.pop(0) if queue else ""
+
+    voice.stop_listening = stop_listening
+
+
+async def test_a_silent_hold_says_check_the_microphone_once(client, core, voice, monkeypatch):
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    sid, session = await start(client, core)
+    releases(voice, Heard("", "silent"), "")  # the release, then the stop barrier's plain ""
+    before = len(session.bus.history)
+    for _ in range(2):
+        await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "error" for e in s.bus.history[before:]))
+    await asyncio.sleep(0.1)
+    new = session.bus.history[before:]
+    assert [e.type for e in new] == ["transcript.final", "error"]
+    final, error = new
+    assert final.announce is None and final.data["text"] == ""
+    assert error.task_id is None and error.session_id == sid
+    assert error.data == {"code": "no_speech", "message": "I didn't hear anything.", "recovery": "Check the microphone."}
+    assert error.announce.model_dump() == {"text": NO_SPEECH_LINE, "priority": "normal"}
+    assert voice.spoken.count(("normal", NO_SPEECH_LINE)) == 1
+    assert not session.tasks
+
+
+@pytest.mark.parametrize("dropped", ["short", "empty", None])
+async def test_a_tap_or_an_empty_transcript_stays_quiet(client, core, voice, monkeypatch, dropped):
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    _, session = await start(client, core)
+    releases(voice, Heard("", dropped) if dropped else "", "")
+    before = len(session.bus.history)
+    for _ in range(2):
+        await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: len(s.bus.history) > before)
+    await asyncio.sleep(0.1)
+    new = session.bus.history[before:]
+    assert [e.type for e in new] == ["transcript.final"] and new[0].announce is None
+    assert NO_SPEECH_LINE not in [text for _, text in voice.spoken]
+
+
+async def test_speech_is_a_transcript_and_no_error(client, core, voice):
+    _, session = await start(client, core)
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: s.tasks)
+    assert not [e for e in session.bus.history if e.type == "error"]
+    assert [e.data["text"] for e in session.bus.history if e.type == "transcript.final"] == [voice.transcript]
+
+
+async def test_a_silent_hold_with_the_conversation_on_still_says_it_once(client, core, voice, monkeypatch):
+    from artemis.voice.text import Heard
+
+    monkeypatch.setenv("ARTEMIS_CONVERSATION", "on")
+    _, session = await start(client, core)
+    releases(voice, Heard("", "silent"))
+    await client.post("/voice/listen", headers=AUTH, json={"action": "stop"})
+    await wait_for(session, lambda s: any(e.type == "error" for e in s.bus.history))
+    await asyncio.sleep(0.1)
+    errors = [e for e in session.bus.history if e.type == "error"]
+    assert [(e.data["code"], e.announce.priority) for e in errors] == [("no_speech", "normal")]
+    assert not session.tasks
+
+
+async def test_the_wake_word_never_says_check_the_microphone(client, core, voice, monkeypatch):
+    # Hands-free requests come through wake_request, not a push-to-talk release: no reason is read there.
+    from artemis.voice.text import Heard
+
+    monkeypatch.delenv("ARTEMIS_CONVERSATION", raising=False)
+    _, session = await start(client, core)
+    core.wake_request("")
+    core.wake_request(Heard("", "silent"))
+    await asyncio.sleep(0.2)
+    assert not [e for e in session.bus.history if e.type == "error"]
+    assert NO_SPEECH_LINE not in [text for _, text in voice.spoken]
+
+
 # ----- interpreter pre-check (risk 7) -----
 
 
