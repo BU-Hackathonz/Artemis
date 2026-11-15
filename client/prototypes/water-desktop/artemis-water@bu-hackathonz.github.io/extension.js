@@ -372,7 +372,7 @@ export default class ArtemisWaterExtension extends Extension {
         if (this._homeTimer) GLib.source_remove(this._homeTimer);
         const from = {x: this._agent.x, y: this._agent.y};
         const dist = Math.hypot(home.x - from.x, home.y - from.y);
-        const ms = Math.min(1100, 350 + dist * 0.6);
+        const ms = 1.6 * Math.min(1100, 350 + dist * 0.6); // as slow as the flow out (presets.js FLOW_SLOWDOWN)
         const t0 = GLib.get_monotonic_time();
         this._homeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ACTIVE_MS, () => {
             const t = Math.min((GLib.get_monotonic_time() - t0) / 1000 / ms, 1);

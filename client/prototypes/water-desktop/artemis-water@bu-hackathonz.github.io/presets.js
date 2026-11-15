@@ -16,6 +16,7 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const STEP_MS = 16;
+const FLOW_SLOWDOWN = 1.6;   // every flight takes this many times longer than its listed ms
 
 class Cancelled extends Error {}
 
@@ -121,7 +122,7 @@ export class CommandRunner {
         const a = this.pos();
         const dx = x - a.x, dy = y - a.y;
         const c = {x: a.x + dx / 2 - dy * bend, y: a.y + dy / 2 + dx * bend};
-        const steps = Math.max(1, Math.round(ms / STEP_MS));
+        const steps = Math.max(1, Math.round(ms * FLOW_SLOWDOWN / STEP_MS));
         for (let i = 1; i <= steps; i++) {
             const t = easeInOut(i / steps);
             const u = 1 - t;
