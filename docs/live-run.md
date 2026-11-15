@@ -9,7 +9,13 @@ Use this tonight. Quotes are exact strings from the code or the demo runbook; an
 2. Install and enable the island: `bash infra/setup-ubuntu.sh --extension-dir client/prototypes/water-desktop/artemis-water@bu-hackathonz.github.io`.
 3. On Wayland (the script says so when `XDG_SESSION_TYPE=wayland`): log out and back in, then run the
    `gnome-extensions enable ...` line the script prints.
-4. Check the ring: the GNOME island should show at the top edge after login.
+4. Check the island loaded and is current (the installed copy is not a link, so a pull alone changes nothing):
+   - `gnome-extensions info artemis-water@bu-hackathonz.github.io` must say `State: ACTIVE`.
+     `ERROR` with a `GLib.FileError` in `journalctl --user -b -o cat /usr/bin/gnome-shell` means the schema was
+     not compiled: rerun step 2 (setup compiles it and stops if it cannot).
+   - `cat ~/.local/share/gnome-shell/extensions/artemis-water@bu-hackathonz.github.io/installed-from` must match
+     `git rev-parse --short HEAD`. If not, rerun step 2 and log out and back in.
+   - The island shows at the top edge after login.
 
 ## Start
 
