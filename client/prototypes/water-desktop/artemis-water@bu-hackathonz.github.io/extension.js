@@ -418,6 +418,7 @@ export default class ArtemisWaterExtension extends Extension {
 
     /** A typed request from the island: the core's answer, as the island's message. */
     async _ask(text) {
+        this._prompt = text; // the panel's goal for the task this starts
         const r = this._core ? await this._core.submitTask(text) : {ok: false, reason: 'not_connected'};
         if (r.ok) return {ok: true};
         const message = {
@@ -458,9 +459,54 @@ export default class ArtemisWaterExtension extends Extension {
     _onEvent(event) {
         if (!this._settings) return;
         this._state = reduce(this._state, event);
+        this._panelEvent(event);
         if (event.type === 'approval.requested') this._openApproval(event.data ?? {});
         else if (event.type === 'approval.resolved' && event.data?.approval_id === this._approval?.approval_id) this._closeApproval();
         this._applyState();
+    }
+
+    // Jun's panel (#170): recent requests and the steps of the selected one, from the same events.
+    // It only shows; the state above (islandState) still decides what the island and ring say.
+    _panelEvent(ev) {
+        const I = this._island;
+        if (!I) return;
+        const d = ev.data ?? {}, tid = ev.task_id;
+        const say = (ev.announce?.text ?? '').replace(/\.$/, '');
+        switch (ev.type) {
+        case 'transcript.final':
+            if (d.text) this._prompt = d.text;
+            break;
+        case 'task.state':
+            if (tid && !I.taskById(tid) && ['queued', 'working'].includes(d.state)) {
+                I.taskStart(this._prompt ?? (say.replace(/^Working on:\s*/, '') || 'Request'), tid);
+                this._prompt = null;
+            }
+            if (d.state === 'running' && say) I.taskStep(tid, say);
+            else if (d.state === 'succeeded') I.taskEnd(tid, this._answers?.get(tid) ?? 'Done.', false);
+            else if (d.state === 'failed') I.taskEnd(tid, this._errors?.get(tid) ?? 'The task failed.', true);
+            else if (d.state === 'canceled') I.taskEnd(tid, 'Canceled.', true);
+            break;
+        case 'agent.message':
+            if (d.kind === 'progress' && !/^still working/i.test(d.text ?? '')) I.taskStep(tid, (d.text ?? '').replace(/\.$/, ''));
+            else if (d.kind !== 'progress' && tid) (this._answers ??= new Map()).set(tid, d.text);
+            break;
+        case 'file.changed':
+            if (say) I.taskStep(tid, say);
+            break;
+        case 'approval.requested':
+            I.taskStep(tid, d.kind === 'run_program' ? 'Waiting for your approval to run' : 'Waiting for your approval to write');
+            I.taskApproval(tid, d.summary ?? '');
+            break;
+        case 'approval.resolved':
+            I.taskApproval(tid, null);
+            break;
+        case 'run.result':
+            I.taskStep(tid, d.timed_out ? 'The run timed out' : `Ran it: exit code ${d.exit_code}`);
+            break;
+        case 'error':
+            if (tid) (this._errors ??= new Map()).set(tid, `${d.message ?? ''} ${d.recovery ?? ''}`.trim());
+            break;
+        }
     }
 
     // A drop keeps the task and its approval: a reconnect to the same session replays only what was
