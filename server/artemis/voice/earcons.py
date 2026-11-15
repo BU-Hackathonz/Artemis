@@ -1,8 +1,9 @@
 """Earcons: short, quiet tones generated in code (no audio files).
 
 Rising pair = listening, falling pair = stopped. Three rising notes = success, two low falling notes =
-failure, a high double knock = approval needed. All at VOLUME and at most 250 ms. The result and
-approval sounds are defined here only: wiring them to events is a core change, not done yet.
+failure, a high double knock = approval needed, one soft low tone = still working (opt-in, contracts.md 5.7).
+All at VOLUME (the tick at half) and at most 250 ms. The core plays the result and approval sounds
+(opt-in, contracts.md 5.5); the voice plays the rest.
 """
 
 from __future__ import annotations

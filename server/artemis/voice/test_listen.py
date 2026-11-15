@@ -15,7 +15,7 @@ LIST_PROMPT = ("Hey Artemis, Artemis, Python, main.py, print, prints, Hello Worl
 DEMO_WORDS = ["Python", "print", "prints", "Hello World", "main.py", "function", "variable", "program", "run", "file",
               "create"]
 SETTINGS = ("ARTEMIS_WHISPER_MODEL", "ARTEMIS_WHISPER_BEAM", "ARTEMIS_PTT_POST_ROLL", "ARTEMIS_WHISPER_PROMPT",
-            "ARTEMIS_WHISPER_HOTWORDS")
+            "ARTEMIS_WHISPER_HOTWORDS", "ARTEMIS_WORKING_CUE")
 
 
 @pytest.fixture(autouse=True)
@@ -561,15 +561,17 @@ class Speaking:
         return self.is_busy
 
 
-def working_voice(on=True, busy=False, sapi_up=True):
+def working_voice(on=True, busy=False, sapi_up=True, durations=None, post_roll=None, model=None):
     from artemis.voice.speech import Announcer
 
     sapi = Speaking(busy)
     sapi.available = lambda: sapi_up
     played = []
+    durations = durations or {}
     v = WhisperVoice(announcer=Announcer(nvda=Speaking(), sapi=sapi, is_nvda_running=lambda: False),
-                     model=FakeModel("x"), stream_factory=lambda cb: FakeStream(cb, speech_like(1)),
-                     earcon=lambda name: (played.append(name), 0.0)[1], working_earcon=on)
+                     model=model or FakeModel("x"), stream_factory=lambda cb: FakeStream(cb, speech_like(1)),
+                     earcon=lambda name: (played.append(name), durations.get(name, 0.0))[1], working_earcon=on,
+                     post_roll=post_roll)
     return v, played, sapi
 
 
@@ -600,6 +602,10 @@ def test_no_working_tick_when_no_voice_can_speak():
     assert v.working_cue is None  # voice_ready is false: the live region needs the words
 
 
+def heartbeat_events(session):
+    return [e for e in session.bus.history if e.type == "agent.message" and e.data["kind"] == "progress"]
+
+
 def test_core_heartbeat_plays_the_tick_instead_of_the_line(tmp_path):
     from artemis.core.session import STILL_WORKING, Session
 
@@ -611,6 +617,199 @@ def test_core_heartbeat_plays_the_tick_instead_of_the_line(tmp_path):
             assert played == ["working"] and STILL_WORKING not in sapi.said
         else:
             assert played == [] and sapi.said == [STILL_WORKING]
+
+
+def test_the_log_still_gets_still_working_when_the_tick_replaces_it(tmp_path):
+    # contracts.md 2: the client renders every event's announce.text in the log region. With the tick on,
+    # a screen-reader user without sound must still find "Still working." there: same event, only unspoken.
+    import json
+
+    from artemis.core.session import STILL_WORKING, Session
+
+    seen = {}
+    for on in (False, True):
+        v, _, _ = working_voice(on=on)
+        session = Session(f"ses_{on}", voice=v, runner=None, agent=None, projects_dir=tmp_path, log_dir=tmp_path)
+        queue = session.bus.subscribe()
+        asyncio.run(session._still_working("tsk_1"))
+        [event] = heartbeat_events(session)
+        assert queue.get_nowait() is event  # the SSE stream gets it
+        assert json.loads((tmp_path / f"ses_{on}.jsonl").read_text())["announce"]["text"] == STILL_WORKING
+        seen[on] = event.model_dump(exclude={"seq", "session_id", "at"})
+    assert seen[True] == seen[False]  # the client can't tell the two apart
+    assert seen[True]["announce"] == {"text": STILL_WORKING, "priority": "low"}
+    assert seen[True]["data"] == {"text": STILL_WORKING, "kind": "progress"}
+
+
+def test_a_skipped_tick_still_sends_the_line_unspoken(tmp_path):
+    from artemis.core.session import STILL_WORKING, Session
+
+    v, played, sapi = working_voice()
+    session = Session("ses_t", voice=v, runner=None, agent=None, projects_dir=tmp_path)
+
+    async def run():
+        await v.start_listening()  # push-to-talk owns the mic: no tick, and no spoken line either
+        await session._still_working("tsk_1")
+        await v.stop_listening("cr_1")
+
+    asyncio.run(run())
+    assert "working" not in played and sapi.said == []
+    assert [e.announce.text for e in heartbeat_events(session)] == [STILL_WORKING]
+
+
+def test_a_failing_tick_never_stops_the_log_line(tmp_path, caplog):
+    from artemis.core.session import STILL_WORKING, Session
+
+    v, _, sapi = working_voice()
+
+    def broken(name):
+        raise RuntimeError("no device")
+
+    v._play_earcon = broken
+    session = Session("ses_t", voice=v, runner=None, agent=None, projects_dir=tmp_path)
+    asyncio.run(session._still_working("tsk_1"))
+    assert [e.announce.text for e in heartbeat_events(session)] == [STILL_WORKING] and sapi.said == []
+    assert "working cue failed" in caplog.text
+
+
+def test_no_tick_from_the_press_until_the_mic_closes():
+    # The listening earcon before the mic opens, the open mic, and the opt-in post-roll after release.
+    v, played, _ = working_voice(post_roll=0.05)
+
+    async def run():
+        v._wanted = True  # pressed; the listening earcon is still playing
+        assert not v._tick()
+        v._wanted = False
+        await v.start_listening()
+        assert not v._tick()  # the mic is open
+        stop = asyncio.create_task(v.stop_listening("cr_1"))
+        await asyncio.sleep(0.01)
+        assert v._tail is not None and not v._tick()  # post-roll: still recording
+        await stop
+
+    asyncio.run(run())
+    assert played == ["listening", "stopped"]
+
+
+def test_no_tick_while_whisper_transcribes():
+    seen = []
+
+    class Slow(FakeModel):
+        def transcribe(self, audio, **kw):
+            seen.append(v._tick())  # the heartbeat lands while Whisper runs
+            return super().transcribe(audio, **kw)
+
+    v, played, _ = working_voice(model=Slow("hello"))
+
+    async def run():
+        await v.start_listening()
+        await v.stop_listening("cr_1")
+
+    asyncio.run(run())
+    assert seen == [False] and "working" not in played
+    assert v._tick() and played[-1] == "working"  # after it, the next beat ticks
+
+
+def test_no_tick_while_another_earcon_is_still_playing():
+    import time
+
+    v, played, _ = working_voice(durations={"stopped": 0.05, "working": 0.09})
+
+    async def run():
+        await v.start_listening()
+        await v.stop_listening("cr_1")
+
+    asyncio.run(run())
+    assert not v._tick()  # "stopped" is still audible: a tick would cut it off (sounddevice plays one at a time)
+    time.sleep(0.06)
+    assert v._tick() and played[-1] == "working"
+
+
+def test_no_tick_over_a_line_the_fallback_is_saying():
+    # ElevenLabs handed the line to the local voice: current() isn't busy, but Artemis is audible.
+    v, played, _ = working_voice()
+    v.announcer.speaking_engine = lambda: "speechd"
+    assert not v._tick()
+    v.announcer.speaking_engine = lambda: None
+    assert v._tick()
+
+    def broken():
+        raise OSError("gone")
+
+    v.announcer.speaking_engine = broken
+    assert not v._tick()  # can't tell: stay quiet
+    assert played == ["working"]
+
+
+def test_no_tick_while_the_wake_word_request_is_being_heard():
+    class Wake:
+        armed = True
+
+    v, played, _ = working_voice()
+    v.wake_listener = Wake()
+    assert not v._tick()
+    Wake.armed = False
+    assert v._tick() and played == ["working"]
+
+
+def test_the_wake_listener_drops_the_mic_during_the_tick():
+    import time
+
+    from artemis.voice.listen import TICK_GUARD_S
+    from artemis.voice.wake import WakeListener
+
+    v, _, _ = working_voice(durations={"working": 0.09})
+    listener = WakeListener(v, lambda text: None, stream_factory=lambda cb: FakeStream(cb, speech_like(0)))
+    assert not listener._muted()
+    assert v._tick() and listener._muted()  # the tick is not a request
+    time.sleep(0.09 + TICK_GUARD_S + 0.02)
+    assert not listener._muted()
+
+
+def test_the_tick_is_an_earcon_on_the_shared_path_short_quiet_and_precomputed():
+    import inspect
+
+    from artemis.voice import earcons
+
+    default = inspect.signature(WhisperVoice).parameters["earcon"].default
+    assert default is earcons.play  # the same player as "listening" and "stopped"
+    sound = earcons.SOUNDS["working"]
+    assert sound.dtype == np.float32 and len(sound) * 1000 // earcons.RATE == 90 <= earcons.MAX_MS
+    assert float(np.abs(sound).max()) <= earcons.VOLUME / 2 + 1e-6  # half the other earcons
+    v, played, _ = working_voice()
+    v.working_cue()
+    assert played == ["working"]  # the voice's own earcon player, by name: no new audio path
+
+
+def test_a_tick_costs_almost_nothing():
+    import time
+
+    v, played, _ = working_voice()
+    began = time.perf_counter()
+    for _ in range(1000):
+        v.working_cue()
+    assert time.perf_counter() - began < 1.0  # one beat every 3 s; a thousand take well under a second
+    assert played.count("working") == 1000
+
+
+def test_app_start_wake_tells_the_voice_about_the_listener(tmp_path, monkeypatch):
+    from artemis.core.test_settings import make_core
+    from artemis.voice import wake
+
+    class Listener:
+        armed = False
+
+        def __init__(self, voice, on_request):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(wake, "WakeListener", Listener)
+    v, _, _ = working_voice()
+    core = make_core(v, tmp_path)
+    core.start_wake()
+    assert isinstance(v.wake_listener, Listener) and core.wake is v.wake_listener
 
 
 def test_transcribing_is_true_only_while_whisper_runs():
@@ -639,7 +838,10 @@ def test_warm_initialises_audio_so_the_first_press_is_fast(monkeypatch):
     # core startup, so after it the first push-to-talk doesn't pay that cost.
     import sys
 
-    pytest.importorskip("sounddevice")
+    try:
+        import sounddevice  # noqa: F401
+    except (ImportError, OSError):  # no PortAudio on this machine (a CI container): nothing to initialise
+        pytest.skip("sounddevice or PortAudio is not installed")
     monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
     v, _, _ = make(1)
     v.warm()

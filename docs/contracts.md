@@ -75,7 +75,7 @@ being said instead of cutting it off (**Proposed (David)**). The agent's final a
 |---|---|
 | `transcript.partial` / `transcript.final` | `{text, client_request_id, intent?}`. `text` is the transcript exactly as the voice returned it (the voice strips a leading "Artemis" or "Hey Artemis"; the core never rewrites it). `transcript.final` is announced "Heard: …" at normal unless it starts a task (then it is silent, and a spoken request is not read back at all: the agent's plan is the first thing heard; a typed one is read back once by "Working on: …", §5.1); an empty one is silent; after a silent push-to-talk hold the core adds one `no_speech` `error`, §5.1, **Proposed (Avery)**). `intent` is set when the conversation controller is on and the text isn't empty (§5.4); otherwise null. `transcript.partial` is reserved: the core never emits it (Whisper transcribes once, on release) |
 | `task.state` | `{state, reason?}`, where `state` ∈ `queued, working, awaiting_reply, awaiting_approval, running, succeeded, failed, canceled`. `awaiting_reply` is reserved and unused in the MVP. Spoken: `queued` ("Working on: …", normal, typed requests only), `running` ("Running main.py.", low) and `canceled` ("Canceled.", high); the others are silent. `failed` follows an `error` event that speaks the reason ("The task failed. … You can try again.") and carries the failure code as `reason` |
-| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`, then 6 s, then every 9 s while nothing else is said) is `progress` at `low`. A sentence the agent writes beside a tool call is said as `progress` at `low` |
+| `agent.message` | `{text, kind: "answer"\|"question"\|"progress"}`. The agent's answers are `normal` and its progress `low`; the core's "Still working." heartbeat (after about 3 s of silence while `working` or `running`, then 6 s, then every 9 s while nothing else is said) is `progress` at `low` (with the opt-in tick, §5.7, the same event is sent but not spoken). A sentence the agent writes beside a tool call is said as `progress` at `low` |
 | `approval.requested` | `Approval` (below), announced at normal, after whatever Artemis is saying, as "Approval needed. <summary>" (a blocking one says only its summary, which starts "Blocked:"), right after `task.state` `awaiting_approval`. Still open 10 s later, it is said once more, when Artemis is quiet, as an `agent.message` `progress` at normal: "Still waiting for your approval. <summary>" (**Proposed (David)**) |
 | `approval.resolved` | `{approval_id, decision: "approve"\|"reject", by: "user"\|"invalidated"}`, not announced. An invalidated one (files changed, or the task was canceled) carries `"reject"` |
 | `file.changed` | `{op_id, path, action: "created"\|"modified"\|"deleted", lines_added, lines_removed}`, announced "Created main.py, 1 line." at normal. No tool deletes, so `deleted` is never sent today |
@@ -198,7 +198,7 @@ The event bus calls `announce()` for every event that has an `announce` field, s
 component speaks directly. The core also uses these when a voice has them (none are required):
 `warm()` (load the speech model at startup), `announcer` (`status()` for `voice_ready` and
 `screen_reader`, `watch()` for `voice.status` changes, `current().busy()`), `set_rate(delta)`
-(§5.3) and `working_cue()` (replaces the "Still working." line; no voice has one yet).
+(§5.3) and `working_cue` (a callable, or None to keep the spoken "Still working." line; §5.7).
 
 ### 3.4 Runner (Avery, infrastructure)
 
@@ -428,6 +428,24 @@ It starts nothing that typing couldn't, and every write and run still needs a ke
   listening tone, for 10 s once the question has been said: the reply needs no "Hey Artemis"
   (**Proposed (David)**).
 - Push-to-talk keeps working alongside. Without the variable nothing changes.
+
+### 5.7 Working tick (**Proposed (Avery)**, opt-in: `ARTEMIS_WORKING_CUE=earcon`, default off)
+Like §5.5, an earcon that adds to the words, never a replacement for them in the event stream. With it
+off (unset, `off` or `spoken`, and the voice setting `working_cue` false, §7), nothing changes: the
+heartbeat says "Still working." as in §2. With it on, and only while the voice can speak (`voice_ready`):
+- The heartbeat (same timing: about 3 s of silence while `working` or `running`) plays the voice's
+  `"working"` earcon, one 90 ms tone at half the earcon volume, instead of saying the line. It goes
+  through the same audio output as every other earcon, so it mixes with Orca, NVDA and Artemis's voice
+  instead of cutting them, and they don't cut it (a result earcon, §5.5, that starts during it replaces it).
+- **The client sees the same event as before**: `agent.message` `{text: "Still working.", kind:
+  "progress"}` with `announce` "Still working." at `low`. The core just doesn't speak it. The log
+  region still shows it, so a screen-reader user without sound still gets the progress line.
+- No tick (the beat is skipped, the event is still sent): from the push-to-talk press until the mic
+  closes (§5.1, post-roll included), while transcribing, while the wake word's request window is open
+  (§5.6), while another of the voice's earcons is playing, or while Artemis is speaking or has a line
+  queued. In wake mode the microphone's audio is dropped during the tick and 0.2 s after, as for speech.
+- With `voice_ready` false the voice offers no tick, and the line is spoken (and the live region is on)
+  as with the flag off.
 
 ## 6. Launcher and launch token (decided 2026-11-14)
 

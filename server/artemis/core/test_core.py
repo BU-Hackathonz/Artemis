@@ -543,6 +543,23 @@ async def test_bus_adds_envelope_and_speaks():
     assert (event.seq, event.session_id) == (1, "ses_1") and spoken == ["hi"]
 
 
+async def test_bus_can_send_an_announce_without_speaking_it(tmp_path):
+    # The opt-in working tick (§5.7): the event, its announce included, reaches the stream, the
+    # replay history and the log, but the voice doesn't say it.
+    spoken = []
+
+    async def speak(text, priority):
+        spoken.append(text)
+
+    bus = EventBus("ses_1", speak=speak, log_path=tmp_path / "ses_1.jsonl")
+    q = bus.subscribe()
+    await bus.emit(EventDraft(type="agent.message", announce={"text": "Still working.", "priority": "low"},
+                              data={"text": "Still working.", "kind": "progress"}), speak=False)
+    event = q.get_nowait()
+    assert event.announce.text == "Still working." and bus.since(0) == [event] and spoken == []
+    assert "Still working." in (tmp_path / "ses_1.jsonl").read_text()
+
+
 async def test_approvals_hash_must_match():
     approvals = SessionApprovals()
     a = Approval(approval_id="apr_1", kind="write_files", approval_hash="sha256:x", summary="s")
@@ -760,8 +777,10 @@ async def test_heartbeat_prefers_a_voice_cue_and_survives_its_failure(client, co
     voice.working_cue = working_cue
     agent = SlowAgent()
     session, tid = await submit_slow(client, core, agent)
-    await wait_for(session, lambda s: len(cues) >= 2)
-    assert still_working(session) == []  # the earcon replaces the spoken line
+    await wait_for(session, lambda s: len(cues) >= 2 and len(still_working(s)) >= 2)
+    # The earcon replaces the spoken line, not the event: the log still says "Still working." (§5.7).
+    assert all(e.announce.text == "Still working." for e in still_working(session))
+    assert ("low", "Still working.") not in voice.spoken
     agent.release.set()
     await wait_for(session, lambda s: not s.tasks[tid].active)
     assert session.tasks[tid].state == "succeeded"
