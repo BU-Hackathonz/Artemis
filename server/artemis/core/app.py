@@ -43,6 +43,10 @@ PING_S = 15
 NO_INTERPRETER_RECOVERY = "Until then I can write files but not run them."
 
 
+class MuteBody(BaseModel):
+    muted: bool
+
+
 class ListenBody(BaseModel):
     action: str  # "start" | "stop"
 
@@ -115,6 +119,8 @@ class Core:
         self.watch_task: asyncio.Task | None = None
         self.activity_task: asyncio.Task | None = None
         self.wake = None  # the "Hey Artemis" listener, when ARTEMIS_LISTEN_MODE=wake
+        self.muted = False  # listening switched off (POST /voice/mute): no wake word, no push-to-talk, mic closed
+        self._wake_wanted = False  # the wake word was on before muting, so unmuting turns it back on
         self.activity: tuple[str, str | None] = ("idle", None)  # the last voice.activity sent
         self.heartbeat_s = heartbeat_s
         # Where the answer style is remembered (conversation mode only). None, the default, remembers
@@ -291,6 +297,31 @@ class Core:
             log.warning("Wake word could not start the microphone (%s); push-to-talk only", type(e).__name__)
             return
         self.wake = listener
+
+    async def set_muted(self, muted: bool) -> None:
+        """Switch all listening off or on (the island's shortcut). Off closes the microphone: the wake
+        listener stops, and an open push-to-talk is closed and dropped. Said once either way."""
+        if muted == self.muted:
+            return
+        self.muted = muted
+        session = self.current()
+        if muted:
+            self._wake_wanted = self.wake is not None
+            if self.wake is not None:
+                self.wake.stop()
+                self.wake = None
+            if getattr(self.voice, "busy_listening", False):
+                try:
+                    await self.voice.stop_listening("cr_muted")  # what was being recorded is dropped
+                except Exception:
+                    log.exception("could not close push-to-talk while muting")
+            line = "Listening is off. Press the same shortcut to turn it back on."
+        else:
+            if self._wake_wanted:
+                self.start_wake()
+            line = "Listening is on."
+        if session is not None:
+            await session.say(None, line, "high")
 
     def wire_voice(self) -> None:
         """Say the ElevenLabs fallback notice through the bus when that voice gives up. Called at
@@ -496,11 +527,19 @@ def create_app(core: Core, token: str, *, warm_voice: bool = True) -> FastAPI:
             raise HTTPException(404, {"error": "desktop_op_not_found"})
         return Response(status_code=204)
 
+    @app.post("/voice/mute")
+    async def mute(body: MuteBody):
+        await core.set_muted(body.muted)
+        return {"muted": core.muted}
+
     @app.post("/voice/listen", status_code=204)
     async def listen(body: ListenBody):
         session = core.current()
         if session is None:
             raise HTTPException(409, {"error": "no_session"})
+        if core.muted and body.action == "start":
+            await session.say(None, "Listening is off. Press the same shortcut to turn it back on.", "high")
+            return JSONResponse({"error": "muted"}, status_code=409)
         if body.action == "start":
             try:
                 await core.voice.start_listening()  # §5.1: it stops speech and plays the earcon itself

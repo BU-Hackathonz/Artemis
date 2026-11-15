@@ -35,6 +35,19 @@ Errors outside the table: a missing or wrong token is `401 {error: "unauthorized
 | PATCH | `/settings/voice` | `VoiceSettingsPatch` (§7), only the fields to change → `200 VoiceSettings` | **Proposed (Avery).** Saves the file, applies it to the voice from the next line, and returns what is now in effect. `422 {error: "invalid_setting", field}` for a bad value, an unknown key or `active_engine`; `409 {error: "set_by_environment", field}` for a field an environment variable pins. Nothing is saved when either applies |
 | GET | `/voices` | → `{voices: [{engine, id, name}]}` | **Proposed (Avery).** The installed SAPI voices and, when `ELEVENLABS_API_KEY` is set, the ElevenLabs voices. No other field, and no key, leaves here |
 
+**From David's test run (Proposed (David)):**
+- `POST /voice/mute {muted}` → `200 {muted}` switches all listening off or on. Off closes the
+  microphone: the wake listener stops, and an open push-to-talk is closed and dropped. While muted,
+  `/voice/listen start` gives `409 {error: "muted"}`. Each change is said once. The island binds it to
+  the `mute-listening` shortcut, Control Alt M by default.
+- When the developer decides an approval, the core stops the voice only if the line playing is that
+  approval's own summary or its reminder. A line that started after it, such as an error or a blocked
+  warning, plays to the end.
+- While Artemis speaks, the wake listener still hears the mic (`ARTEMIS_BARGE_IN=on`, the default).
+  It acts only on "Hey Artemis …" or a stop word ("stop", "wait", "be quiet"), and never on its own
+  line coming back from the speakers: most words matching what it is saying. It then stops speaking
+  at once and takes the request, if one was said. Push-to-talk speech never counts as an interruption.
+
 ## 2. Core → client: the event stream
 
 One envelope for everything. The client renders every event's `announce.text` in the log

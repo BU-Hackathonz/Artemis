@@ -137,13 +137,17 @@ export class Island {
 
     /** Where the ring sits (stage px): the droplet leaves from and returns to here. */
     ringCenter() {
-        const [x, y] = this._dead ? [0, 0] : this._ring.get_transformed_position();
-        const [w, h] = this._dead ? [0, 0] : this._ring.get_transformed_size();
-        if (!w) {
-            const m = Main.layoutManager.primaryMonitor;
-            return {x: m.x + m.width / 2, y: m.y + Main.layoutManager.panelBox.height + 40 * this._scale};
+        // From where the pill was just placed (set_position is immediate) plus the ring's box inside it,
+        // not get_transformed_position(): that lags a relayout by a frame, so a ring re-centred right after
+        // the pill changed width (a status shown or hidden) landed where the slot had been, out of line.
+        if (!this._dead) {
+            const [px, py] = this._pill.get_position();
+            const box = this._ring.get_allocation_box();
+            const w = box.x2 - box.x1, h = box.y2 - box.y1;
+            if (w > 0 && h > 0) return {x: px + box.x1 + w / 2, y: py + box.y1 + h / 2};
         }
-        return {x: x + w / 2, y: y + h / 2};
+        const m = Main.layoutManager.primaryMonitor;
+        return {x: m.x + m.width / 2, y: m.y + Main.layoutManager.panelBox.height + 40 * this._scale};
     }
 
     toggle() { this._menu?.toggle(); }

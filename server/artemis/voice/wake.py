@@ -193,6 +193,37 @@ VOICE_STAY = 0.35   # and that keeps it going
 # Short stock phrases a small Whisper model produces from noise or silence. Never a request.
 HALLUCINATIONS = {"you", "thank you", "thanks for watching", "thank you for watching", "bye", "so"}
 
+# Interrupting Artemis while it speaks (David's test run): only these, or "Hey Artemis ...", cut it off.
+STOP_WORDS = {"stop", "stop talking", "artemis stop", "stop artemis", "be quiet", "quiet", "wait", "hold on",
+              "shut up", "enough", "okay stop", "ok stop"}
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def is_echo(heard: str, saying: str | None) -> bool:
+    """True when what the mic heard is mostly Artemis's own line from the speakers: most of its words are in
+    the line Artemis is saying now. "Hey Artemis, stop" over "I'm Artemis, a coding assistant" is not."""
+    said = _words(heard)
+    if not said or not saying:
+        return False
+    line = set(_words(saying))
+    return sum(w in line for w in said) / len(said) >= 0.6
+
+
+def barge_request(heard: str, saying: str | None) -> str | None:
+    """While Artemis speaks: None to ignore what was heard (its own voice, or other talk); "" to just stop
+    it ("stop", a bare "Hey Artemis"); otherwise the request said after "Hey Artemis"."""
+    if is_echo(heard, saying):
+        return None
+    found = wake_request(heard)
+    if found is not None:
+        return "" if " ".join(_words(found)) in STOP_WORDS else found  # "Hey Artemis, stop" only stops it
+    if " ".join(_words(heard)) in STOP_WORDS:
+        return ""
+    return None
+
 
 class VoiceDetector:
     """Speech probability per 100 ms frame from Silero VAD, which ships with faster-whisper (no new
@@ -261,7 +292,7 @@ def denoise(audio: np.ndarray, noise: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class Event:
-    kind: str  # "wake", "request", "ignored", "suppressed", "timeout", "misheard" (a quick wake taken back), "reply" (listening for the answer to a question)
+    kind: str  # "wake", "request", "ignored", "suppressed", "timeout", "misheard" (a quick wake taken back), "reply" (listening for the answer to a question), "barge" (Artemis was interrupted while speaking; text is the request, or "")
     text: str = ""
     seconds: float = 0.0  # length of the utterance
     quiet_s: float = 0.0  # quiet after the last word before it was decided (the end silence)
@@ -301,7 +332,9 @@ class WakeLoop:
       so a one-breath request does not wait for both models.
     - Anything else is `ignored`: its text is not kept (only the word count), because it is
       other people's conversation.
-    - While `speaking()` is true, audio is dropped unheard, so Artemis can't wake itself.
+    - While `speaking()` is true, audio is dropped unheard, so Artemis can't wake itself. With `saying`
+      set, it is heard instead, but only "Hey Artemis ..." or a stop word that isn't Artemis's own line
+      (`barge_request`) counts, as `barge`: the listener stops Artemis and takes the request.
     - `expect_reply()` (Artemis just asked the user a question) opens the same window with no wake
       phrase, as `reply`, once Artemis has finished saying the question (or after `reply_wait_s` if it
       was never heard speaking), for `reply_window_s`.
@@ -322,6 +355,8 @@ class WakeLoop:
         quick_max_s: float = 1.5,  # more voice than this before the pause is not a bare "Hey Artemis" (about 0.9 s)
         reply_window_s: float = 10.0,  # after a question: how long the reply needs no wake phrase
         reply_wait_s: float = 3.0,  # after a question: arm this soon if Artemis is never heard saying it
+        saying: Callable[[], str | None] | None = None,  # Artemis's line now; set: it can be interrupted by voice
+        barge_ok: Callable[[], bool] = lambda: True,  # False while push-to-talk has the mic: that speech is not ours
     ) -> None:
         self.transcribe = transcribe
         self.quick = quick
@@ -345,6 +380,8 @@ class WakeLoop:
         self.reply_wait_frames = round(reply_wait_s * RATE / FRAME)
         self._reply_heard = False  # Artemis was heard speaking since expect_reply()
         self._reply_wait = 0  # frames left to wait for the question to be said; 0: no reply expected
+        self.saying = saying  # None: the mic is dropped while Artemis speaks, as before
+        self.barge_ok = barge_ok
 
     @property
     def armed(self) -> bool:
@@ -376,6 +413,8 @@ class WakeLoop:
         if talking or self._tail > 0:
             if not talking:
                 self._tail -= 1
+            if self.saying is not None:
+                return self._over_speech(frame)
             self.segmenter.reset()
             self._early = None
             self.stats.suppressed += 1
@@ -439,6 +478,31 @@ class WakeLoop:
         self.stats.requests += 1
         self._armed = 0
         return self._emit(Event("request", request, seconds, quiet, took))
+
+    def _over_speech(self, frame: np.ndarray) -> Event | None:
+        """Artemis is speaking: keep listening, but only "Hey Artemis ..." or a stop word counts, and never
+        Artemis's own line coming back from the speakers (is_echo). Nothing else is kept."""
+        if not self.barge_ok():
+            self.segmenter.reset()  # push-to-talk owns the mic: what is said there goes to push-to-talk only
+            self.stats.suppressed += 1
+            return None
+        voice = self.vad(frame) if self.vad is not None else None
+        audio = self.segmenter.feed(frame, voice)
+        if audio is None:
+            return None
+        text, took = self._hear(audio)
+        del audio
+        try:
+            saying = self.saying()
+        except Exception:
+            saying = None
+        request = barge_request(text or "", saying)
+        if request is None:
+            self.stats.suppressed += 1
+            return None
+        self.stats.wakes += 1
+        self._armed = self.window_frames if request == "" else 0
+        return self._emit(Event("barge", request, len(text.split()) / 2.5, 0.0, took))
 
     def _hear(self, audio: np.ndarray, transcribe: Callable[[np.ndarray], str | None] | None = None) -> tuple:
         """(transcript, seconds it took), the audio denoised first. The transcript is None when a quick
@@ -523,6 +587,12 @@ def quick_model() -> str | None:
     return raw or QUICK_MODEL
 
 
+def barge_in_enabled() -> bool:
+    """ARTEMIS_BARGE_IN: on (the default) lets "Hey Artemis" or "stop" interrupt Artemis while it speaks;
+    off drops the mic while it speaks, as before."""
+    return os.environ.get("ARTEMIS_BARGE_IN", "on").strip().lower() not in ("off", "0", "no", "false")
+
+
 def _frame_stream(callback):
     import sounddevice as sd
 
@@ -557,7 +627,8 @@ class WakeListener:
             self._quick_name = quick_model()
             self.wake = make(self._transcribe, speaking=self._speaking, vad=vad,
                              segmenter=Segmenter(pre_roll_s=0.5) if vad is not None else None,
-                             quick=self._quick if self._quick_name else None)
+                             quick=self._quick if self._quick_name else None,
+                             saying=self._saying if barge_in_enabled() else None, barge_ok=self._not_push_to_talk)
         else:
             self.wake = make(self._transcribe, speaking=self._speaking)
 
@@ -583,6 +654,15 @@ class WakeListener:
             return bool(announcer.current().busy())  # a queued or downloading line is about to be heard
         except Exception:
             return True  # can't tell: safer not to listen than to hear ourselves
+
+    def _not_push_to_talk(self) -> bool:
+        voice = self.voice
+        return not (getattr(voice, "busy_listening", getattr(voice, "listening", False)) or getattr(voice, "transcribing", False))
+
+    def _saying(self) -> str | None:
+        """Artemis's line now (the announcer's last), so its own voice from the speakers isn't taken for an
+        interruption."""
+        return getattr(getattr(self.voice, "announcer", None), "last", None)
 
     def _speaking(self) -> bool:
         """Muted now, or when the frame being processed was captured: a slow transcription backs frames up, and
@@ -665,10 +745,30 @@ class WakeListener:
             self._earcon("stopped")
             if self._loop is not None and not self._loop.is_closed():
                 self._loop.call_soon_threadsafe(self.on_request, event.text)
+        elif event.kind == "barge":
+            log.warning("Wake word: interrupted Artemis %.2f s after the last word", event.whisper_s)
+            if self._loop is not None and not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(self._interrupt, event.text)
         elif event.kind == "ignored":
             log.info("Wake word: ignored speech (%s)", event.text)  # a word count, never the words
         elif event.kind in ("timeout", "misheard"):
             self._earcon("stopped")
+
+    def _interrupt(self, request: str) -> None:
+        """On the event loop: stop Artemis at once, then take the request said after "Hey Artemis" (if any),
+        or listen for one (a bare "Hey Artemis"); a stop word only stops it."""
+        async def go():
+            announcer = getattr(self.voice, "announcer", None)
+            if announcer is not None:
+                await announcer.stop_speech()
+            if request:
+                self._earcon("stopped")
+                result = self.on_request(request)
+                if asyncio.iscoroutine(result):
+                    await result
+            else:
+                self._earcon("listening")
+        asyncio.ensure_future(go())
 
     def _earcon(self, name: str) -> None:
         play = getattr(self.voice, "_earcon", None)

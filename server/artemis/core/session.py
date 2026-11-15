@@ -175,6 +175,7 @@ class Session:
     ):
         self.session_id = session_id
         self.voice = voice
+        self._summaries: dict[str, str] = {}  # approval id -> its spoken summary, until it is decided
         self.runner = runner
         self.heartbeat_s = heartbeat_s
         self._quiet_since = time.monotonic()  # last announcement or task state change
@@ -255,10 +256,15 @@ class Session:
             reminder.add_done_callback(lambda _t, aid=aid: self._reminders.pop(aid, None))
         if draft.type == "approval.requested" and self.conversation:
             self._watch_heard(draft.data.get("approval_id"))
+        if draft.type == "approval.requested":
+            self._summaries[draft.data.get("approval_id")] = draft.data.get("summary") or ""
         if draft.type == "approval.resolved":
             reminder = self._reminders.pop(draft.data.get("approval_id"), None)
             if reminder is not None and reminder is not asyncio.current_task():
                 reminder.cancel()  # decided: nothing to remind
+            summary = self._summaries.pop(draft.data.get("approval_id"), None)
+            if draft.data.get("by") == "user":
+                await self._cut_decided(summary)
         if draft.type == "task.state" and draft.task_id in self.tasks:
             self.tasks[draft.task_id].state = draft.data["state"]
             await self._cue_done(self.tasks[draft.task_id])
@@ -668,6 +674,19 @@ class Session:
         job = asyncio.create_task(watch())
         self._heard_watch.add(job)
         job.add_done_callback(self._heard_watch.discard)
+
+    async def _cut_decided(self, summary: str | None) -> None:
+        """Decided before the summary finished: stop reading it (David's test run). Only when the line
+        playing is that approval's own summary (or its reminder): if anything else has started since (an
+        error, a blocked warning, a failure), that is something the developer has to hear, and it plays."""
+        announcer = getattr(self.voice, "announcer", None)
+        last = getattr(announcer, "last", None)
+        if not summary or not last or not self._speaking() or not last.strip().endswith(summary.strip()):
+            return
+        try:
+            await self.voice.stop_speech()
+        except Exception:  # a voice that can't stop just finishes the line
+            log.exception("could not stop the decided approval's summary")
 
     def _speaking(self) -> bool:
         """True only when we know Artemis is speaking. NVDA can't tell us, so that is False."""

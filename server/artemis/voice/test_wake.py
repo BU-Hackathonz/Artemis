@@ -743,3 +743,48 @@ def test_the_reply_window_plays_the_listening_tone():
         if event is not None:
             listener._handle(event)
     assert played == ["listening"] and listener.armed
+
+
+# ----- interrupting Artemis while it speaks (David's test run) -----
+
+from artemis.voice.wake import barge_request, is_echo  # noqa: E402
+
+
+@pytest.mark.parametrize("heard,saying,expected", [
+    ("Hey Artemis, stop.", "I'm building the page now.", ""),
+    ("Hey Artemis, open Google.", "I'm building the page now.", "open Google."),
+    ("Stop.", "I'm building the page now.", ""),
+    ("Wait.", "Here is the plan.", ""),
+    ("I'm building the page now.", "I'm building the page now.", None),        # its own voice
+    ("Hi, I'm Artemis, a voice-first coding assistant.", "Hi, I'm Artemis, a voice-first coding assistant, and I can build.", None),
+    ("so about lunch", "I'm building the page now.", None),                    # other talk
+])
+def test_what_counts_as_an_interruption(heard, saying, expected):
+    assert barge_request(heard, saying) == expected
+
+
+def test_hey_artemis_over_its_own_name_is_not_an_echo():
+    assert is_echo("Hey Artemis, stop", "I'm Artemis, a coding assistant") is False
+
+
+def test_while_speaking_hey_artemis_with_a_request_interrupts():
+    loop = WakeLoop(Script("Hey Artemis, open Google."), speaking=lambda: True, saying=lambda: "Here is the plan.")
+    events = feed(loop, quiet(1) + utterance())
+    assert [(e.kind, e.text) for e in events] == [("barge", "open Google.")]
+
+
+def test_while_speaking_its_own_words_never_interrupt():
+    line = "I made the page and opened it in Firefox."
+    loop = WakeLoop(Script(line), speaking=lambda: True, saying=lambda: line)
+    assert feed(loop, quiet(1) + utterance()) == []
+
+
+def test_while_speaking_without_saying_the_mic_is_dropped_as_before():
+    loop = WakeLoop(Script("Hey Artemis, stop."), speaking=lambda: True)
+    assert feed(loop, quiet(1) + utterance()) == []
+
+
+def test_push_to_talk_speech_is_never_an_interruption():
+    loop = WakeLoop(Script("Hey Artemis, stop."), speaking=lambda: True, saying=lambda: "Here is the plan.",
+                    barge_ok=lambda: False)
+    assert feed(loop, quiet(1) + utterance()) == []
