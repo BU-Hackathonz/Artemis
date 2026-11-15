@@ -520,7 +520,7 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     // Push-to-talk: the shortcut opens the microphone; it closes when Control and Shift are both
-    // let go, or when the shortcut is pressed again.
+    // let go (key repeats while held are ignored).
     _addPushToTalk() {
         const action = Main.wm.addKeybinding('push-to-talk', this._settings, Meta.KeyBindingFlags.NONE,
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this._pushToTalk());
@@ -530,7 +530,10 @@ export default class ArtemisWaterExtension extends Extension {
 
     _pushToTalk() {
         if (!this._core) return;
-        if (this._listening) { this._stopListening(); return; }
+        // Holding the shortcut repeats it (the key auto-repeats), so while the mic is open further
+        // activations are ignored: only letting go of Control and Shift stops listening. A toggle
+        // here turned each repeat into a start/stop pair (David's laptop: dozens of 0.01 s releases).
+        if (this._listening) return;
         this._listening = true;
         // A quick release can come before the core has answered the start: the stop waits for it,
         // so the two never arrive out of order and leave the mic open.
