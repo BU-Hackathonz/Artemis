@@ -850,3 +850,70 @@ def test_a_line_whose_playback_fails_is_said_by_the_local_voice_not_dropped():
     assert e.wait_idle(3)
     wait_for(lambda: sapi.said)
     assert sapi.said == [("Write main.py? Enter to approve, Escape to reject.", False)]
+
+
+class TalkingFallback(FakeSpeaker):
+    def __init__(self):
+        super().__init__("speechd")
+        self.talking = False
+
+    def busy(self):
+        return self.talking
+
+
+def test_busy_while_the_local_voice_says_a_line_handed_to_it():
+    """Yaovi's #196 review: a line that fell back to the local voice is still Artemis talking, so the
+    approval reminder and the voice-approval guard wait for it."""
+    import time as _time
+    local = TalkingFallback()
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=local)
+    local.talking = True
+    assert not e.busy()  # nothing was handed over: the local voice is not asked at all
+    e._handed_at, e._handed_s = _time.monotonic(), 5.0  # a line just fell back
+    assert e.busy()  # speechd answers from any thread
+
+    async def on_loop():
+        e._loop = asyncio.get_running_loop()
+        return e.busy()
+
+    assert asyncio.run(on_loop())
+    local.talking = False
+    assert not e.busy() and e._handed_at is None  # finished: back to never asking
+
+
+class NeverAskMe(FakeSpeaker):
+    def busy(self):
+        raise AssertionError("SAPI must not be asked off its loop")
+
+
+def test_busy_never_waits_on_the_loop_and_never_asks_sapi_off_it():
+    """busy() runs on the wake word's mic thread every 32 ms: it must never block on a loop round trip."""
+    import time as _time
+    sapi = NeverAskMe("sapi")
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=sapi)
+    e._handed_at, e._handed_s = _time.monotonic(), 5.0
+    started = _time.monotonic()
+    assert e.busy()  # fresh hand-off: counts as talking, by estimate
+    e._handed_at = _time.monotonic() - 6.0
+    assert not e.busy()  # past the estimate
+    assert _time.monotonic() - started < 0.05
+    e._handed_at = _time.monotonic()
+    e.cancel()
+    assert not e.busy()  # push-to-talk stopped it
+
+
+def test_busy_in_the_gap_before_the_loop_hands_the_line_over():
+    """Yaovi's #199 review: between the hand-off and speak() on the loop, the local voice is not busy
+    yet; busy() must still say True and keep asking after, not give up on the hand-off."""
+    import threading
+    import time as _time
+    local = TalkingFallback()
+    e = ElevenLabsSpeaker(api_key=KEY, voice_id="voice_abc", fallback=local)
+    e._handed_event = threading.Event()
+    e._handed_at, e._handed_s = _time.monotonic(), 5.0
+    assert e.busy() and e._handed_at is not None  # speak() not run yet
+    local.talking = True
+    e._handed_event.set()
+    assert e.busy()
+    local.talking = False
+    assert not e.busy()

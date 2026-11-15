@@ -229,6 +229,8 @@ CHUNK_POLL_S = 0.05  # how often a waiting reader checks that its line is still 
 _GONE = object()  # _next_chunk: the line was abandoned or canceled while waiting
 FALLBACK_BUSY_TIMEOUT_S = 0.5  # one busy() question to the loop thread
 FALLBACK_UNSURE_WAIT_S = 2.0  # keep waiting this long when the local voice cannot be asked
+LOCAL_WORDS_PER_SECOND = 2.5  # a slow local voice, for the SAPI estimate only
+FALLBACK_TALK_MAX_S = 30.0  # busy() stops asking the local voice this long after a hand-off
 FALLBACK_WAIT_S = 30.0  # the longest a queued line waits for the local voice to finish a fallen-back line
 def _local_voice_name() -> str:
     return "NVDA or the Windows voice" if sys.platform == "win32" else "the offline voice"
@@ -371,6 +373,9 @@ class ElevenLabsSpeaker:
         self._idle.set()
         self._failures = 0
         self._handed: threading.Event | None = None  # set when a line went to the local voice
+        self._handed_at: float | None = None  # when the last line went to the local voice
+        self._handed_s = 0.0  # about how long the local voice takes to say it
+        self._handed_event: threading.Event | None = None  # set once the local voice was given the line
         self.gave_up = False
         self._cache: dict[tuple, bytes] = {}
         self.last_first_audio_s: float | None = None
@@ -428,6 +433,7 @@ class ElevenLabsSpeaker:
         # The worker aborts its own stream at its next chunk (about 0.1 s). Aborting it from this thread
         # while the worker sits in write() breaks ALSA (mmap errors), and the next line, often an
         # approval, then fails to play.
+        self._handed_at = None
         if self.fallback is not None:
             try:
                 self.fallback.cancel()  # a line that fell back stops too (push-to-talk)
@@ -435,8 +441,39 @@ class ElevenLabsSpeaker:
                 pass
 
     def busy(self) -> bool:
+        """Called often and from any thread (the wake word asks on every 32 ms mic frame): never waits."""
         with self._lock:
-            return self._playing.is_set() or self._now is not None or bool(self._pending)
+            if self._playing.is_set() or self._now is not None or bool(self._pending):
+                return True
+        return self._fallback_talking()
+
+    def _fallback_talking(self) -> bool:
+        """A line handed to the local voice is still Artemis talking. Asked only after a hand-off, and
+        never by waiting on the loop: speechd and NVDA answer from any thread; SAPI's COM object belongs
+        to the loop, so off the loop it counts as talking while the hand-off is fresh."""
+        handed_at = self._handed_at
+        if handed_at is None or self.fallback is None:
+            return False
+        if time.monotonic() - handed_at > FALLBACK_TALK_MAX_S:
+            self._handed_at = None
+            return False
+        handed = self._handed_event
+        if handed is not None and not handed.is_set():
+            return True  # handed over, but speak() hasn't run on the loop yet
+        try:
+            on_loop = asyncio.get_running_loop() is self._loop
+        except RuntimeError:
+            on_loop = False
+        target = getattr(self.fallback, "_last", self.fallback)
+        if not on_loop and getattr(target, "name", "") == "sapi":
+            return time.monotonic() - handed_at < self._handed_s
+        try:
+            talking = bool(self.fallback.busy())
+        except Exception:
+            talking = False
+        if not talking:
+            self._handed_at = None
+        return talking
 
     def speaking(self) -> bool:
         """Audio is playing now (a queued or downloading line is not speech yet)."""
@@ -687,6 +724,9 @@ class ElevenLabsSpeaker:
                 handed.set()
 
         self._handed = handed
+        self._handed_event = handed  # until the loop has called speak(), the local voice can't say it's busy
+        self._handed_at = time.monotonic()  # busy() asks the local voice from now on (_fallback_talking)
+        self._handed_s = speech_seconds(text, LOCAL_WORDS_PER_SECOND) + 1.0  # SAPI off the loop: an estimate
         self._on_loop(speak)
 
     def _hold_for_fallback(self, gen: int) -> None:
