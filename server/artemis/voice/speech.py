@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol
@@ -221,6 +222,8 @@ ELEVEN_PCM_RATE = 22_050  # output_format=pcm_22050: 16-bit mono, playable as ea
 SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.7, 1.2, 0.1
 FAILURES_BEFORE_SAPI = 3
 PERMANENT_FAILURES = {"HTTP 401", "HTTP 402", "HTTP 403"}  # retrying can't help: give up at once
+STREAM_TIMEOUT_S = 10.0  # one read after the first audio: a slow network stalls, it doesn't cut the line
+FALLBACK_WAIT_S = 30.0  # the longest a queued line waits for the local voice to finish a fallen-back line
 def _local_voice_name() -> str:
     return "NVDA or the Windows voice" if sys.platform == "win32" else "the offline voice"
 
@@ -297,12 +300,39 @@ def voice_engine() -> str:
     return raw if raw in ENGINES else "elevenlabs"
 
 
+class _Line:
+    """One queued ElevenLabs line and its download (started early when it is next in line)."""
+
+    def __init__(self, gen: int, text: str, priority: str) -> None:
+        self.gen, self.text, self.priority = gen, text, priority
+        self.chunks: queue.Queue = queue.Queue()  # audio chunks, then None at the end, or the error
+        self.started = False
+        self.abandoned = threading.Event()
+        self.response = None
+
+    def abandon(self) -> None:
+        """Stop the download and never play this line: canceled, or stale."""
+        self.abandoned.set()
+        self.close()
+
+    def close(self) -> None:
+        response, self.response = self.response, None
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+
+
 class ElevenLabsSpeaker:
     """ElevenLabs streaming text-to-speech, played as the first audio chunk arrives.
 
-    The network and the audio device run on one worker thread, so the event loop never waits on them.
-    A line that can't start within the timeout (no key, a failed request, a slow first chunk) is spoken
-    by the fallback speaker instead (NVDA when it runs, else SAPI). After FAILURES_BEFORE_SAPI failures
+    The audio device runs on one worker thread and each download on its own, so the event loop never
+    waits on them. Lines play in order: only an interrupt cuts the one playing, a newer line drops a
+    progress line not heard yet, and the next queued line downloads while this one plays. A line that
+    can't start within the timeout (no key, a failed request, a slow first chunk) is spoken by the
+    fallback speaker instead (NVDA when it runs, else SAPI, else speech-dispatcher), and ElevenLabs
+    waits for it to finish before its next line. Every fallback is logged with its reason. After FAILURES_BEFORE_SAPI failures
     in a row this speaker reports unavailable for the rest of the session, so the router falls back
     too. When NVDA runs, every line also goes to the braille display through `braille`. The API key is
     only ever sent in the request header: it is never logged, spoken or put in an event.
@@ -325,15 +355,17 @@ class ElevenLabsSpeaker:
         self.on_give_up = on_give_up  # the core can set this to say FALLBACK_NOTICE through the bus
         self.braille: Callable[[str], None] | None = None  # set by the Announcer: NVDA's braille display
         self._opener, self._output = opener, output
-        self._queue: queue.Queue = queue.Queue()
+        self._pending: deque[_Line] = deque()  # lines waiting their turn, oldest first
+        self._now: _Line | None = None  # the line the worker is fetching or playing
         self._gen = 0  # bumped by cancel (and so by interrupt): work holding an older number stops
         self._lock = threading.Lock()
+        self._wake = threading.Condition(self._lock)
         self._playing = threading.Event()
         self._idle = threading.Event()
         self._idle.set()
         self._stream = None  # the open output stream, so cancel() can abort it from the loop thread
-        self._response = None  # the open HTTP response, so cancel() can abandon the download
         self._failures = 0
+        self._handed: threading.Event | None = None  # set when a line went to the local voice
         self.gave_up = False
         self._cache: dict[tuple, bytes] = {}
         self.last_first_audio_s: float | None = None
@@ -349,7 +381,9 @@ class ElevenLabsSpeaker:
     def available(self) -> bool:
         return bool(self._key) and self.voice_id != PLACEHOLDER_VOICE and not self.gave_up
 
-    def speak(self, text: str, interrupt: bool) -> None:
+    def speak(self, text: str, interrupt: bool, priority: Priority | None = None) -> None:
+        """Queue a line. Only an interrupt (a high line) cuts the line playing; a normal line waits its
+        turn. Any new line drops a low progress line that is not audible yet: it is stale."""
         try:
             self._loop = asyncio.get_running_loop()  # the SAPI fallback must run on the loop's thread (COM)
         except RuntimeError:
@@ -362,28 +396,36 @@ class ElevenLabsSpeaker:
             except Exception:
                 pass
         with self._lock:
-            gen = self._gen
+            stale = [line for line in self._pending if line.priority == "low"]
+            for old in stale:
+                self._pending.remove(old)
+            if self._now is not None and self._now.priority == "low" and not self._playing.is_set():
+                stale.append(self._now)
+            for old in stale:
+                old.abandoned.set()  # the worker skips it; its download is closed below, off the lock
+            line = _Line(self._gen, text, priority or ("high" if interrupt else "normal"))
             self._idle.clear()
-            self._queue.put((gen, text))
+            self._pending.append(line)
+            self._wake.notify()
             if self._worker is None or not self._worker.is_alive():
                 self._worker = threading.Thread(target=self._run, name="artemis-elevenlabs", daemon=True)
                 self._worker.start()
+        for old in stale:
+            old.close()
 
     def cancel(self) -> None:
         with self._lock:
             self._gen += 1
-            stream, response = self._stream, self._response
+            stream = self._stream
+            dropped = list(self._pending) + ([self._now] if self._now is not None else [])
+            self._pending.clear()
+        for line in dropped:
+            line.abandon()  # abandon the downloads, the prefetched one too
+        if stream is not None:
             try:
-                while True:
-                    self._queue.get_nowait()
-            except queue.Empty:
+                stream.abort()  # stop the sound now
+            except Exception:
                 pass
-        for thing, how in ((stream, "abort"), (response, "close")):
-            if thing is not None:
-                try:
-                    getattr(thing, how)()  # stop the sound now, and abandon the download
-                except Exception:
-                    pass
         if self.fallback is not None:
             try:
                 self.fallback.cancel()  # a line that fell back stops too (push-to-talk)
@@ -391,7 +433,8 @@ class ElevenLabsSpeaker:
                 pass
 
     def busy(self) -> bool:
-        return self._playing.is_set() or not self._queue.empty()
+        with self._lock:
+            return self._playing.is_set() or self._now is not None or bool(self._pending)
 
     def speaking(self) -> bool:
         """Audio is playing now (a queued or downloading line is not speech yet)."""
@@ -420,49 +463,107 @@ class ElevenLabsSpeaker:
 
     def _run(self) -> None:
         while True:
-            try:
-                gen, text = self._queue.get(timeout=0.5)
-            except queue.Empty:
-                with self._lock:
-                    if self._queue.empty():
-                        self._idle.set()
-                        self._worker = None
-                        return
-                continue
-            if self._current(gen):
-                self._say(gen, text)
             with self._lock:
-                if self._queue.empty():
+                if not self._pending:
+                    self._wake.wait(0.5)
+                if not self._pending:
+                    self._now = None
+                    self._idle.set()
+                    self._worker = None
+                    return
+                line = self._now = self._pending.popleft()
+            if line.gen == self._gen_now() and not line.abandoned.is_set():
+                self._say(line)
+            with self._lock:
+                self._now = None
+                if not self._pending:
                     self._idle.set()
 
-    def _say(self, gen: int, text: str) -> None:
-        key = (self.voice_id, self.model, self.speed, text)
+    def _gen_now(self) -> int:
+        with self._lock:
+            return self._gen
+
+    def _cache_key(self, text: str) -> tuple:
+        return (self.voice_id, self.model, self.speed, text)
+
+    def _prefetch_next(self) -> None:
+        """Start downloading the next queued line while this one plays, so it starts with no gap."""
+        with self._lock:
+            line = self._pending[0] if self._pending else None
+        if line is not None and self._cache_key(line.text) not in self._cache:
+            self._start(line)
+
+    def _start(self, line: _Line) -> None:
+        with self._lock:
+            if line.started:
+                return
+            line.started = True
+        threading.Thread(target=self._download, args=(line,), name="artemis-elevenlabs-fetch", daemon=True).start()
+
+    def _download(self, line: _Line) -> None:
+        """Fetch thread: put each audio chunk on the line's queue, then None at the end, or the error."""
+        try:
+            for chunk in self._fetch(line):
+                if line.abandoned.is_set():
+                    return
+                line.chunks.put(chunk)
+            line.chunks.put(None)
+        except Exception as e:
+            line.chunks.put(e)
+
+    def _chunks(self, line: _Line, first: bytes):
+        """The rest of the line's audio. A stall or error mid-line is logged with its reason."""
+        yield first
+        while True:
+            try:
+                item = line.chunks.get(timeout=STREAM_TIMEOUT_S)
+            except queue.Empty:
+                item = TimeoutError("timed out")
+            if item is None:
+                return
+            if isinstance(item, Exception):
+                if not line.abandoned.is_set():
+                    log.warning("ElevenLabs stream stopped mid-line (%s); the rest of this line is lost",
+                                self._reason(item))
+                return
+            yield item
+
+    def _say(self, line: _Line) -> None:
+        gen, text = line.gen, line.text
+        key = self._cache_key(text)
         cached = self._cache.get(key)
         if cached is not None:
             self.last_first_audio_s = 0.0
+            self._prefetch_next()
+            self._hold_for_fallback(gen)
             self._play(iter([cached]), gen)
             return
         started = time.monotonic()
+        self._start(line)  # already running when it was prefetched
         try:
-            chunks = self._fetch(text)
-            first = next(chunks)
-        except StopIteration:
-            self._failed(text, gen, "the stream returned no audio")
-            return
-        except Exception as e:
-            self._failed(text, gen, self._reason(e))
+            first = line.chunks.get(timeout=self.timeout_s)
+        except queue.Empty:
+            first = TimeoutError("timed out")
+        if line.abandoned.is_set():
+            return  # canceled, or a stale progress line: a newer line arrived before it was heard
+        if first is None or isinstance(first, Exception):
+            line.abandon()
+            self._failed(line, "the stream returned no audio" if first is None else self._reason(first))
             return
         self.last_first_audio_s = time.monotonic() - started
+        log.debug("ElevenLabs first audio in %.2f s", self.last_first_audio_s)
         self._failures = 0
-        played = self._play(_chain(first, chunks), gen)
+        self._prefetch_next()
+        self._hold_for_fallback(gen)
+        played = self._play(self._chunks(line, first), gen)
         if played is not None and text in CACHED_LINES:
             self._cache[key] = played
 
-    def _fetch(self, text: str):
+    def _fetch(self, line: _Line):
         # The only place text leaves the computer: redact here, so answers, "Heard:" transcripts and
         # error lines that never passed the gateway are scrubbed too. The fallback speakers are local.
         body = json.dumps({
-            "text": redact(text),
+            "text": redact(line.text),
             "model_id": self.model,
             "voice_settings": {"stability": self.stability, "similarity_boost": 0.75,
                                "use_speaker_boost": True, "speed": self.speed},
@@ -472,9 +573,12 @@ class ElevenLabsSpeaker:
             url, data=body, method="POST",
             headers={"xi-api-key": self._key, "Content-Type": "application/json", "Accept": "audio/pcm"},
         )
-        response = self._opener(request, self.timeout_s)
-        with self._lock:
-            self._response = response
+        # The socket timeout covers each read; the first-audio deadline is timeout_s, kept by _say.
+        response = self._opener(request, max(self.timeout_s, STREAM_TIMEOUT_S))
+        line.response = response
+        if line.abandoned.is_set():
+            line.close()  # canceled while connecting
+            return
         try:
             while True:
                 chunk = response.read(4096)
@@ -482,12 +586,7 @@ class ElevenLabsSpeaker:
                     return
                 yield chunk
         finally:
-            with self._lock:
-                self._response = None
-            try:
-                response.close()
-            except Exception:
-                pass
+            line.close()
 
     def _play(self, chunks, gen: int) -> bytes | None:
         """Play PCM chunks as they come. Returns the whole audio if it played to the end, else None."""
@@ -529,7 +628,8 @@ class ElevenLabsSpeaker:
             return "no audio within the timeout"
         return type(e).__name__
 
-    def _failed(self, text: str, gen: int, reason: str) -> None:
+    def _failed(self, line: _Line, reason: str) -> None:
+        text, gen = line.text, line.gen
         if not self._current(gen):
             return  # canceled meanwhile: say nothing
         self._failures += 1
@@ -537,7 +637,6 @@ class ElevenLabsSpeaker:
             # A bad key, a plan without API access to this voice (402, e.g. a free key with a library voice),
             # or forbidden: no later line can succeed, so give up now instead of trying every line.
             self._failures = FAILURES_BEFORE_SAPI
-        log.warning("ElevenLabs failed (%s); this line uses the local voice", reason)
         if self._failures >= FAILURES_BEFORE_SAPI and not self.gave_up:
             self.gave_up = True
             log.warning("ElevenLabs failed %d times in a row; using the local voice for this session", self._failures)
@@ -546,8 +645,36 @@ class ElevenLabsSpeaker:
                 self._on_loop(self.on_give_up, notice)
             else:
                 log.warning("Not spoken yet (the core doesn't wire it): %s", notice)
-        if self.fallback is not None and self.fallback.available():
-            self._on_loop(self.fallback.speak, text, False)
+        if self.fallback is None or not self.fallback.available():
+            log.warning("ElevenLabs failed (%s) and no local voice is available; this line is not spoken", reason)
+            return
+        log.warning("ElevenLabs failed (%s); this line uses the local voice", reason)
+        handed = threading.Event()
+
+        def speak() -> None:
+            try:
+                self.fallback.speak(text, False)
+            finally:
+                handed.set()
+
+        self._handed = handed
+        self._on_loop(speak)
+
+    def _hold_for_fallback(self, gen: int) -> None:
+        """Before ElevenLabs plays again, let the local voice finish the line it was handed: two voices
+        never overlap. Called once the next line's audio is ready, so the wait costs no download time."""
+        handed, self._handed = self._handed, None
+        if handed is None or self.fallback is None:
+            return
+        handed.wait(1.0)
+        deadline = time.monotonic() + FALLBACK_WAIT_S
+        while self._current(gen) and time.monotonic() < deadline:
+            try:
+                if not self.fallback.busy():
+                    return
+            except Exception:
+                return
+            time.sleep(0.05)
 
     def _on_loop(self, fn, *args) -> None:
         loop = self._loop
@@ -963,9 +1090,11 @@ class Announcer:
             return  # contracts.md: low may be dropped while speech is busy
         if priority != "low":
             self.last = text
-        if isinstance(speaker, SpeechDispatcherSpeaker):  # the level decides who may cut whom; no probe of other speakers
+        if isinstance(speaker, (SpeechDispatcherSpeaker, ElevenLabsSpeaker)):
+            # speechd: the level decides who may cut whom; no probe of other speakers. ElevenLabs: only high
+            # cuts the line playing, normal queues, and a newer line drops a progress line not heard yet.
             speaker.speak(text, interrupt=priority == "high", priority=priority)
-        else:  # NVDA, SAPI, ElevenLabs: unchanged
+        else:  # NVDA, SAPI: unchanged
             speaker.speak(text, interrupt=priority == "high")
 
     async def stop_speech(self) -> None:

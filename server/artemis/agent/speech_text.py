@@ -2,9 +2,17 @@
 
 Code is never read out symbol by symbol: a fenced block becomes one spoken pointer to the log,
 and inline code that isn't a plain name (a file, a function, a variable) becomes "a snippet".
+A model answer is also shaped for the ear (spoken_answer): paths become file names, operator
+symbols are dropped, run-on sentences get their full stop, and a long answer is cut to a few
+sentences with a pointer to the log.
 """
 
+import logging
 import re
+
+from artemis.voice.speechlint import run_ons
+
+log = logging.getLogger(__name__)
 
 # A whole fenced block, up to its closing fence or the end of the text if it never closes.
 _BLOCK = re.compile(r"^[ \t]*```.*?(?:^[ \t]*```[ \t]*$|\Z)", re.MULTILINE | re.DOTALL)
@@ -46,3 +54,47 @@ def for_speech(text: str) -> str:
     text = _UNDERSCORE.sub(r"\2", text)
     text = text.replace("`", "")
     return re.sub(r"\s+", " ", text).strip()
+
+
+# The prompt asks for two sentences unless the developer wants detail; this is the ceiling even then.
+MAX_SENTENCES = 4
+_REST_IN_LOG = "The rest is in the log."
+_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])")
+# A relative or absolute path: keep its last part, the file or folder name. URLs are left alone.
+_PATH = re.compile(r"(~?/|\.{1,2}/|[A-Za-z]:\\)?((?:[\w.-]+[/\\])+)([\w-]+(?:\.[\w-]+)*)")
+# Symbols that are noise when spoken: ==, !=, ->, &&, {}, [], ;, and so on. ! ends a sentence, so it stays.
+_SYMBOLS = re.compile(r"(?:==|!=|<=|>=|->|=>|&&|\|\||[{}\[\];~^$#@\\=<>|&])+")
+_CALL = re.compile(r"\b(\w+)\(\)")
+
+
+def _file_name(match: re.Match) -> str:
+    # Only a real path: a root or ./ in front, two folders, or a file extension. "25/40" and "and/or" stay.
+    root, folders, name = match.groups()
+    if root or len(re.findall(r"[/\\]", folders)) > 1 or re.search(r"\.[A-Za-z]\w*$", name):
+        return name
+    return match.group(0)
+
+
+def _sentences(text: str) -> list[str]:
+    return [s for s in _SENTENCE.split(text) if s]
+
+
+def spoken_answer(text: str) -> str:
+    """What the developer hears for a model answer or question. The log keeps the original."""
+    spoken = for_speech(text)
+    spoken = " ".join(w if "://" in w else _PATH.sub(_file_name, w) for w in spoken.split(" "))
+    spoken = _CALL.sub(r"\1", spoken)
+    spoken = _SYMBOLS.sub(" ", spoken)
+    for hit in run_ons(spoken):  # speechlint: a missing full stop reads as one run-on sentence
+        word, starter = hit.split(" ")
+        spoken = re.sub(rf"\b{re.escape(word)} {starter}\b", f"{word}. {starter}", spoken, count=1)
+    spoken = re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"\s+", " ", spoken)).strip()
+    sentences = _sentences(spoken)
+    if len(sentences) > MAX_SENTENCES:
+        log.info("Spoken answer cut from %d to %d sentences; the log has all of it", len(sentences), MAX_SENTENCES)
+        kept = sentences[:MAX_SENTENCES]
+        if sentences[-1].endswith("?"):  # their next request answers this question: never cut it
+            kept = sentences[: MAX_SENTENCES - 1] + [sentences[-1]]
+            return " ".join(kept[:-1] + [_REST_IN_LOG, kept[-1]])
+        spoken = " ".join(kept + [_REST_IN_LOG])
+    return spoken
