@@ -10,7 +10,12 @@ import asyncio
 import json
 import uuid
 
+import sys
+
 import pytest
+
+# The desktop tools are offered and accepted only on Linux (contracts.md §9), where the island types.
+pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="desktop tools are Linux-only")
 
 pytest.importorskip("anthropic")
 

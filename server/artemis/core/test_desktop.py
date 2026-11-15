@@ -170,9 +170,9 @@ async def test_log_redacts_text_but_sse_event_keeps_it(tmp_path):
     request = asyncio.create_task(ops.request("type", SECRET, None))
     event = await asyncio.wait_for(queue.get(), 5)
     assert event.data["text"] == SECRET  # SSE carries the real text
-    line = json.loads(path.read_text().splitlines()[-1])
+    line = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
     assert line["data"]["text"] == f"<redacted {len(SECRET)} chars>"
-    assert SECRET not in path.read_text()
+    assert SECRET not in path.read_text(encoding="utf-8")
     ops.cancel_all()
     await request
     bus.unsubscribe(queue)
@@ -261,7 +261,7 @@ async def test_log_redacts_typed_text_in_the_approval_too(tmp_path):
             "desktop": {"action": "type_text", "target": "w", "text": SECRET}}
     await bus.emit(EventDraft(type="approval.requested", data=data,
                               announce=Announce(text=f"Type “{SECRET}”", priority="high")))
-    assert SECRET not in path.read_text()
+    assert SECRET not in path.read_text(encoding="utf-8")
     assert bus.history[-1].data["desktop"]["text"] == SECRET  # SSE and the approval dialog still carry it
 
 
@@ -275,6 +275,6 @@ async def test_log_redacts_the_typing_approval(tmp_path):
     await bus.emit(EventDraft(task_id="tsk_1", type="approval.requested", announce=None, data=data))
     event = bus.history[-1]
     assert event.data["desktop"]["text"] == SECRET  # SSE keeps it: the dialog shows it
-    line = json.loads(path.read_text().splitlines()[-1])
+    line = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
     assert line["data"]["desktop"]["text"] == f"<redacted {len(SECRET)} chars>"
-    assert SECRET not in path.read_text() and "notes.txt in TextEditor" in line["data"]["summary"]
+    assert SECRET not in path.read_text(encoding="utf-8") and "notes.txt in TextEditor" in line["data"]["summary"]
