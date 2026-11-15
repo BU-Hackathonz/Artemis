@@ -261,6 +261,12 @@ export class CoreClient {
         return this.#expectNoContent('POST', '/voice/listen', {action});
     }
 
+    // Switch all listening off (true) or on (false): resolves to the core's state, or null if unreachable.
+    async mute(muted) {
+        const r = await this.#request('POST', '/voice/mute', {muted: !!muted});
+        return r?.status === 200 && isPlainObject(r.json) && typeof r.json.muted === 'boolean' ? r.json.muted : null;
+    }
+
     async cancel(taskId) {
         return this.#expectNoContent('POST', `/tasks/${encodeURIComponent(taskId)}/cancel`, {});
     }

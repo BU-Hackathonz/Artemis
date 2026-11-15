@@ -1308,3 +1308,57 @@ async def test_orca_starting_and_stopping_emits_voice_status(client, core, platf
         await wait_for(session, lambda s: last_reader(s) is None)
     finally:
         watcher.cancel()
+
+
+# ----- David's test run: listening off, and an early decision cuts its summary -----
+
+async def test_listening_off_closes_the_mic_and_refuses_push_to_talk(client, core, voice):
+    sid, session = await start(client, core)
+    r = await client.post("/voice/mute", json={"muted": True}, headers=AUTH)
+    assert r.status_code == 200 and r.json() == {"muted": True} and core.muted
+    assert voice.spoken[-1][1].startswith("Listening is off.")
+    r = await client.post("/voice/listen", json={"action": "start"}, headers=AUTH)
+    assert r.status_code == 409 and r.json() == {"error": "muted"}
+    r = await client.post("/voice/mute", json={"muted": False}, headers=AUTH)
+    assert r.json() == {"muted": False} and voice.spoken[-1][1] == "Listening is on."
+    again = await client.post("/voice/mute", json={"muted": False}, headers=AUTH)
+    assert again.json() == {"muted": False} and voice.spoken[-1][1] == "Listening is on."  # no second line
+
+
+class CuttableVoice(FakeVoice):
+    def __init__(self):
+        super().__init__()
+        self.stopped = 0
+        self.busy = True
+
+        class Speaker:
+            def busy(inner):
+                return self.busy
+        self.announcer.current = lambda: Speaker()
+
+    async def announce(self, text, priority):
+        await super().announce(text, priority)
+        if priority != "low":
+            self.announcer.last = text
+
+    async def stop_speech(self):
+        self.stopped += 1
+
+
+@pytest.mark.parametrize("then_alert,stops", [(False, 1), (True, 0)])
+async def test_an_early_decision_cuts_only_its_own_summary(tmp_path, then_alert, stops):
+    from artemis.contracts import Announce, EventDraft
+    voice = CuttableVoice()
+    # Drive the session's emit directly: an approval is requested and read, then decided by the user.
+    core_session = session_with(tmp_path, voice, [])
+    summary = "Create project todo with 1 file: main.py. Enter to approve, Escape to reject."
+    await core_session.emit(EventDraft(task_id="t1", type="approval.requested",
+                                       announce=Announce(text=summary, priority="high"),
+                                       data={"approval_id": "apr_1", "kind": "write_files", "approval_hash": "h",
+                                             "summary": summary}))
+    if then_alert:
+        await core_session.emit(EventDraft(task_id="t1", type="error", announce=Announce(text="The scan found a problem. Check it.", priority="high"),
+                                           data={"code": "x", "message": "The scan found a problem.", "recovery": "Check it."}))
+    await core_session.emit(EventDraft(task_id="t1", type="approval.resolved",
+                                       data={"approval_id": "apr_1", "decision": "approve", "by": "user"}))
+    assert voice.stopped == stops

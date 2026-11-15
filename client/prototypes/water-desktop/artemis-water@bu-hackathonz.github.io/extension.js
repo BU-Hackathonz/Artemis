@@ -163,6 +163,7 @@ export default class ArtemisWaterExtension extends Extension {
         this._workAreaId = global.display.connect('workareas-changed', () => this._agentGoHome(true));
 
         this._addPushToTalk();
+        this._addMuteKey();
         this._addPanelButton();
         this._setupAgent();
         this._core.start();
@@ -200,6 +201,8 @@ export default class ArtemisWaterExtension extends Extension {
         this._listening = false;
         if (this._shortcutBound) Main.wm.removeKeybinding('push-to-talk');
         this._shortcutBound = false;
+        if (this._muteBound) Main.wm.removeKeybinding('mute-listening');
+        this._muteBound = false;
         this._teardownAgentUI();
         this._button?.destroy();
         this._button = null;
@@ -324,7 +327,9 @@ export default class ArtemisWaterExtension extends Extension {
                 onSettings: () => this.openPreferences(),
                 font: this._settings.get_string('ui-font'),
                 // the pill resizes with its status: follow its ring, but never mid-flight
-                onMoved: () => { if (!this._agent?.awake && !this._homeTimer) this._agentGoHome(true); },
+                // After the relayout settles (the ring's box is final then), so the ring re-centres on the slot
+                // where it really is now, not where it was a frame ago.
+                onMoved: () => this._afterLayout(() => { if (!this._agent?.awake && !this._homeTimer) this._agentGoHome(true); }),
             });
             this._agentGoHome(true);
         } else {
@@ -334,6 +339,18 @@ export default class ArtemisWaterExtension extends Extension {
     }
 
     // Fly back to the corner (not cancellable by commands), then rest.
+    // Run fn once GNOME has laid the stage out again (Meta.later BEFORE_REDRAW), at most once per frame.
+    _afterLayout(fn) {
+        if (this._layoutLater) return;
+        const run = () => { this._layoutLater = 0; if (this._settings) fn(); return GLib.SOURCE_REMOVE; };
+        try {
+            const laters = global.compositor?.get_laters?.();
+            this._layoutLater = laters ? laters.add(Meta.LaterType.BEFORE_REDRAW, run) : Meta.later_add(Meta.LaterType.BEFORE_REDRAW, run);
+        } catch {
+            this._layoutLater = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, run);
+        }
+    }
+
     _agentGoHome(snap) {
         if (!this._agent) return;
         const home = this._homePos();
@@ -347,6 +364,9 @@ export default class ArtemisWaterExtension extends Extension {
         this._homeTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ACTIVE_MS, () => {
             const t = Math.min((GLib.get_monotonic_time() - t0) / 1000 / ms, 1);
             const e = easeInOut(t);
+            // Home is the island's ring slot, which can move during the flight (the pill changes width when
+            // the task ends): aim at where it is now, so the ring lands on it instead of jumping at the end.
+            if (this._island) Object.assign(home, this._homePos());
             // A gentle arc home.
             const bend = 0.18 * Math.sin(Math.PI * t) * dist;
             const nx = -(home.y - from.y) / (dist || 1), ny = (home.x - from.x) / (dist || 1);
@@ -757,6 +777,7 @@ export default class ArtemisWaterExtension extends Extension {
         if (this._offlineTimer) { GLib.source_remove(this._offlineTimer); this._offlineTimer = 0; }
         if (connected && sid && sid !== this._sid) {
             this._sid = sid;
+            this._muted = false; // a new session is a (re)started core: it always starts listening
             this._closeApproval();
             this._cue = null;
             this._endLaunch();
@@ -823,6 +844,22 @@ export default class ArtemisWaterExtension extends Extension {
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this._pushToTalk());
         this._shortcutBound = action !== Meta.KeyBindingAction.NONE;
         this._shortcutFailed = !this._shortcutBound;
+    }
+
+    // Listening on and off (Control Alt M by default): off closes the mic in the core, wake word included.
+    _addMuteKey() {
+        const action = Main.wm.addKeybinding('mute-listening', this._settings, Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW, () => this._toggleMute());
+        this._muteBound = action !== Meta.KeyBindingAction.NONE;
+    }
+
+    _toggleMute() {
+        if (!this._core || this._muteBusy) return; // a held key repeats: one toggle per press
+        this._muteBusy = true;
+        const want = !this._muted;
+        this._core.mute(want).then((state) => {
+            if (state !== null) this._muted = state;
+        }).catch(() => {}).finally(() => { this._muteBusy = false; });
     }
 
     _pushToTalk() {
